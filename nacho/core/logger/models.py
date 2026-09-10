@@ -1,0 +1,142 @@
+"""日志数据模型：日志级别与日志记录。
+
+日志记录（:class:`LogRecord`）是队列、日志系统基类与各日志处理机之间
+传递的最小单元，必须是可序列化的（可转成 ``dict``），这样才能被推入
+消息队列，也才能被数据库日志处理机直接落库。
+"""
+from __future__ import annotations
+
+import time
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import IntEnum
+from typing import cast, TypeAlias
+
+#: 允许的时间表示形式：时间戳 / ISO 字符串 / datetime / None
+TimestampLike: TypeAlias = int | float | str | datetime | None
+
+class LogLevel(IntEnum):
+    """日志级别，数值对齐标准库 ``logging``，便于互通。"""
+
+    DEBUG = 10
+    INFO = 20
+    WARNING = 30
+    ERROR = 40
+    CRITICAL = 50
+
+    @classmethod
+    def parse(cls, value: LogLevel | str) -> LogLevel:
+        """把日志级别对象 / 级别名统一解析成 :class:`LogLevel`。"""
+        if isinstance(value, LogLevel):
+            return value
+        key: str = value.strip().upper()
+        if key in cls.__members__:
+            return cls[key]
+        raise ValueError(f"无法识别的日志级别: {value!r}")
+
+    @property
+    def label(self) -> str:
+        return self.name
+
+
+def normalize_timestamp(value: TimestampLike) -> float | None:
+    """把多种时间表示统一成 Unix 时间戳（秒）。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        moment: datetime = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return moment.timestamp()
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    text: str = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise ValueError(f"无法解析时间: {value!r}") from exc
+
+
+@dataclass(slots=True)
+class LogRecord:
+    """一条结构化日志记录。"""
+
+    message: str
+    level: LogLevel = LogLevel.INFO
+    logger_name: str = ""
+    timestamp: float = field(default_factory=time.time)
+    record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    extra: dict[str, object] = field(default_factory=dict)
+    exc_text: str | None = None
+
+    def __post_init__(self) -> None:
+        self.level = LogLevel.parse(value=self.level)
+
+    @property
+    def datetime_text(self) -> str:
+        """可读时间文本，精确到毫秒。"""
+        return datetime.fromtimestamp(self.timestamp).strftime(format="%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "record_id": self.record_id,
+            "timestamp": self.timestamp,
+            "level": self.level.label,
+            "logger_name": self.logger_name,
+            "message": self.message,
+            "extra": dict[str, object](self.extra),
+            "exc_text": self.exc_text,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> LogRecord:
+        raw_extra: object | None = data.get("extra")
+        raw_exc_text: object | None = data.get("exc_text")
+        return cls(
+            message=cast(str, data.get("message", "")),
+            level=LogLevel.parse(value=cast(LogLevel | str, data.get("level", LogLevel.INFO))),
+            logger_name=cast(str, data.get("logger_name", "")),
+            timestamp=float(cast(float | str | int, data.get("timestamp", time.time()))),
+            record_id=cast(str, data.get("record_id") or uuid.uuid4().hex),
+            extra=(
+                dict[str, object](cast(Mapping[str, object], raw_extra))
+                if isinstance(raw_extra, Mapping)
+                else {}
+            ),
+            exc_text=raw_exc_text if isinstance(raw_exc_text, str) else None,
+        )
+
+    def matches(
+        self,
+        *,
+        query: str | None = None,
+        level: LogLevel | str | None = None,
+        start: TimestampLike = None,
+        end: TimestampLike = None,
+        logger_name: str | None = None,
+    ) -> bool:
+        """判断当前记录是否满足检索条件（供各处理机复用）。"""
+        if level is not None and self.level < LogLevel.parse(value=level):
+            return False
+        if logger_name is not None and self.logger_name != logger_name:
+            return False
+
+        start_ts: float | None = normalize_timestamp(value=start)
+        if start_ts is not None and self.timestamp < start_ts:
+            return False
+
+        end_ts: float | None = normalize_timestamp(value=end)
+        if end_ts is not None and self.timestamp > end_ts:
+            return False
+
+        if query:
+            needle: str = query.lower()
+            haystack: str = f"{self.message} {self.extra} {self.exc_text or ''}".lower()
+            if needle not in haystack:
+                return False
+        return True
