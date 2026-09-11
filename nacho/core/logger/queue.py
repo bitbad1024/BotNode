@@ -6,12 +6,10 @@
 * 生产者非阻塞投递，队列满时按策略丢弃，日志永远不会阻塞或拖垮业务；
 * 消费者批量取，批量交给处理机，减少 IO 次数。
 """
-
 from __future__ import annotations
 
 import asyncio
 from enum import Enum
-
 from .models import LogRecord
 
 
@@ -29,7 +27,7 @@ class AsyncLogQueue:
     def __init__(
         self,
         maxsize: int = 10000,
-        overflow_policy: "OverflowPolicy | str" = OverflowPolicy.DROP_OLDEST,
+        overflow_policy: OverflowPolicy | str = OverflowPolicy.DROP_OLDEST,
     ) -> None:
         self._queue: asyncio.Queue[LogRecord] = asyncio.Queue(maxsize=maxsize)
         self._policy: OverflowPolicy = OverflowPolicy(overflow_policy)
@@ -80,13 +78,15 @@ class AsyncLogQueue:
         # DROP_OLDEST：挤掉最旧的一条，把最新日志放进去
         try:
             _ = self._queue.get_nowait()
-        except asyncio.QueueEmpty:  # pragma: no cover - 竞态兜底
+            self._dropped += 1
+        except asyncio.QueueEmpty:
             pass
-        self._dropped += 1
+
         try:
             self._queue.put_nowait(record)
             return True
-        except asyncio.QueueFull:  # pragma: no cover - 竞态兜底
+        except asyncio.QueueFull:
+            self._dropped += 1
             return False
 
     async def put(self, record: LogRecord) -> bool:
@@ -110,7 +110,7 @@ class AsyncLogQueue:
         """批量取日志；等待超时或队列关闭则返回已取到的部分。"""
         batch: list[LogRecord] = []
         try:
-            first = await asyncio.wait_for(self.get(), timeout=timeout)
+            first: LogRecord | None = await asyncio.wait_for(self.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return batch
 
