@@ -17,7 +17,15 @@
 * 单个处理机抛异常只会被记录并计数，不会中断分发器，也不影响其它处理机；
 * 连续失败超过阈值后自动标记为不健康，分发器跳过它，防止持续崩溃；
 * 缓冲**到水位线（``buffer_size``）就刷写**，而不是攒到「满了」再一次性写，
-  单次 ``write`` 的条数也不超过水位线，防止把超大的一批日志压给后端。
+  单次 ``write`` 的条数也不超过水位线，防止把超大的一批日志压给后端；
+* 处理机侧缓冲**不是**「和队列重复攒批」：队列只负责同步→异步的**交接**（窗口取小），
+  攒批窗口与刷盘节奏完全由这里的 ``buffer_size`` / ``flush_interval`` 决定，因此控制台
+  能逐条直写、文件 / 数据库能成批落，互不牵制。
+
+处理机**不做任何路由与过滤**：它收到什么就写什么。日志该不该进某个出口，由分发器
+在查找分发时用 :class:`~nacho.core.logger.filters.LogFilter` 判断（见
+:meth:`~nacho.core.logger.base.BaseLogger.attach` 的 ``log_filter`` 参数），
+被过滤掉的日志根本不会走到这里。
 """
 from __future__ import annotations
 
@@ -78,10 +86,19 @@ class _LogBuffer:
             return True
 
     async def take(self, limit: int) -> list[LogRecord]:
-        """取出并移除最多 ``limit`` 条，缓冲区为空时返回空列表。"""
+        """取出并移除最多 ``limit`` 条，缓冲区为空时返回空列表。
+
+        ``limit`` 不小于当前条数时是**整体取空**：直接把内部列表交出去、换一个
+        新列表，``O(1)``，既不做切片拷贝也不搬移元素。只有真要「取一部分」时才走
+        切片 + 前缀删除。生产路径上 :meth:`BaseLogProcessor.flush` 传的 ``limit``
+        恰好是 ``buffer_size``，而缓冲区永不超过 ``buffer_size``，所以实际总是走前者。
+        """
         async with self._lock:
+            if limit >= len(self._records):
+                batch, self._records = self._records, []
+                return batch
             batch = self._records[:limit]
-            del self._records[: len(batch)]
+            del self._records[:limit]
             return batch
 
     async def force_extend(self, records: list[LogRecord]) -> None:
@@ -111,14 +128,20 @@ class BaseLogProcessor(abc.ABC):
     def __init__(
         self,
         *,
+        name: str | None = None,
         buffer_size: int = 200,
         flush_interval: float = 2.0,
         max_failures: int = 5,
         overflow_policy: OverflowPolicy | str = OverflowPolicy.DROP_OLDEST,
     ) -> None:
         """
-        :param buffer_size: 刷写水位线，同时也是缓冲区硬上限：待写条数达到它
-            即刻刷写，且缓冲区绝不会超过它，因此不会溢出。
+        :param name: 处理机名称。默认取类属性 ``name``；同一种处理机挂多个实例时
+            （例如两个不同路径的本地文件处理机）必须显式指定，名称即唯一标识。
+        :param buffer_size: 该出口的**攒批水位线**，同时也是缓冲区硬上限：待写条数
+            达到它即刻刷写，且缓冲区绝不会超过它，因此不会溢出。攒批窗口只由它
+            （与 ``flush_interval``）决定，**与分发器一次送来多少条无关**；当它小于
+            等于分发批量（``dispatch_batch_size``）时，满载下缓冲区近似直通，真正起
+            攒批作用的主要是中低负载，参数需按此理解。
         :param flush_interval: 定时刷盘间隔（秒），``<= 0`` 表示不定期刷。
         :param max_failures: 连续失败多少次后自动停用本处理机。
         :param overflow_policy: 缓冲区已达上限且刷盘腾不出空间时（并发写入争抢）
@@ -126,6 +149,9 @@ class BaseLogProcessor(abc.ABC):
         """
         if buffer_size <= 0:
             raise ValueError("buffer_size 必须大于 0")
+        if name is not None:
+            # 实例属性覆盖类属性：同一种处理机允许挂多个实例，各用各的名字
+            self.name = name
 
         self._buffer_size: int = buffer_size
         self._flush_interval: float = flush_interval
@@ -165,13 +191,18 @@ class BaseLogProcessor(abc.ABC):
 
     # ------------------------------------------------------------------ 生命周期
     async def start(self) -> None:
-        """启动处理机：打开后端（:meth:`_on_start`）并开启定时刷盘。"""
+        """启动处理机：打开后端（:meth:`_on_start`）并开启定时刷盘。
+
+        只有 ``_on_start`` 成功后才置为运行中，因此启动失败的处理机不会被当成
+        已就绪（也不会调用 :meth:`stop` 去关一个没打开的后端），
+        日志系统在下一次分发时会再试一次。
+        """
         if self._running:
             return
+        await self._on_start()
         self._running = True
         self._healthy = True
         self._consecutive_failures = 0
-        await self._on_start()
         if self._flush_interval > 0:
             self._flush_task = asyncio.create_task(
                 self._flush_loop(), name=f"nacho-log-flush-{self.name}"
@@ -230,6 +261,9 @@ class BaseLogProcessor(abc.ABC):
         分发器一次可能送来很多条（例如 200 条），这里不是「攒满再一次性写」，
         而是每积累到 ``buffer_size`` 条就刷一次；单次 ``write`` 的条数也被
         ``buffer_size`` 卡住，避免把超大的一批日志压给后端（防止溢出）。
+
+        传进来的 ``records`` 已经由分发器完成路由与过滤，处理机照单接收即可，
+        自己不再做任何筛选。
         """
         if not records or not self._healthy:
             return
@@ -304,6 +338,11 @@ class BaseLogProcessor(abc.ABC):
     def pending(self) -> int:
         """缓冲区中尚未刷盘的日志条数（不会超过 ``buffer_size``）。"""
         return self._buffer.pending
+
+    @property
+    def dropped(self) -> int:
+        """因缓冲区容量不足被丢弃的日志条数。"""
+        return self._buffer.dropped
 
     @property
     def stats(self) -> dict[str, object]:
