@@ -539,25 +539,48 @@ class BaseLogger:
         return self._processors
 
     # ------------------------------------------------------------------ 派生实例
+    def qualify(self, name: str) -> str:
+        """把**相对名字**补全成本实例名下的完整名字：``LogCore("nacho").qualify("a1")`` ->
+        ``"nacho.a1"``。
+
+        已经带前缀的完整名字原样返回（``"nacho.a1"`` / ``"nacho"``），因此「写相对一段」与
+        「写全名」两种写法可以混用；本实例名字为空时没有前缀可补，名字原样返回。
+        """
+        if not name or not self.name:
+            return name
+        if name == self.name or name.startswith(self.name + "."):
+            return name
+        return f"{self.name}.{name}"
+
     def child(self, name: str, *, level: LogLevel | str | None = None) -> BaseLogger:
         """派生一个子日志实例：共享本实例的队列、名字树与处理机注册表，只换名字与级别。
 
-        传的是**完整模块名**（``logger.child("nacho.robot")``）：记录的
-        ``logger_name`` 就是它，路由据此在名字树上解析出这条日志的去向。要给某个名字挂
-        专属出口，用 :meth:`attach` 的 ``name`` 参数（或便捷函数 ``attach_mount``）。
+        名字**相对本实例**：``LogCore("nacho").child("a1")`` 得到的名字是 ``nacho.a1``——
+        写相对的一段（``"a1"``、``"robot.arm"``）会自动补上父前缀；已经写全的名字
+        （``"nacho.a1"``）原样使用，两种写法可以混用（见 :meth:`qualify`）。记录的
+        ``logger_name`` 就是这个完整名字，路由据此在名字树上解析这条日志的去向。要给某个
+        名字挂专属出口，用 :meth:`attach` 的 ``name`` 参数（或便捷函数 ``attach_mount``）。
 
-        :param level: 显式指定时会**同时在名字树上声明**，因此 ``nacho.robot`` 的子名字
-            也继承得到它；省略则只把本实例的默认级别沿用作兜底，不向树上写声明。
+        子实例与父实例共享同一棵名字树：第一次给它（或其子名字）写日志时，会把父层那条
+        链上的输出设备**复制一份**存进自己的节点——副本一到手就冻结，父层之后再挂 / 再摘
+        都不回头影响它；级别则逐层**继承**（父层改了立刻跟着变）。
+
+        :param level: 显式指定时会**同时在名字树上声明**，因此该名字的子名字也继承得到它；
+            省略则只把本实例的默认级别沿用作兜底，不向树上写声明。
             要「继承了再改一部分」，用 :meth:`child` + :meth:`set_level`。
+        :raises ValueError: ``name`` 为空。
 
         子实例**不要**自己 ``start()``：分发器与队列归父实例所有，重复启动只会
         多出一个抢同一队列的分发器。
         """
-        self._routes.announce(name)
+        if not name:
+            raise ValueError("child 名字不能为空")
+        full: str = self.qualify(name)
+        self._routes.announce(full)
         if level is not None:
-            self._routes.set_level(name, level)
+            self._routes.set_level(full, level)
         return BaseLogger(
-            name,
+            full,
             level=self._level if level is None else level,
             queue=self._queue,
             processors=self._processors,
