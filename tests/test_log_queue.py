@@ -1,9 +1,5 @@
 """``nacho/core/logger/queue.py`` 单元测试。
 
-命名约定：``tests/test_log_<模块>.py`` 对应 ``nacho/core/logger/<模块>.py``；
-``log_`` 前缀用于指明是「日志框架」的哪个模块，避免与框架里其它 ``queue``
-模块的同名测试混淆。
-
 对应提交 ``4e333eb feat(logger): 新增进程内异步日志队列 AsyncLogQueue``。
 覆盖三种溢出策略、关闭语义与批量取用。
 """

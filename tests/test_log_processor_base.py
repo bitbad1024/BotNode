@@ -419,6 +419,17 @@ class TestLogBuffer:
         buffer = _LogBuffer(capacity=5, policy=OverflowPolicy.DROP_OLDEST)
         assert await buffer.take(3) == []
 
+    async def test_take_returns_detached_list(self) -> None:
+        """取出的批次与缓冲区解耦：整体取空后改它，不影响缓冲区状态。"""
+        buffer = _LogBuffer(capacity=5, policy=OverflowPolicy.DROP_OLDEST)
+        await buffer.extend_if_room(make("a", "b"))
+
+        batch = await buffer.take(5)
+        batch.clear()  # 若返回的是内部列表本身，这里会污染缓冲区
+
+        assert buffer.pending == 0
+        assert await buffer.take(1) == []
+
     async def test_initial_state_is_empty_and_clean(self) -> None:
         buffer = _LogBuffer(capacity=2, policy=OverflowPolicy.DROP_OLDEST)
         assert buffer.pending == 0

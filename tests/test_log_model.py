@@ -1,9 +1,4 @@
 """``nacho/core/logger/models.py`` 单元测试。
-
-命名约定：``tests/test_log_<模块>.py`` 对应 ``nacho/core/logger/<模块>.py``；
-``log_`` 前缀用于指明是「日志框架」的哪个模块，避免与框架里其它 ``models``
-模块的同名测试混淆。
-
 对应提交 ``8a3aa12 feat(logger): 新增日志数据模型 LogLevel 与 LogRecord``，
 并覆盖其后对 ``LogLevel.parse`` 签名、``Any`` 清理等调整后的行为。
 """
