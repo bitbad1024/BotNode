@@ -140,6 +140,12 @@ class BaseLogProcessor(abc.ABC):
     #: 处理机名称，注入日志系统时作为唯一标识
     name: str = "base"
 
+    #: 子实例「自层覆盖」时是否仍被带上。
+    #:
+    #: 子实例一旦自己挂过出口，就只投自己那份、不再带上父级 / 核心的文件出口；
+    #: 但控制台这类全局观感出口应当保留，把它置为 ``True`` 即可在覆盖时继续继承。
+    inherit_on_override: bool = False
+
     def __init__(
         self,
         *,

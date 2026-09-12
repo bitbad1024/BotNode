@@ -1,12 +1,13 @@
-"""日志核心实例、子实例配置复制与进程门面的单元测试。
+"""日志核心实例、子实例配置继承与进程门面的单元测试。
 
 对应 ``nacho/core/logger/core.py``、``manager.py`` 与新增的控制台处理机：
 
 * 最小化启动：``LogCore()`` 天生带一路控制台输出，``start()`` 后立刻可见；
 * 运行期挂载：``attach`` 之后不用手动启动处理机，下一批日志就会喂给它；
-* 子实例 = 名字 + 一份配置副本：``child`` 派生时从父实例复制处理机与过滤器，
-  写日志只投给自己这份副本，不沿名字逐层累加；副本创建即冻结，父实例之后再
-  挂 / 再摘都不回头影响已建好的子实例；
+* 子实例 = 名字 + 一份落回配置 + 自己的出口：``child`` 派生时把父实例实际会投的
+  处理机与过滤器复制成落回配置；子实例自己挂了出口就只投自层那些（自层覆盖），
+  没挂才整份走落回配置。落回配置创建即冻结，父实例之后再挂 / 再摘都不回头影响
+  已建好的子实例，也不沿名字逐层累加；
 * 进程门面：``configure`` 重复调用不再丢参数，``get_logger`` 返回共享核心的子实例。
 """
 from __future__ import annotations
@@ -300,7 +301,7 @@ class TestDynamicAttach:
 
 
 class TestModuleConfigCopy:
-    """子实例配置：一个名字对应一个实例，配置是派生那一刻从父实例复制的副本。"""
+    """子实例配置：一个名字对应一个实例，自层挂了出口就覆盖，没挂才回落父级。"""
 
     async def test_module_name_maps_to_one_shared_forward_list(self) -> None:
         """有则载入：同一个名字永远同一条转发列表，重复设置不会重复建出口。"""
@@ -317,7 +318,7 @@ class TestModuleConfigCopy:
         assert core.routes["nacho.module_a"] == [first_file, second_file]
 
     async def test_matched_name_only_feeds_its_own_list(self) -> None:
-        """命中名字：只进该模块的转发列表（再带上全量出口）。"""
+        """命中名字：自层出口只投该模块自己那份，不再带上核心的全量出口。"""
         own = CollectingProcessor(name="own")
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
@@ -327,19 +328,20 @@ class TestModuleConfigCopy:
         try:
             core.child("module_a").info("a 的日志")
             core.child("module_b").info("b 的日志")
-            assert await wait_until(lambda: len(everything.received) == 2) is True
             assert await wait_until(lambda: own.received == ["a 的日志"]) is True
+            assert await wait_until(lambda: everything.received == ["b 的日志"]) is True
         finally:
             await core.stop()
 
+        # module_a 自层覆盖：不再进全量出口；module_b 没自层出口，整份回落核心
         assert own.received == ["a 的日志"]
-        assert everything.received == ["a 的日志", "b 的日志"]
+        assert everything.received == ["b 的日志"]
 
     async def test_name_without_own_channel_uses_copied_config(self) -> None:
-        """没单独挂出口的名字不是「没出口」，而是走从核心复制来的那份配置。"""
+        """没单独挂出口的名字不是「没出口」，而是走从核心复制来的那份落回配置。"""
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
-        core.child("module_x")  # 派生时复制核心配置（核心只有 local-all）
+        core.child("module_x")  # 派生时复制核心的解析结果（核心只有 local-all）
         assert core.routes["nacho.module_x"] == [everything]
 
         await core.start()
@@ -353,7 +355,7 @@ class TestModuleConfigCopy:
         assert everything.received == ["第一条", "第二条"]  # 一条都没丢
 
     async def test_submodule_name_is_covered_by_segment_prefix(self) -> None:
-        """名字按 ``.`` 逐段派生：``api.robot`` 复制到 ``api`` 的副本，``apix`` 不会。"""
+        """名字按 ``.`` 逐段派生：``api.robot`` 的落回配置来自 ``api``，``apix`` 不会。"""
         own = CollectingProcessor(name="own")
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
@@ -363,19 +365,22 @@ class TestModuleConfigCopy:
         try:
             core.child("api.robot").info("子模块")
             core.child("apix").info("不是子模块")
-            assert await wait_until(lambda: len(everything.received) == 2) is True
+            assert await wait_until(lambda: own.received == ["子模块"]) is True
+            assert await wait_until(lambda: everything.received == ["不是子模块"]) is True
         finally:
             await core.stop()
 
+        # api.robot 回落 api（自层只有 own），所以不进全量出口；apix 才回落核心
         assert own.received == ["子模块"]
+        assert everything.received == ["不是子模块"]
 
     async def test_parent_mounts_by_name_and_detach_removes_it(self) -> None:
-        """父模块也能按名字挂载；卸载后该名字只剩从核心复制来的那份配置。"""
+        """父模块也能按名字挂载；卸载后该名字回落核心那份落回配置。"""
         own = CollectingProcessor(name="own")
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
         core.attach(own, name="nacho.module_a")
-        assert core.routes["nacho.module_a"] == [everything, own]
+        assert core.routes["nacho.module_a"] == [own]  # 自层覆盖：只剩 own
 
         await core.start()
         try:
@@ -383,10 +388,10 @@ class TestModuleConfigCopy:
             assert await wait_until(lambda: own.received == ["第一"]) is True
 
             core.detach("own")
-            assert core.routes["nacho.module_a"] == [everything]
+            assert core.routes["nacho.module_a"] == [everything]  # 自层空了 -> 回落核心
 
             core.child("module_a").info("第二")
-            assert await wait_until(lambda: everything.received == ["第一", "第二"]) is True
+            assert await wait_until(lambda: everything.received == ["第二"]) is True
         finally:
             await core.stop()
 
@@ -431,7 +436,7 @@ class TestModuleConfigCopy:
             await core.stop()
 
         assert own.received == ["关节过载"]
-        assert everything.received == ["关节过载"]
+        assert everything.received == []  # robot 自层覆盖：核心全量出口收不到
 
     def test_console_lands_on_the_core_config(self) -> None:
         """最小化启动的控制台挂在核心自己那份配置上，派生时会被复制给子实例。"""
@@ -440,21 +445,18 @@ class TestModuleConfigCopy:
         assert core.child("api").effective_outputs() == [core.get_processor("console")]
 
     async def test_stats_reports_every_instance_config(self) -> None:
-        """内省接口：stats / routes 看得到每个名字实例那份配置副本。"""
+        """内省接口：stats / routes 看得到每个名字实例实际会投的出口。"""
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
         core.attach(CollectingProcessor(name="a-file"), name="nacho.module_a")
-        core.child("module_x")  # 没单独挂出口 -> 配置就是核心那份的副本
+        core.child("module_x")  # 没单独挂出口 -> 落回核心那份的副本
 
         assert core.stats["routes"] == {
             "nacho": ["local-all"],
-            "nacho.module_a": ["local-all", "a-file"],
-            "nacho.module_x": ["local-all"],
+            "nacho.module_a": ["a-file"],  # 自层覆盖：只剩本层挂的
+            "nacho.module_x": ["local-all"],  # 没自层出口 -> 回落核心
         }
-        assert core.routes["nacho.module_a"] == [
-            core.get_processor("local-all"),
-            core.get_processor("a-file"),
-        ]
+        assert core.routes["nacho.module_a"] == [core.get_processor("a-file")]
 
     async def test_stats_aggregates_drops_from_both_buffers(self) -> None:
         """两级缓冲都可能丢日志，stats 汇成一个视图，排查只看一处。"""
@@ -571,10 +573,11 @@ class TestModuleConfigCopy:
 
 
 class TestChildConfigCopy:
-    """配置复制：``child`` 派生时复制父实例配置，子层可就地覆盖，且不重复投递。"""
+    """配置继承：``child`` 派生时复制父实例的解析结果当落回配置；子层挂了自层出口
+    就覆盖父级（不再带上父级文件出口，控制台保留），没挂才整份回落，且不重复投递。"""
 
-    async def test_subname_inherits_parent_channels(self) -> None:
-        """子名字自动继承父名字挂的设备，不需要自己再挂一遍。"""
+    async def test_subname_own_channel_overrides_parent_global(self) -> None:
+        """子名字自己挂了出口后只投它，核心的全量出口不再收到该子名字的日志。"""
         root_out = CollectingProcessor(name="root-out")
         own = CollectingProcessor(name="own")
         core = LogCore(console=False, processors=[root_out], dispatch_timeout=0.01)
@@ -588,10 +591,34 @@ class TestChildConfigCopy:
             await core.stop()
 
         assert own.received == ["关节过载"]
-        assert root_out.received == ["关节过载"]
+        assert root_out.received == []  # 自层覆盖：核心全量出口收不到
 
-    async def test_settings_accumulate_layer_by_layer(self) -> None:
-        """层层挂载：``a`` 挂的与 ``a.b`` 挂的都会到 ``a.b.c``。"""
+    async def test_local_file_overrides_parent_file_but_keeps_console(self) -> None:
+        """自层覆盖：子实例挂了自己的文件后不再进父级文件，但控制台仍保留。"""
+        stream = io.StringIO()
+        parent_file = CollectingProcessor(name="parent-file")
+        own_file = CollectingProcessor(name="own-file")
+        core = LogCore(console_stream=stream, dispatch_timeout=0.01)
+        core.attach(parent_file)
+        core.attach(own_file, name="nacho.robot")
+
+        await core.start()
+        try:
+            core.child("nacho.robot").info("只进自己那份")
+            assert await wait_until(lambda: own_file.received == ["只进自己那份"]) is True
+            assert await wait_until(lambda: "只进自己那份" in stream.getvalue()) is True
+        finally:
+            await core.stop()
+
+        assert own_file.received == ["只进自己那份"]
+        assert parent_file.received == []  # 父级文件被覆盖
+        assert core.effective_outputs("nacho.robot") == [
+            core.get_processor("console"),
+            own_file,
+        ]
+
+    async def test_nearest_own_layer_wins(self) -> None:
+        """层层挂载：只有「最近一层挂了自层出口」的那份生效，不会层层累加。"""
         root_out = CollectingProcessor(name="root-out")
         first = CollectingProcessor(name="first")
         second = CollectingProcessor(name="second")
@@ -602,16 +629,16 @@ class TestChildConfigCopy:
         await core.start()
         try:
             core.child("nacho.robot.arm").info("深处")
-            assert await wait_until(lambda: len(root_out.received) == 1) is True
+            assert await wait_until(lambda: second.received == ["深处"]) is True
         finally:
             await core.stop()
 
-        assert first.received == ["深处"]
-        assert second.received == ["深处"]
-        assert root_out.received == ["深处"]
+        assert second.received == ["深处"]  # robot 自层出口胜出
+        assert first.received == []
+        assert root_out.received == []
 
-    async def test_ancestors_channel_reaches_every_subname_once(self) -> None:
-        """父层设备收到子层日志是「继承」的结果，每条只收一次——不是每层各冒泡一遍。"""
+    async def test_nearest_layer_device_receives_each_record_once(self) -> None:
+        """父层设备收到子层日志是「回落」的结果，每条只收一次——不是每层各冒泡一遍。"""
         own = CollectingProcessor(name="own")
         core = LogCore(console=False, dispatch_timeout=0.01)
         core.attach(own, name="nacho.robot")
@@ -696,34 +723,34 @@ class TestChildConfigCopy:
 
 
 class TestChildConfigFreeze:
-    """配置副本冻结：子实例在**派生那一刻**复制一份父实例配置，之后父实例再挂 / 再摘
-    都不回头影响它；而之后才派生的下层复制到的是**改完**的结果。
+    """落回配置冻结：子实例在**派生那一刻**复制一份父实例的解析结果，之后父实例再挂 /
+    再摘都不回头影响它；而之后才派生的下层复制到的是**改完**的结果。
 
     这里与 :class:`TestChildConfigCopy` 是同一套语义的两个侧面：那边验证「复制到了什么」，
     这里验证「复制之后不再变」。
     """
 
     def test_child_copies_parent_devices_and_freezes(self) -> None:
-        """派生时复制父实例配置，之后父实例再挂出口不再影响它。"""
+        """派生时复制父实例解析结果当落回配置，之后父实例再挂出口不再影响它。"""
         root_out = CollectingProcessor(name="root-out")
         first = CollectingProcessor(name="first")
         later = CollectingProcessor(name="later")
         core = LogCore("a", console=False, processors=[root_out])
-        b = core.child("a.b")  # 复制核心 -> [root-out]
-        b.attach(first, name="a.b")  # 本层再挂 -> [root-out, first]
+        b = core.child("a.b")  # 落回配置 = 核心解析结果 -> [root-out]
+        b.attach(first, name="a.b")  # 本层挂自层出口 -> b 实际会投 [first]
 
-        core.child("a.b.c", level="INFO")  # 派生：复制 b -> [root-out, first]
-        assert core.effective_outputs("a.b.c") == [root_out, first]
+        core.child("a.b.c", level="INFO")  # 派生：c 的落回配置 = b 解析结果 -> [first]
+        assert core.effective_outputs("a.b.c") == [first]
 
         b.attach(later, name="a.b")  # 父实例之后再挂出口
-        assert core.effective_outputs("a.b.c") == [root_out, first]  # 冻结：看不到 later
-        assert core.effective_outputs("a.b") == [root_out, first, later]
-        # 改完之后才派生的下层，复制到的是**改完**的结果
+        assert core.effective_outputs("a.b.c") == [first]  # 冻结：看不到 later
+        assert core.effective_outputs("a.b") == [first, later]
+        # 改完之后才派生的下层，落回配置是**改完**的结果
         core.child("a.b.d", level="INFO")
-        assert core.effective_outputs("a.b.d") == [root_out, first, later]
+        assert core.effective_outputs("a.b.d") == [first, later]
 
     async def test_frozen_copy_ignores_parent_devices_added_later(self) -> None:
-        """端到端：c 复制过一次后，b 之后新增的出口不会漏给 c。"""
+        """端到端：c 的落回配置派生过一次后，b 之后新增的出口不会漏给 c。"""
         root_out = CollectingProcessor(name="root-out")
         p1 = CollectingProcessor(name="p1")
         p2 = CollectingProcessor(name="p2")
@@ -737,15 +764,17 @@ class TestChildConfigFreeze:
             c.info("第一次")
             assert await wait_until(lambda: p1.received == ["第一次"]) is True
 
-            b.attach(p2, name="a.b")  # c 已经复制过一遍，b 之后再挂都不回头影响它
+            b.attach(p2, name="a.b")  # c 的落回配置已经定格，b 之后再挂都不回头影响它
             c.info("第二次")
-            assert await wait_until(lambda: len(root_out.received) == 2) is True
+            assert await wait_until(
+                lambda: p1.received == ["第一次", "第二次"]
+            ) is True
         finally:
             await core.stop()
 
         assert p1.received == ["第一次", "第二次"]  # c 手里那份冻结，照旧只进 p1
         assert p2.received == []  # b 后来挂的 p2，c 收不到
-        assert root_out.received == ["第一次", "第二次"]
+        assert root_out.received == []  # c 的落回配置里根本没有 root-out
 
 
 class TestDispatcherFiltering:

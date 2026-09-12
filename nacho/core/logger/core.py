@@ -29,11 +29,13 @@
     from nacho.core.logger import attach_mount, get_logger, LocalFileLogProcessor
 
     attach_mount("module_a", LocalFileLogProcessor("logs/module_a.log"))   # 名字相对核心 = nacho.module_a
-    get_logger("module_a").info("模块内日志")   # 进 module_a.log，以及核心配置里复制来的出口
+    get_logger("module_a").info("模块内日志")   # 只进 module_a.log（外加控制台），不再进核心的 nacho.log
 
 名字是纯字符串，**相对核心**（``"module_a"`` 即核心名下的 ``"nacho.module_a"``，写全名也行）。
-一个名字对应一个日志实例，它的配置是**派生那一刻从核心复制的一份副本**，之后各改各的：
-所以 ``attach_mount`` 要**在取实例之前**调用，模块才拿得到这个出口。
+一个名字对应一个日志实例：它一旦挂了自层出口（如 ``attach_mount`` 给的文件），写日志就
+**只投自层那些**，不再带上核心的文件出口——即「一个模块一个文件」；没挂自层出口时，
+才整份走派生那一刻从核心复制的**落回配置**。所以 ``attach_mount`` 要**在取实例之前**调用，
+模块才拿得到这个出口。
 """
 from __future__ import annotations
 
@@ -152,12 +154,12 @@ def attach_mount(
 
     等价于 ``core.attach(processor, name=core.qualify(name), replace=True)``：名字**相对核心**
     （``"module_a"`` -> 核心名下的 ``"nacho.module_a"``，写全名也行），处理机写进该名字
-    实例的配置里；只有这个名字的日志会进它，因此各模块的输出文件互不混杂。
-    同一个名字永远对应同一个实例（有则载入），重复挂载会替换同名通道
-    （模块热重载 / 换路径）。
+    实例的**自层出口**；该实例写日志就只投这份（外加控制台），不再带上核心的文件出口，
+    因此各模块的输出文件互不混杂。同一个名字永远对应同一个实例（有则载入），重复挂载
+    会替换同名通道（模块热重载 / 换路径）。
 
-    注意配置是**派生时复制、创建即冻结**的：模块实例一旦被 ``get_logger`` / ``child``
-    取出来，之后再 ``attach_mount`` 就不会影响它了，所以先挂载、再取实例。
+    注意落回配置是**派生时复制、创建即冻结**的：模块实例一旦被 ``get_logger`` / ``child``
+    取出来，之后再 ``attach_mount`` 也不会影响它已定格的落回配置，所以先挂载、再取实例。
 
     :param name: 模块名字，**相对默认核心**：``"module_a"`` 对应 ``"nacho.module_a"``
         这个实例（写成 ``"nacho.module_a"`` 这样的全名也行）。

@@ -9,20 +9,27 @@
 * :meth:`BaseLogger.flush`：**刷新缓冲区方法**，刷新所有处理机的缓冲区；
 * :meth:`BaseLogger.search`：**检索方法**，聚合各处理机的检索结果。
 
-子实例 = 一个名字 + 一份配置副本
-================================
+子实例 = 一个名字 + 一份「落回配置」+ 自己的出口
+================================================
 
-:meth:`BaseLogger.child` 派生一个子实例：换一个名字，把**当前实例的处理机列表与
-过滤器复制一份**进去，之后两者各改各的：
+:meth:`BaseLogger.child` 派生一个子实例：换一个名字，并把**当前实例实际生效的
+处理机列表与过滤器复制一份**作为自己的「落回配置」（``_inherited``），之后两者各改各的：
 
-* 子实例写日志时**只投给自己那份副本**，不会再去父实例现取一遍，也不会沿名字逐层
-  累加——所以一条日志在同一个处理机上永远只投一次；
-* 副本**创建即冻结**：父实例之后再 ``attach`` / ``detach`` 都不回头影响已经建好的
+* **自层覆盖**：子实例一旦自己 ``attach`` 过出口，写日志就**只投自层那些**，不再带上
+  父级 / 核心的文件出口（这就是「一个模块一个文件」）；标了
+  :attr:`~nacho.core.logger.processors.base.BaseLogProcessor.inherit_on_override`
+  的出口（控制台）例外，仍从落回配置里保留；
+* **无自层出口就回落**：子实例没挂过任何出口时，整份走落回配置——像 ``arm`` 这种
+  没单独挂文件的名字，照旧写进核心的 ``nacho.log``；
+* 落回配置**创建即冻结**：父实例之后再 ``attach`` / ``detach`` 都不回头影响已经建好的
   子实例；子实例要变就自己 ``attach``；
-* 名字按 ``.`` 分层，``child("a.b")`` 等价于 ``child("a").child("b")``：逐段复制，
-  于是 ``a.b`` 拿到的是 ``a`` 那份配置的副本。
+* 名字按 ``.`` 分层，``child("a.b")`` 等价于 ``child("a").child("b")``：逐段派生，
+  于是 ``a.b`` 的落回配置是 ``a`` 那一份。
 
-因此**顺序很重要**：副本在 ``child`` 创建（或第一次 ``get_logger``）时定格，
+因为「自层覆盖」，写日志**只按记录所属实例自己那份解析结果投递**，不会沿名字向上
+回溯、也不会重复投给同一个处理机。
+
+因此**顺序很重要**：落回配置在 ``child`` 创建（或第一次 ``get_logger``）时定格，
 要先挂出口、再取子实例。
 
 输出的挂载与过滤
@@ -86,7 +93,7 @@ class LoggerStats(TypedDict):
     queue: QueueStats
     processors: list[ProcessorStats]
     dropped: DroppedStats
-    #: 「实例名字 -> 该实例那份配置里的处理机名」
+    #: 「实例名字 -> 该实例解析后会投的处理机名」
     routes: dict[str, list[str]]
 
 
@@ -150,8 +157,10 @@ def _require_filter(log_filter: object) -> None:
 class BaseLogger:
     """日志系统基类：队列 + 分发器 + 可注入的日志处理机。
 
-    实例自己持有一份处理机配置（:attr:`processors`）与过滤器，
-    :meth:`child` 派生出的子实例拿的是**这份配置的副本**，创建即冻结。
+    实例自己持有一份「自层出口」（``_own``）与从父实例继承来的「落回配置」
+    （``_inherited``）：:meth:`child` 派生出的子实例在**没挂自层出口**时整份走
+    落回配置（创建即冻结）；一旦挂了自层出口就改为**只投自层那些**，仅
+    ``inherit_on_override`` 的出口（控制台）仍保留。
     """
 
     def __init__(
@@ -162,6 +171,7 @@ class BaseLogger:
         queue: AsyncLogQueue | None = None,
         processors: list[BaseLogProcessor] | None = None,
         filters: dict[str, LogFilter] | None = None,
+        inherit: list[BaseLogProcessor] | None = None,
         shared: _SharedState | None = None,
         overflow_policy: OverflowPolicy | str = OverflowPolicy.DROP_OLDEST,
         queue_maxsize: int = 10000,
@@ -169,9 +179,13 @@ class BaseLogger:
         dispatch_timeout: float = 0.2,
     ) -> None:
         """
-        :param processors: 本实例的处理机列表。构造时**复制一份**，
-            因此传进来的列表之后被改动不会影响本实例（子实例的配置副本也依赖这一点）。
+        :param processors: 本实例**自层**的处理机列表。构造时复制一份，
+            因此传进来的列表之后被改动不会影响本实例。自层列表非空即进入
+            「自层覆盖」，只投自层这些。
         :param filters: 本实例的「处理机名 -> 过滤器」表；同样复制一份。
+        :param inherit: 从父实例继承来的**落回配置**（父实例派生那一刻生效的处理机
+            列表的副本）。只有 :meth:`child` 派生出的子实例才传；自层没挂出口时
+            整份投给它，自层挂了出口时只保留其中 ``inherit_on_override`` 的出口。
         :param shared: 多实例共享的运行时状态。只有核心实例才新建它，
             子实例一律传入父实例的 ``_shared``。
         :param dispatch_batch_size: 分发器一次最多从队列取多少条。这是**交接批量**，
@@ -199,8 +213,10 @@ class BaseLogger:
         #: 与子实例共享的运行时状态（队列 / 分发表 / 处理机清单）
         self._shared: _SharedState = shared
         self._queue: AsyncLogQueue = shared.queue
-        # 本实例自己的配置：构造时复制，子实例的「配置副本」也由这里复制出来
-        self._processors: list[BaseLogProcessor] = _dedupe(processors or [])
+        # 本实例**自层**挂载的出口；子实例派生时这份会被复制成对方的「落回配置」
+        self._own: list[BaseLogProcessor] = _dedupe(processors or [])
+        # 从父实例继承来的**落回配置**（自层没挂出口时整份投它）
+        self._inherited: list[BaseLogProcessor] = _dedupe(inherit or [])
         self._filters: dict[str, LogFilter] = dict(filters or {})
         self._dispatch_batch_size: int = dispatch_batch_size
         self._dispatch_timeout: float = dispatch_timeout
@@ -211,20 +227,49 @@ class BaseLogger:
 
     # ------------------------------------------------------------------ 注册表
     def _sync_registry(self) -> None:
-        """按 :attr:`_SharedState.instances` 重建处理机清单（去重保序、原地更新）。"""
+        """重建所有已挂载处理机的清单（去重保序、原地更新）。
+
+        每个处理机都源自某个实例的**自层**出口，所以遍历各实例的 ``_own`` 求并集
+        即可覆盖全部；落回配置里的那些对象也都来自某一层的 ``_own``。
+        """
         merged: list[BaseLogProcessor] = []
         for instance in self._shared.instances.values():
-            for processor in instance._processors:
+            for processor in instance._own:
                 if not any(existing is processor for existing in merged):
                     merged.append(processor)
         self._shared.registry[:] = merged
 
-    def _find_own(self, name: str) -> BaseLogProcessor | None:
-        """在本实例自己的配置里按名称找处理机。"""
-        for processor in self._processors:
+    def _resolved_outputs(self) -> list[BaseLogProcessor]:
+        """本实例**实际会投递**的处理机（自层覆盖 + 无自层出口时回落父级）。
+
+        * 自层挂过出口（``_own`` 非空）：只投自层那些，不再带上父级 / 核心的文件
+          出口；标了 ``inherit_on_override`` 的出口（控制台）仍从落回配置里保留；
+        * 自层一个出口都没挂：整份走落回配置（父实例派生那一刻生效的那份副本）。
+        """
+        if not self._own:
+            return list(self._inherited)
+        resolved: list[BaseLogProcessor] = []
+        for processor in self._inherited:
+            if processor.inherit_on_override:
+                resolved.append(processor)
+        for processor in self._own:
+            if not any(existing is processor for existing in resolved):
+                resolved.append(processor)
+        return resolved
+
+    def _find_channel(self, name: str) -> BaseLogProcessor | None:
+        """在本实例**实际会投**的出口里按名称找（含保留的继承出口）。"""
+        for processor in self._resolved_outputs():
             if processor.name == name:
                 return processor
         return None
+
+    def _remove_channel(self, processor: BaseLogProcessor) -> None:
+        """从本实例的配置里摘掉一个出口（自层与落回配置里都摘）。"""
+        for bucket in (self._own, self._inherited):
+            for existing in list(bucket):
+                if existing is processor:
+                    bucket.remove(existing)
 
     # ------------------------------------------------------------------ 输出通道挂载
     def attach(
@@ -242,8 +287,9 @@ class BaseLogger:
         ``await processor.start()``。
 
         :param name: 挂到哪一层的配置上：``None`` 表示**本实例**（推荐——先取实例
-            再挂载，语义最直白）；给了名字则等价于挂到 ``self.child(name)`` 上，
-            该名字的子实例之后派生时会复制到它。名字**相对本实例**（``"a.b"`` 即
+            再挂载，语义最直白）；给了名字则等价于挂到 ``self.child(name)`` 上，之后
+            该名字实例写日志就只投这份自层出口（覆盖掉它从父级继承来的落回配置），
+            它的子实例派生时复制的也是这份。名字**相对本实例**（``"a.b"`` 即
             ``"<本实例名>.a.b"``，写全名也行）。
         :param log_filter: 这个通道的过滤器（:class:`~nacho.core.logger.filters.LogFilter`）。
             ``None`` 表示全收；给了过滤器则**由分发器在查找分发时**用它筛掉不
@@ -257,16 +303,16 @@ class BaseLogger:
         if log_filter is not None:
             _require_filter(log_filter)
         target: BaseLogger = self if name is None else self.child(name)
-        existing: BaseLogProcessor | None = target._find_own(processor.name)
+        existing: BaseLogProcessor | None = target._find_channel(processor.name)
         if existing is not None:
             if not replace:
                 raise ValueError(
                     f"处理机 {processor.name!r} 已挂载；"
                     + "要换输出路径请用 attach(processor, replace=True)"
                 )
-            target._processors.remove(existing)
+            target._remove_channel(existing)
             target._filters.pop(existing.name, None)
-        target._processors.append(processor)
+        target._own.append(processor)
         if log_filter is None:
             target._filters.pop(processor.name, None)  # pyright: ignore[reportUnusedCallResult]
         else:
@@ -287,10 +333,11 @@ class BaseLogger:
         """
         found: BaseLogProcessor | None = None
         for instance in self._shared.instances.values():
-            for processor in list(instance._processors):
-                if processor.name == name:
-                    instance._processors.remove(processor)
-                    found = processor
+            for bucket in (instance._own, instance._inherited):
+                for processor in list(bucket):
+                    if processor.name == name:
+                        bucket.remove(processor)
+                        found = processor
             instance._filters.pop(name, None)  # pyright: ignore[reportUnusedCallResult]
         if found is not None:
             self._sync_registry()
@@ -318,8 +365,8 @@ class BaseLogger:
 
     @property
     def processors(self) -> list[BaseLogProcessor]:
-        """本实例配置里的处理机快照副本。"""
-        return list(self._processors)
+        """本实例**实际会投递**的处理机快照副本（自层 + 保留的继承出口）。"""
+        return self._resolved_outputs()
 
     @property
     def processor_registry(self) -> list[BaseLogProcessor]:
@@ -352,7 +399,9 @@ class BaseLogger:
     def _derive(self, full_name: str) -> BaseLogger:
         """按完整名字派生**一层**子实例（已存在则直接返回）。
 
-        子实例构造时把本实例的处理机列表与过滤器**复制一份**，副本一到手即冻结。
+        子实例构造时把本实例**实际会投的处理机**与过滤器各复制一份，作为自己的
+        「落回配置」（``_inherited``）：自层没挂出口时整份投它，挂了自层出口则只保留
+        其中 ``inherit_on_override`` 的部分。副本一到手即冻结。
         """
         existing = self._shared.instances.get(full_name)
         if existing is not None:
@@ -360,26 +409,28 @@ class BaseLogger:
         return BaseLogger(
             full_name,
             level=self._level,
-            processors=self._processors,
             filters=self._filters,
+            inherit=self._resolved_outputs(),
             shared=self._shared,
             dispatch_batch_size=self._dispatch_batch_size,
             dispatch_timeout=self._dispatch_timeout,
         )
 
     def child(self, name: str, *, level: LogLevel | str | None = None) -> BaseLogger:
-        """派生一个子日志实例：共享队列与分发器，换一个名字 + 复制一份配置。
+        """派生一个子日志实例：共享队列与分发器，换一个名字 + 复制一份落回配置。
 
         名字**相对本实例**：``LogCore("nacho").child("a1")`` 得到的名字是 ``nacho.a1``——
         写相对的一段（``"a1"``、``"robot.arm"``）会自动补上父前缀；已经写全的名字
         （``"nacho.a1"``）原样使用，两种写法可以混用（见 :meth:`qualify`）。名字分段
-        逐层复制：``child("robot.arm")`` 等价于 ``child("robot").child("arm")``，
-        因此 ``arm`` 拿到的是 ``robot`` 那份配置的副本。
+        逐层派生：``child("robot.arm")`` 等价于 ``child("robot").child("arm")``，
+        因此 ``arm`` 的落回配置是 ``robot`` 那一份。
 
-        子实例与父实例共享同一个队列与同一个分发器；**配置是复制的**：创建那一刻把父
-        实例的处理机与过滤器复制一份进自己（副本随即冻结），此后父实例再 ``attach`` /
-        ``detach`` 都不回头影响它；要改就自己 :meth:`attach`。同名实例只有一个
-        （有则载入），重复调用返回同一个对象。
+        子实例与父实例共享同一个队列与同一个分发器；**配置是派生那一刻的副本**：创建时
+        把父实例**实际会投的处理机与过滤器**复制进自己的落回配置（副本随即冻结），此后
+        父实例再 ``attach`` / ``detach`` 都不回头影响它。子实例自己 :meth:`attach` 了出口
+        之后进入「自层覆盖」——只投自层那些，不再带上父级的文件出口（控制台等
+        ``inherit_on_override`` 的出口除外）；没挂自层出口时才整份走落回配置。同名实例
+        只有一个（有则载入），重复调用返回同一个对象。
 
         :param level: 显式指定时只改**这个实例**的级别（新级别会成为它之后派生子实例的
             副本来源）；省略则沿用父实例的级别。级别同样复制不回溯，所以父实例之后
@@ -410,9 +461,9 @@ class BaseLogger:
 
     @property
     def routes(self) -> dict[str, list[BaseLogProcessor]]:
-        """「实例名字 -> 该实例配置里的处理机」快照副本（改它不会影响路由）。"""
+        """「实例名字 -> 该实例**实际会投**的处理机」快照副本（改它不会影响路由）。"""
         return {
-            name: list(instance._processors)
+            name: instance._resolved_outputs()
             for name, instance in self._shared.instances.items()
         }
 
@@ -445,16 +496,18 @@ class BaseLogger:
         return self._level if instance is None else instance._level
 
     def effective_outputs(self, name: str | None = None) -> list[BaseLogProcessor]:
-        """某个名字**会收到的输出设备**（即该名字实例那份配置副本）。
+        """某个名字**会收到的输出设备**（该名字实例解析后的那份配置）。
 
-        只读，不会顺带把实例建出来：实例还没派生过时，返回本实例的配置，
-        因为「现在派生一个」拿到的就是这份。排查「这条日志到底进了哪几个出口」
-        看这个；:attr:`routes` 则是所有实例配置的总览。
+        只读，不会顺带把实例建出来：实例还没派生过时，返回本实例的解析结果，
+        因为「现在派生一个」自层没挂出口时拿到的就是这份落回配置。排查「这条日志
+        到底进了哪几个出口」看这个；:attr:`routes` 则是所有实例的总览。
         """
         if name is None:
-            return list(self._processors)
+            return self._resolved_outputs()
         instance = self._shared.instances.get(self.qualify(name))
-        return list(self._processors if instance is None else instance._processors)
+        if instance is None:
+            return self._resolved_outputs()
+        return instance._resolved_outputs()
 
     @property
     def running(self) -> bool:
@@ -527,15 +580,19 @@ class BaseLogger:
                 break
 
     def _targets_for(self, record: LogRecord) -> list[BaseLogProcessor]:
-        """一条日志该投给哪些处理机：只看**它所属实例**那份配置副本，再按过滤器筛。
+        """一条日志该投给哪些处理机：只看**它所属实例**解析后的配置，再按过滤器筛。
 
-        不会沿名字向上回溯：子实例写日志时用的就是它自己那份（从父实例复制来、
-        创建即冻结）的配置，因此同一条日志在同一个处理机上永远只投一次。
-        名字没登记过实例（例如两个核心共用一个队列）时退回本实例的配置。
+        不会沿名字向上回溯：子实例写日志时用的是它自己那份（自层覆盖，或自层没挂
+        出口时回落父级的落回配置），因此同一条日志在同一个处理机上永远只投一次。
+        名字没登记过实例（例如两个核心共用一个队列）时退回本实例的解析结果。
         """
         instance = self._shared.instances.get(record.logger_name)
-        processors = self._processors if instance is None else instance._processors
-        filters = self._filters if instance is None else instance._filters
+        if instance is None:
+            processors = self._resolved_outputs()
+            filters = self._filters
+        else:
+            processors = instance._resolved_outputs()
+            filters = instance._filters
         accepted: list[BaseLogProcessor] = []
         for processor in processors:
             log_filter = filters.get(processor.name)
@@ -751,12 +808,12 @@ class BaseLogger:
                 "total": queue_dropped + buffer_dropped,
             },
             "routes": {
-                name: [processor.name for processor in instance._processors]
+                name: [processor.name for processor in instance._resolved_outputs()]
                 for name, instance in sorted(self._shared.instances.items())
             },
         }
 
     @override
     def __repr__(self) -> str:  # pragma: no cover - 调试用
-        names = ", ".join(p.name for p in self._processors)
+        names = ", ".join(p.name for p in self._resolved_outputs())
         return f"<BaseLogger name={self.name!r} level={self._level.name} processors=[{names}]>"

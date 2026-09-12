@@ -21,7 +21,7 @@ import sys
 from typing import TextIO, override
 
 from ..models import LogLevel, LogRecord, TimestampLike
-from .base import BaseLogProcessor
+from .base import BaseLogProcessor, ProcessorStats
 
 #: 各日志级别的 ANSI 颜色，仅在 ``color=True`` 时使用
 _LEVEL_COLORS: dict[LogLevel, str] = {
@@ -34,10 +34,24 @@ _LEVEL_COLORS: dict[LogLevel, str] = {
 _RESET: str = "\033[0m"
 
 
+class ConsoleProcessorStats(ProcessorStats):
+    """控制台处理机的运行统计：在基类字段之外追加颜色开关标记。
+
+    继承 :class:`~nacho.core.logger.processors.base.ProcessorStats` 而不是新开一个
+    字典类型，覆写后的返回类型就是基类的**子类型**，既满足 LSP（里氏替换）也不会
+    丢失基类字段的类型信息。
+    """
+
+    #: 是否输出 ANSI 颜色
+    color: bool
+
+
 class ConsoleLogProcessor(BaseLogProcessor):
     """把日志逐条写到控制台（默认 ``sys.stdout``）。"""
 
     name: str = "console"
+    #: 控制台是全局观感出口：子模块自层挂了文件出口后，它仍继续输出
+    inherit_on_override: bool = True
 
     def __init__(
         self,
@@ -127,7 +141,9 @@ class ConsoleLogProcessor(BaseLogProcessor):
     # ------------------------------------------------------------------ 状态
     @property
     @override
-    def stats(self) -> dict[str, object]:
-        data: dict[str, object] = super().stats
-        data["color"] = self._color
-        return data
+    def stats(self) -> ConsoleProcessorStats:
+        """基类统计 + ``color``：返回类型是基类 ``ProcessorStats`` 的子类型。
+
+        ``super().stats`` 每次访问都新建一份字典，因此可以放心在其基础上追加字段。
+        """
+        return ConsoleProcessorStats(**super().stats, color=self._color)
