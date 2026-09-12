@@ -2,7 +2,8 @@
 
 这里是「便捷用法」的入口，底层就是 :class:`~nacho.core.logger.core.LogCore`：
 :func:`configure` 建立（或复用）进程默认核心，:func:`get_logger` 从它派生子实例，
-子实例与核心共享同一个消息队列与同一批输出通道，因此不需要重复启动分发器。
+子实例与核心共享同一个消息队列与分发器，配置则是派生那一刻从核心**复制**的一份
+副本（创建即冻结），因此不需要重复启动分发器。
 
 重复调用 :func:`configure` 不再静默丢弃参数：新传入的处理机会增量挂到已有核心上，
 同名的会被替换（换输出路径时用得上）。
@@ -92,17 +93,19 @@ class LogManager:
 
         非核心名的实例是核心的 :meth:`~nacho.core.logger.base.BaseLogger.child`，
         名字**相对核心**：``get_logger("api.robot")`` 得到的名字是 ``nacho.api.robot``
-        （核心名 ``nacho``）；写全名也行。实例与核心共享队列与输出通道。
+        （核心名 ``nacho``）；写全名也行。名字按 ``.`` 逐段派生（``nacho.api`` ->
+        ``nacho.api.robot``），所以每一层复制的是它上一层的配置。
+
+        实例与核心共享同一个队列与分发器，但**配置是派生那一刻复制的副本**，
+        创建即冻结：先 ``configure`` / ``attach`` 再 ``get_logger``，否则模块
+        拿不到之后才挂的出口。同名实例只建一次，重复调用返回同一个对象。
         """
         core: LogCore = current_default_core() or self.configure()
         if name is None or name == core.name:
             return core
 
-        logger_name = core.qualify(name)
-        logger = self._loggers.get(logger_name)
-        if logger is None:
-            logger = core.child(logger_name)
-            self._loggers[logger_name] = logger
+        logger = core.child(name)
+        self._loggers[logger.name] = logger
         return logger
 
     async def start(self) -> None:

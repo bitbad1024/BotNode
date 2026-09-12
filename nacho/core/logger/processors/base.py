@@ -34,13 +34,28 @@ import asyncio
 import logging
 from contextlib import suppress
 from logging import Logger
-from typing import final, override
+from typing import TypedDict, final, override
 
 from ..models import LogLevel, LogRecord, TimestampLike
 from ..queue import OverflowPolicy
 
 #: 处理机内部异常的统一兜底出口，避免异常处理本身再触发日志递归。
 _fallback: Logger = logging.getLogger("nacho.core.logger.processor")
+
+
+class ProcessorStats(TypedDict):
+    """一个处理机的运行统计（:attr:`BaseLogProcessor.stats` 的返回结构）。"""
+
+    name: str
+    healthy: bool
+    running: bool
+    pending: int
+    written: int
+    failed: int
+    dropped: int
+    buffer_size: int
+    flush_interval: float
+    overflow_policy: str
 
 
 @final
@@ -345,7 +360,7 @@ class BaseLogProcessor(abc.ABC):
         return self._buffer.dropped
 
     @property
-    def stats(self) -> dict[str, object]:
+    def stats(self) -> ProcessorStats:
         return {
             "name": self.name,
             "healthy": self._healthy,

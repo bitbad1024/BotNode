@@ -29,22 +29,28 @@
     from nacho.core.logger import attach_mount, get_logger, LocalFileLogProcessor
 
     attach_mount("module_a", LocalFileLogProcessor("logs/module_a.log"))   # 名字相对核心 = nacho.module_a
-    get_logger("module_a").info("模块内日志")                              # 只进 module_a.log
+    get_logger("module_a").info("模块内日志")   # 进 module_a.log，以及核心配置里复制来的出口
 
-名字是纯字符串，**相对核心**（``"module_a"`` 即核心名下的 ``"nacho.module_a"``，写全名也行），
-日志系统内部维护「字符串名字 -> 转发列表」：同一个名字永远对应同一条列表，父模块没给它挂
-出口时会警告一次，日志按默认全量输出投递，不影响程序继续跑。
+名字是纯字符串，**相对核心**（``"module_a"`` 即核心名下的 ``"nacho.module_a"``，写全名也行）。
+一个名字对应一个日志实例，它的配置是**派生那一刻从核心复制的一份副本**，之后各改各的：
+所以 ``attach_mount`` 要**在取实例之前**调用，模块才拿得到这个出口。
 """
 from __future__ import annotations
 
 from typing import TextIO, override
 
-from .base import BaseLogger
+from .base import BaseLogger, LoggerStats
 from .filters import LevelFilter
 from .models import LogLevel
 from .processors.base import BaseLogProcessor
 from .processors.console import ConsoleLogProcessor
 from .queue import AsyncLogQueue, OverflowPolicy
+
+
+class CoreStats(LoggerStats):
+    """核心实例的运行状态快照（比基类多一个控制台开关）。"""
+
+    console: bool
 
 
 class LogCore(BaseLogger):
@@ -101,10 +107,8 @@ class LogCore(BaseLogger):
 
     @property
     @override
-    def stats(self) -> dict[str, object]:
-        data = super().stats
-        data["console"] = self._console_enabled
-        return data
+    def stats(self) -> CoreStats:
+        return CoreStats(**super().stats, console=self._console_enabled)
 
 
 #: 进程默认核心实例，由 :func:`default_core` 懒创建
@@ -147,12 +151,16 @@ def attach_mount(
     """子模块挂载自己的日志出口（模块解耦的便捷入口）。
 
     等价于 ``core.attach(processor, name=core.qualify(name), replace=True)``：名字**相对核心**
-    （``"module_a"`` -> 核心名下的 ``"nacho.module_a"``，写全名也行），处理机写进该名字的
-    转发列表，只有这个名字（及其 ``.`` 子名字）的日志会进它，因此各模块的输出文件互不混杂；
-    同一个名字永远对应同一条转发列表（有则载入），重复挂载会替换同名通道（模块热重载 / 换路径）。
+    （``"module_a"`` -> 核心名下的 ``"nacho.module_a"``，写全名也行），处理机写进该名字
+    实例的配置里；只有这个名字的日志会进它，因此各模块的输出文件互不混杂。
+    同一个名字永远对应同一个实例（有则载入），重复挂载会替换同名通道
+    （模块热重载 / 换路径）。
 
-    :param name: 模块名字，**相对默认核心**：``"module_a"`` 收 ``module_a`` 与其
-        ``.`` 子名字的日志（写成 ``"nacho.module_a"`` 这样的全名也行）。
+    注意配置是**派生时复制、创建即冻结**的：模块实例一旦被 ``get_logger`` / ``child``
+    取出来，之后再 ``attach_mount`` 就不会影响它了，所以先挂载、再取实例。
+
+    :param name: 模块名字，**相对默认核心**：``"module_a"`` 对应 ``"nacho.module_a"``
+        这个实例（写成 ``"nacho.module_a"`` 这样的全名也行）。
     :param processor: 要挂载的处理机，建议先构造好再传进来。
     :param core: 挂到哪个核心实例；默认进程默认核心，见 :func:`default_core`。
     """

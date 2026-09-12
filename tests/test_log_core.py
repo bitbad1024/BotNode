@@ -1,11 +1,12 @@
-"""日志核心实例、模块挂载与进程门面的单元测试。
+"""日志核心实例、子实例配置复制与进程门面的单元测试。
 
 对应 ``nacho/core/logger/core.py``、``manager.py`` 与新增的控制台处理机：
 
 * 最小化启动：``LogCore()`` 天生带一路控制台输出，``start()`` 后立刻可见；
 * 运行期挂载：``attach`` 之后不用手动启动处理机，下一批日志就会喂给它；
-* 模块解耦：子模块给一个字符串名字，内部维护「名字 -> 转发列表」，各模块输出互不混杂，
-  父模块没给某个名字挂出口时只警告一次并走默认全量输出；
+* 子实例 = 名字 + 一份配置副本：``child`` 派生时从父实例复制处理机与过滤器，
+  写日志只投给自己这份副本，不沿名字逐层累加；副本创建即冻结，父实例之后再
+  挂 / 再摘都不回头影响已建好的子实例；
 * 进程门面：``configure`` 重复调用不再丢参数，``get_logger`` 返回共享核心的子实例。
 """
 from __future__ import annotations
@@ -298,8 +299,8 @@ class TestDynamicAttach:
             await logger.stop()
 
 
-class TestModuleRouting:
-    """模块路由：子模块给一个字符串名字，内部维护「字符串名字 -> 转发列表」。"""
+class TestModuleConfigCopy:
+    """子实例配置：一个名字对应一个实例，配置是派生那一刻从父实例复制的副本。"""
 
     async def test_module_name_maps_to_one_shared_forward_list(self) -> None:
         """有则载入：同一个名字永远同一条转发列表，重复设置不会重复建出口。"""
@@ -334,14 +335,12 @@ class TestModuleRouting:
         assert own.received == ["a 的日志"]
         assert everything.received == ["a 的日志", "b 的日志"]
 
-    async def test_unmounted_module_warns_once_and_uses_full_output(
-        self, caplog: "pytest.LogCaptureFixture"
-    ) -> None:
-        """父模块没挂载：警告一次，日志照旧按默认全量输出投递，不影响继续运行。"""
+    async def test_name_without_own_channel_uses_copied_config(self) -> None:
+        """没单独挂出口的名字不是「没出口」，而是走从核心复制来的那份配置。"""
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
-        core.child("module_x")  # 子模块设置了名字，父模块却没给它挂输出设备
-        assert core.unmounted_modules == ["nacho.module_x"]
+        core.child("module_x")  # 派生时复制核心配置（核心只有 local-all）
+        assert core.routes["nacho.module_x"] == [everything]
 
         await core.start()
         try:
@@ -352,10 +351,9 @@ class TestModuleRouting:
             await core.stop()
 
         assert everything.received == ["第一条", "第二条"]  # 一条都没丢
-        assert caplog.text.count("父模块未为") == 1  # 只警告一次，不刷屏
 
     async def test_submodule_name_is_covered_by_segment_prefix(self) -> None:
-        """子名字按 ``.`` 分段归到父名字的转发列表，``api`` 不会吃掉 ``apix``。"""
+        """名字按 ``.`` 逐段派生：``api.robot`` 复制到 ``api`` 的副本，``apix`` 不会。"""
         own = CollectingProcessor(name="own")
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
@@ -371,13 +369,13 @@ class TestModuleRouting:
 
         assert own.received == ["子模块"]
 
-    async def test_parent_mounts_by_name_and_detach_restores_fallback(self) -> None:
-        """父模块也能按名字挂载；卸载后该名字回到「没挂载」，日志走全量输出。"""
+    async def test_parent_mounts_by_name_and_detach_removes_it(self) -> None:
+        """父模块也能按名字挂载；卸载后该名字只剩从核心复制来的那份配置。"""
         own = CollectingProcessor(name="own")
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
         core.attach(own, name="nacho.module_a")
-        assert core.routes["nacho.module_a"] == [own]
+        assert core.routes["nacho.module_a"] == [everything, own]
 
         await core.start()
         try:
@@ -385,8 +383,7 @@ class TestModuleRouting:
             assert await wait_until(lambda: own.received == ["第一"]) is True
 
             core.detach("own")
-            assert core.routes["nacho.module_a"] == []
-            assert core.unmounted_modules == ["nacho.module_a"]
+            assert core.routes["nacho.module_a"] == [everything]
 
             core.child("module_a").info("第二")
             assert await wait_until(lambda: everything.received == ["第一", "第二"]) is True
@@ -395,8 +392,8 @@ class TestModuleRouting:
 
         assert own.received == ["第一"]
 
-    async def test_logs_without_module_name_use_full_output(self) -> None:
-        """没命中任何名字（含核心自己）-> 默认全量输出。"""
+    async def test_core_and_child_each_write_through_their_own_copy(self) -> None:
+        """核心自己与派生出来的名字，写的都是各自那份配置副本。"""
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
 
@@ -436,22 +433,28 @@ class TestModuleRouting:
         assert own.received == ["关节过载"]
         assert everything.received == ["关节过载"]
 
-    async def test_console_is_the_default_full_outlet(self) -> None:
-        """最小化启动的控制台就在全量出口上，模块日志也照旧能在控制台看到。"""
+    def test_console_lands_on_the_core_config(self) -> None:
+        """最小化启动的控制台挂在核心自己那份配置上，派生时会被复制给子实例。"""
         core = LogCore(dispatch_timeout=0.01)
-        assert [processor.name for processor in core.outputs] == ["console"]
+        assert [processor.name for processor in core.processors] == ["console"]
+        assert core.child("api").effective_outputs() == [core.get_processor("console")]
 
-    async def test_stats_reports_routes_and_unmounted_names(self) -> None:
-        """内省接口：stats / routes / unmounted_modules 都看得到名字与转发列表。"""
+    async def test_stats_reports_every_instance_config(self) -> None:
+        """内省接口：stats / routes 看得到每个名字实例那份配置副本。"""
         everything = CollectingProcessor(name="local-all")
         core = LogCore(console=False, processors=[everything], dispatch_timeout=0.01)
         core.attach(CollectingProcessor(name="a-file"), name="nacho.module_a")
-        core.child("module_x")
+        core.child("module_x")  # 没单独挂出口 -> 配置就是核心那份的副本
 
-        # 只在 child 里用过的名字没有节点，不进 routes；它会出现在 unmounted 里
-        assert core.stats["routes"] == {"nacho.module_a": ["a-file"]}
-        assert core.stats["unmounted_modules"] == ["nacho.module_x"]
-        assert core.routes["nacho.module_a"] == [core.get_processor("a-file")]
+        assert core.stats["routes"] == {
+            "nacho": ["local-all"],
+            "nacho.module_a": ["local-all", "a-file"],
+            "nacho.module_x": ["local-all"],
+        }
+        assert core.routes["nacho.module_a"] == [
+            core.get_processor("local-all"),
+            core.get_processor("a-file"),
+        ]
 
     async def test_stats_aggregates_drops_from_both_buffers(self) -> None:
         """两级缓冲都可能丢日志，stats 汇成一个视图，排查只看一处。"""
@@ -486,7 +489,9 @@ class TestModuleRouting:
         processor = CollectingProcessor()
         attached = attach_mount("module_a", processor)
         assert attached is processor
-        assert default_core().routes["nacho.module_a"] == [processor]
+        # 默认核心带控制台；module_a 那份配置是「核心配置的副本 + 本层挂的」
+        core = default_core()
+        assert core.routes["nacho.module_a"] == [core.get_processor("console"), processor]
 
         core = default_core()
         await core.start()
@@ -507,7 +512,8 @@ class TestModuleRouting:
         core = default_core()
         assert core.get_processor("collecting") is second
         assert first not in core.processors
-        assert core.routes["nacho.module_a"] == [second]  # 旧实例不会留在转发列表里
+        # 旧实例不会留在配置里，只剩「核心配置的副本 + 新的 second」
+        assert core.routes["nacho.module_a"] == [core.get_processor("console"), second]
 
     async def test_two_cores_are_isolated(self) -> None:
         first = CollectingProcessor()
@@ -564,8 +570,8 @@ class TestModuleRouting:
         assert "只进 a" not in text_b
 
 
-class TestNameTreeInheritance:
-    """名字树：裸名字（``child``，不建节点）现场沿树向上取，子层可就地覆盖，且不重复投递。"""
+class TestChildConfigCopy:
+    """配置复制：``child`` 派生时复制父实例配置，子层可就地覆盖，且不重复投递。"""
 
     async def test_subname_inherits_parent_channels(self) -> None:
         """子名字自动继承父名字挂的设备，不需要自己再挂一遍。"""
@@ -645,15 +651,16 @@ class TestNameTreeInheritance:
         # 同级的兄弟不受影响，继续用父层声明的级别
         assert core.child("nacho.robot.leg").effective_level() is LogLevel.ERROR
 
-    def test_level_is_resolved_dynamically(self) -> None:
-        """级别是解析时从树上取的：父层改了，已经在用的子实例立刻跟着变。"""
+    def test_level_copy_does_not_look_back(self) -> None:
+        """级别也是复制来的：父层改了，已经派生过的子实例维持自己那份不变。"""
         core = LogCore(console=False)
         arm = core.child("nacho.robot.arm")
-        assert arm.effective_level() is LogLevel.INFO  # 还没人声明，用实例默认
+        assert arm.effective_level() is LogLevel.INFO  # 派生时复制的是默认级别
 
         core.child("nacho.robot").set_level("WARNING")
 
-        assert arm.effective_level() is LogLevel.WARNING  # 没有重建实例
+        assert arm.effective_level() is LogLevel.INFO  # 冻结：不回头跟着父层变
+        assert core.child("nacho.robot.leg").effective_level() is LogLevel.WARNING
 
     def test_declaration_does_not_leak_to_other_branches(self) -> None:
         """名字按 ``.`` 分段：``robot`` 的声明不影响 ``vision``，也吃不到 ``robotx``。"""
@@ -663,16 +670,21 @@ class TestNameTreeInheritance:
         assert core.child("nacho.vision").effective_level() is LogLevel.INFO
         assert core.child("nacho.robotx").effective_level() is LogLevel.INFO
 
-    def test_effective_outputs_are_deduped_and_introspectable(self) -> None:
-        """内省：``effective_outputs`` 给出沿树累加的设备，每个只出现一次。"""
+    def test_effective_outputs_are_self_contained_and_introspectable(self) -> None:
+        """内省：``effective_outputs`` 给出该名字那份配置副本，只读且不重复。"""
         root_out = CollectingProcessor(name="root-out")
         own = CollectingProcessor(name="own")
         core = LogCore(console=False, processors=[root_out])
-        core.attach(own, name="nacho")
+        core.attach(own, name="nacho")  # 全名就是核心自己 -> 挂到核心实例上
 
-        assert core.effective_outputs("nacho.robot.arm") == [own, root_out]
-        assert core.outputs == [root_out]  # 全量出口本身不变
-        assert core.routes["nacho"] == [own]  # 各层快照仍只列本层
+        assert core.effective_outputs() == [root_out, own]
+        # 还没派生过：返回核心这份（因为「现在派生一个」拿到的就是它）
+        assert core.effective_outputs("nacho.robot.arm") == [root_out, own]
+
+        arm = core.child("nacho.robot.arm")
+        assert core.effective_outputs("nacho.robot.arm") == [root_out, own]  # 派生后是它的副本
+        assert arm.effective_outputs() == [root_out, own]
+        assert core.routes["nacho"] == [root_out, own]  # 核心自己那份也如实登记
 
     def test_child_accepts_level_declaration(self) -> None:
         """``child(name, level=...)`` 是「本层声明级别」的简写。"""
@@ -683,32 +695,32 @@ class TestNameTreeInheritance:
         assert core.child("nacho.robot.arm").is_enabled_for("DEBUG") is True
 
 
-class TestNameTreeCopySemantics:
-    """名字树「复制」语义：父层挂一次，子层**第一次用到**时复制一份，复制后冻结。
+class TestChildConfigFreeze:
+    """配置副本冻结：子实例在**派生那一刻**复制一份父实例配置，之后父实例再挂 / 再摘
+    都不回头影响它；而之后才派生的下层复制到的是**改完**的结果。
 
-    与 :class:`TestNameTreeInheritance` 的区别：那边用 ``child``（裸名字，不建节点），
-    走现场解析（父层改了立刻跟着变）；这里用 ``attach(..., name=...)``（建节点），走
-    「复制一份存进本节点」——复制过一遍就冻结，父层之后再挂 / 再摘都不回头影响本层。
+    这里与 :class:`TestChildConfigCopy` 是同一套语义的两个侧面：那边验证「复制到了什么」，
+    这里验证「复制之后不再变」。
     """
 
-    def test_declared_subname_copies_parent_devices_on_first_use(self) -> None:
-        """建过节点的名字：第一次用到时复制父层设备，之后父层再挂不再影响它。"""
+    def test_child_copies_parent_devices_and_freezes(self) -> None:
+        """派生时复制父实例配置，之后父实例再挂出口不再影响它。"""
         root_out = CollectingProcessor(name="root-out")
         first = CollectingProcessor(name="first")
         later = CollectingProcessor(name="later")
         core = LogCore("a", console=False, processors=[root_out])
-        b = core.child("a.b")
-        b.attach(first, name="a.b")
+        b = core.child("a.b")  # 复制核心 -> [root-out]
+        b.attach(first, name="a.b")  # 本层再挂 -> [root-out, first]
 
-        core.child("a.b.c", level="INFO")  # 建节点（声明），但还没用到，复制尚未发生
-        assert core.effective_outputs("a.b.c") == [first, root_out]  # 第一次用到 -> 复制
+        core.child("a.b.c", level="INFO")  # 派生：复制 b -> [root-out, first]
+        assert core.effective_outputs("a.b.c") == [root_out, first]
 
-        b.attach(later, name="a.b")  # 父层之后再挂出口
-        assert core.effective_outputs("a.b.c") == [first, root_out]  # 冻结：看不到 later
-        assert core.effective_outputs("a.b") == [first, later, root_out]
-        # 改完之后才建的下层，复制到的是**改完**的结果
+        b.attach(later, name="a.b")  # 父实例之后再挂出口
+        assert core.effective_outputs("a.b.c") == [root_out, first]  # 冻结：看不到 later
+        assert core.effective_outputs("a.b") == [root_out, first, later]
+        # 改完之后才派生的下层，复制到的是**改完**的结果
         core.child("a.b.d", level="INFO")
-        assert core.effective_outputs("a.b.d") == [first, later, root_out]
+        assert core.effective_outputs("a.b.d") == [root_out, first, later]
 
     async def test_frozen_copy_ignores_parent_devices_added_later(self) -> None:
         """端到端：c 复制过一次后，b 之后新增的出口不会漏给 c。"""

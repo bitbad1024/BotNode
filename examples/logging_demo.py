@@ -9,12 +9,13 @@
 1. **最小化启动**：``LogCore()`` 天生带一路控制台输出，``start()`` 后立刻可见；
 2. **增量挂载**：数据库 / 本地文件出口在运行期挂上去，且自动启动，不用手动
    ``await processor.start()``；
-3. **模块解耦**：子模块给一个字符串名字 + 自己的输出设备，日志系统内部维护一棵
-   **名字树**，各模块的文件互不混杂；**父层挂一次，子名字第一次用到时把父名字的设备
-   复制一份**（``nacho.robot.arm`` 不用重复配就能进 ``robot.log``），复制后即冻结，
-   详见 ``examples/tree_routing_demo.py``；
-4. **默认全量输出**：父模块没给某个名字挂出口时只告警一次，日志照旧按全量输出
-   投递（示例同时演示「单个处理机崩溃不影响业务与其它处理机」的隔离效果）。
+3. **模块解耦**：子模块给一个字符串名字 + 自己的输出设备（``logger.child("robot")``），
+   各模块的文件互不混杂；**子实例的配置 = 派生那一刻从父实例复制的一份副本**，
+   所以核心挂过的出口它也有（``robot.log`` 之外照样进 ``nacho.log``），详见
+   ``examples/child_config_demo.py``；
+4. **配置复制不回溯**：子实例创建之后，父实例再挂 / 再摘都不影响它；反过来，
+   没单独挂出口的名字也不是「没出口」，而是走从父实例复制来的那份配置。
+   （示例同时演示「单个处理机崩溃不影响业务与其它处理机」的隔离效果。）
 """
 
 import asyncio
@@ -123,11 +124,12 @@ async def main() -> None:
     # 故意挂一个会崩溃的出口：连续 2 批写入失败后自动停用，业务与其它出口不受影响
     logger.attach(BrokenLogProcessor(buffer_size=5, flush_interval=0.2, max_failures=2))
 
-    # ---- 阶段 3：子模块设置名字 + 设置输出设备（有则载入同一条转发列表）----
+    # ---- 阶段 3：子模块设置名字 + 设置输出设备 ---------------------------
+    # child 派生时复制核心当前的配置（控制台 + 数据库 + nacho.log + broken），
+    # 之后 robot.attach 只加到 robot 自己那份副本上
     robot = logger.child("nacho.robot")
     robot.attach(
-        LocalFileLogProcessor(robot_log, name="local-robot", buffer_size=5, flush_interval=0.2),
-        name="nacho.robot",
+        LocalFileLogProcessor(robot_log, name="local-robot", buffer_size=5, flush_interval=0.2)
     )
     # 运行期挂载的通道由分发器补启动，这里不需要手动 start
     logger.info(message="子模块 nacho.robot 已挂载自己的日志文件")
@@ -149,8 +151,10 @@ async def main() -> None:
     )
     logger.child("nacho.vision").info(message="视觉模块开始工作")
 
-    # ---- 阶段 4：父模块没给某个名字挂出口 -> 告警一次，日志走默认全量输出 ----
-    logger.child("nacho.arm").warning(message="这个模块没有专属出口，只会看到一条告警")
+    # ---- 阶段 4：没单独挂出口的名字，走的是从核心复制来的那份配置 ----------
+    # arm 只有一份从核心复制来的配置（控制台 + 数据库 + nacho.log + broken），
+    # 没有自己的文件；想让它有专属文件就 arm.attach(...)
+    logger.child("nacho.arm").warning(message="arm 没有专属文件，走核心复制来的出口")
 
     await logger.flush()
     await asyncio.sleep(0.3)
@@ -170,8 +174,7 @@ async def main() -> None:
     print(f"模块文件 {robot_log.name}: {count_lines(robot_log)} 行（只有 nacho.robot）")
     print(f"模块文件 {vision_log.name}: {count_lines(vision_log)} 行（只有 nacho.vision）")
     routes = {name: [p.name for p in ps] for name, ps in logger.routes.items()}
-    print(f"各名字「本层」挂的设备: {routes}")
-    print(f"父模块没挂出口的名字: {logger.unmounted_modules}（日志已按全量输出投递）")
+    print(f"各名字实例那份配置副本: {routes}")
 
     print("\n=== 运行状态 ===")
     # 两级缓冲都可能丢日志，stats["dropped"] 把它们汇成一个视图，排查只看一处
