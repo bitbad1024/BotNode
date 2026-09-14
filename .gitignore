@@ -19,3 +19,6 @@ venv/
 
 #日志
 logs/
+
+#配置（本地生效的 config.toml 不入库，只入库模板 config.toml.example）
+/config.toml

@@ -6,18 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "nacho"
 version = "0.1.0"
 description = "机器人框架：api 层 / 核心层 / 数据库层"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "ruff>=0.4"]
+mariadb = ["PyMySQL>=1.1"]
 
 [tool.setuptools.packages.find]
 include = ["nacho*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
+
+[tool.basedpyright]
+# 日志调用只关心副作用，写法与 examples/ 及 nacho/core/logger/__init__.py 的示例一致
+# （裸调 log.info(...)，不写 `_ =`），关掉「调用结果未使用」的提示
+reportUnusedCallResult = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
