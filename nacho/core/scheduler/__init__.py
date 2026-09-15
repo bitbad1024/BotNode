@@ -14,6 +14,9 @@
 ``scheduler``）；:class:`~nacho.core.scheduler.core.Scheduler` 是它内部的时间驱动
 循环，:class:`~nacho.core.scheduler.cron.CronExpr` 是表达式解析。任务函数同步协程
 皆可——同步函数丢线程池跑，协程函数直接 await。
+
+任务默认**单实例**（上次没跑完，到点跳过本次）；``add(..., multi_instance=True)``
+或 ``set_multi_instance(id, True)`` 切成多实例，到点就开新实例、允许叠加。
 """
 from __future__ import annotations
 

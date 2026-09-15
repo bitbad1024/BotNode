@@ -32,6 +32,14 @@ class TestAddAndGet:
         assert second.task_id.startswith("task-")
         assert first.task_id != second.task_id
 
+    def test_multi_instance_defaults_to_single(self) -> None:
+        tm = TaskManager()
+        task = tm.add("* * * * *", noop, task_id="a")
+        assert task.multi_instance is False
+        assert task.active == 0
+        assert task.running is False  # 没实例在跑
+        assert tm.add("* * * * *", noop, task_id="b", multi_instance=True).multi_instance is True
+
     def test_display_name_falls_back_to_id(self) -> None:
         tm = TaskManager()
         unnamed = tm.add("* * * * *", noop, task_id="x")
@@ -121,6 +129,14 @@ class TestSetters:
         tm.add("* * * * *", noop, task_id="t")
         with pytest.raises(TypeError, match="可调用"):
             tm.set_func("t", 123)  # pyright: ignore[reportArgumentType]
+
+    def test_set_multi_instance_toggles(self) -> None:
+        tm = TaskManager()
+        task = tm.add("* * * * *", noop, task_id="t")
+        tm.set_multi_instance("t", True)
+        assert task.multi_instance is True
+        tm.set_multi_instance("t", False)
+        assert task.multi_instance is False
 
     def test_set_cron_accepts_str_and_expr(self) -> None:
         tm = TaskManager()

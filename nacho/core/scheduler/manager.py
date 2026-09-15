@@ -58,11 +58,14 @@ class TaskManager:
         name: str = "",
         description: str = "",
         enabled: bool = True,
+        multi_instance: bool = False,
     ) -> Task:
         """登记一个任务并返回它。
 
-        task_id 缺省自动生成；task_id 重复抛 :class:`ValueError`，cron 不合法抛
-        :class:`CronError`，func 不是可调用对象抛 :class:`TypeError`。
+        multi_instance 默认 False（单实例：上次没跑完就跳过本次）；置 True 则到点
+        就开新实例，允许叠加。task_id 缺省自动生成；task_id 重复抛
+        :class:`ValueError`，cron 不合法抛 :class:`CronError`，func 不是可调用对象
+        抛 :class:`TypeError`。
         """
         expr = self._parse_cron(cron)
         if not callable(func):
@@ -81,6 +84,7 @@ class TaskManager:
             name=name,
             description=description,
             enabled=enabled,
+            multi_instance=multi_instance,
         )
         self._tasks[final_id] = task
         self._scheduler.wake()  # 循环醒来看看，把新任务排上
@@ -118,6 +122,10 @@ class TaskManager:
             )
         self._require(task_id).func = func
 
+    def set_multi_instance(self, task_id: str, multi_instance: bool) -> None:
+        """切换单 / 多实例（True = 上次没跑完也照开新的；False = 跳过本次）。"""
+        self._require(task_id).multi_instance = multi_instance
+
     def set_cron(self, task_id: str, cron: str | CronExpr) -> None:
         """改触发规则（收 str 或已解析的 CronExpr，解析失败抛 :class:`CronError`）。"""
         task = self._require(task_id)
@@ -135,8 +143,9 @@ class TaskManager:
 
     # ---- 调试辅助 ----
     def run_now(self, task_id: str) -> asyncio.Task[None]:
-        """立即手动触发一次（不走并发保护，等价于一次到点执行），不影响 cron 排程。
+        """立即手动触发一次（等价于一次到点执行），不影响 cron 排程。
 
+        手动触发是强制的：单实例任务正在跑时也照跑不误，会多出一个并发实例。
         要在事件循环里调用（调度循环没启动也行）。
         """
         return self._scheduler.run_once(self._require(task_id))
