@@ -35,6 +35,9 @@ from nacho.core.logger import (
     get_logger,
     manager,
 )
+from nacho.core.scheduler import (
+    scheduler
+)
 from nacho.db import MariadbAdapter, SqliteAdapter
 
 # --------------------------------------------------------------------------- 初始化
@@ -102,6 +105,9 @@ async def run() -> None:
     log.debug("这条 DEBUG 默认被级别挡住")
     log.info("业务开始", version=__version__)
     log.warning("业务占位：把实现接进 run() 即可")
+    await scheduler.start()
+    #scheduler.add("*/1 * * * *", lambda:print("每秒一次"),  name="巡检")
+    #scheduler.add("*/5 * * * *", lambda:print("每五秒一次"), name="巡检")
     step = 0
     while True:
         log.info(f"{step}写入")
@@ -146,6 +152,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         await run()
     finally:
         await manager.stop()  # 停机自动冲刷余量，收尾日志不会丢
+        await scheduler.stop()
         for adapter in _db_adapters:  # 余量落库之后再关连接
             adapter.close()
 

@@ -17,6 +17,12 @@
 
 任务默认**单实例**（上次没跑完，到点跳过本次）；``add(..., multi_instance=True)``
 或 ``set_multi_instance(id, True)`` 切成多实例，到点就开新实例、允许叠加。
+
+cron 表达式 5 段（``*/5 * * * *``，落在 0 秒）或 6 段（``*/30 * * * * *``，首段是秒，
+可秒级触发）皆可。
+
+排程队列是 :class:`TaskTimeline` —— 红黑树 + 哈希表二合一（仿 Linux CFS 的
+``rb_root`` + 任务哈希表）：取最近触发点 O(1)，按 task_id 改排程 O(log n)。
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ from nacho.core.scheduler.cron import CronError, CronExpr, CronField
 from nacho.core.scheduler.core import Scheduler
 from nacho.core.scheduler.manager import TaskManager, scheduler
 from nacho.core.scheduler.models import Task, TaskFunc
+from nacho.core.scheduler.timeline import TaskTimeline
 
 __all__ = [
     "CronError",
@@ -33,5 +40,6 @@ __all__ = [
     "Task",
     "TaskFunc",
     "TaskManager",
+    "TaskTimeline",
     "scheduler",
 ]

@@ -1,4 +1,4 @@
-"""cron 表达式：五段「分 时 日 月 周」的解析与触发时间计算。
+"""cron 表达式：五段「分 时 日 月 周」/ 六段「秒 分 时 日 月 周」的解析与触发时间计算。
 
 支持的语法（每个字段内）::
 
@@ -8,7 +8,10 @@
     a,b,c    列表（各项还可以是区间）
     */n      步进（全域每 n 个）；也可与区间组合：a-b/n、5/n（从 5 到上限每 n 个）
 
-字段范围：分钟 0-59、小时 0-23、日 1-31、月 1-12、星期 0-6（0 与 7 都是周日）。
+段数：5 段（``*/5 * * * *``）是传统写法，永远落在 0 秒；要秒级就在最前面加一段
+秒（``*/30 * * * * *`` = 每 30 秒），两种写法可以混用，``__str__`` 按原样还原。
+
+字段范围：秒 0-59、分钟 0-59、小时 0-23、日 1-31、月 1-12、星期 0-6（0 与 7 都是周日）。
 
 语义约定：日 / 周遵循标准 vixie cron —— 两者都被限制（不是 ``*``）时取 OR，
 否则取 AND。
@@ -16,7 +19,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import override
 
@@ -26,8 +29,15 @@ _SEARCH_LIMIT = timedelta(days=366)
 #: 单个字段里的一项：``*`` / 数字 / 数字区间，后面可带 ``/步进``
 _ITEM_RE = re.compile(r"^(\*|\d+(?:-\d+)?)(?:/([1-9]\d*))?$")
 
+#: 字段名与顺序：5 段（不含秒）与 6 段（秒开头）两套
+_FIELD_NAMES: dict[int, tuple[str, ...]] = {
+    5: ("minute", "hour", "day", "month", "weekday"),
+    6: ("second", "minute", "hour", "day", "month", "weekday"),
+}
+
 #: 字段名 -> 取值下界与上界
 _FIELD_RANGES: dict[str, tuple[int, int]] = {
+    "second": (0, 59),
     "minute": (0, 59),
     "hour": (0, 23),
     "day": (1, 31),
@@ -94,20 +104,26 @@ class CronField:
 class CronExpr:
     """一份解析好的 cron 表达式，不可变；``next_after`` 是调度循环唯一要调的方法。"""
 
+    second: CronField
     minute: CronField
     hour: CronField
     day: CronField
     month: CronField
     weekday: CronField
+    #: 解析时带没带秒段；只影响 :meth:`__str__` 的还原，不参与相等比较
+    with_seconds: bool = field(default=True, compare=False)
 
     @classmethod
     def parse(cls, text: str) -> "CronExpr":
-        """解析 ``"*/5 * * * *"`` 这类表达式；字段数不对、任一字段不合法都抛 :class:`CronError`。"""
+        """解析 5 段（``"*/5 * * * *"``）或 6 段（``"*/30 * * * * *"``，首段是秒）表达式。
+
+        5 段写法等价于秒段固定为 ``0``；段数不对、任一字段不合法都抛 :class:`CronError`。
+        """
         parts = text.split()
-        names = ("minute", "hour", "day", "month", "weekday")
-        if len(parts) != len(names):
+        names = _FIELD_NAMES.get(len(parts))
+        if names is None:
             raise CronError(
-                f"cron 表达式要 {len(names)} 段（分 时 日 月 周），收到 {len(parts)} 段：{text!r}"
+                f"cron 表达式要 5 或 6 段（分 时 日 月 周 / 秒 分 时 日 月 周），收到 {len(parts)} 段：{text!r}"
             )
         fields: dict[str, CronField] = {}
         for name, part in zip(names, parts):
@@ -122,34 +138,44 @@ class CronExpr:
                     str(parsed),
                 )
             fields[name] = parsed
-        return cls(**fields)
+        if "second" not in fields:  # 5 段写法：秒固定 0，落点还是整分
+            low, high = _FIELD_RANGES["second"]
+            fields["second"] = CronField.parse("0", "second", low, high)
+        return cls(with_seconds=len(parts) == 6, **fields)
 
     def next_after(self, after: datetime) -> datetime:
-        """after 之后（不含 after 本身）第一次命中的时刻（秒 / 微秒清零）。
+        """after 之后（不含 after 本身）第一次命中的时刻（微秒清零）。
 
-        找不到一年内的命中点就抛 :class:`CronError`（如 2 月 31 日这类死配置）。
+        6 段表达式能落在任意秒上（如 ``*/30 * * * * *`` 的 :00 与 :30），5 段表达式
+        固定落在 0 秒。找不到一年内的命中点就抛 :class:`CronError`（如 2 月 31 日
+        这类死配置）。
         """
-        moment = (after + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        moment = (after + timedelta(seconds=1)).replace(microsecond=0)
         limit = after + _SEARCH_LIMIT
         while moment < limit:
             if not self.month.contains(moment.month):
                 # 整月都不命中：直接跳到下个月 1 号零点
-                moment = (moment.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(
-                    day=1
-                )
+                moment = (
+                    moment.replace(day=1, hour=0, minute=0, second=0) + timedelta(days=32)
+                ).replace(day=1)
                 continue
             if not self._day_matches(moment):
                 # 这一天不命中：跳到明天零点
-                moment = (moment + timedelta(days=1)).replace(hour=0, minute=0)
+                moment = (moment + timedelta(days=1)).replace(hour=0, minute=0, second=0)
                 continue
             if moment.hour in self.hour.values:
                 if moment.minute in self.minute.values:
-                    return moment  # 月 / 日 / 时 / 分全中：moment 本身严格晚于 after
+                    # 分钟命中：在这一分钟里找秒（含当前秒，moment 已严格晚于 after）
+                    second = self._next_value(self.second.values, moment.second, inclusive=True)
+                    if second is not None:
+                        return moment.replace(second=second)
+                # 这一分钟剩下的秒没戏：找本小时里下一个命中的分钟
                 nxt = self._next_value(self.minute.values, moment.minute)
                 if nxt is not None:
-                    return moment.replace(minute=nxt)
-            # 这个小时没戏：跳到下个小时零分
-            moment = (moment + timedelta(hours=1)).replace(minute=0)
+                    moment = moment.replace(minute=nxt, second=min(self.second.values))
+                    continue
+            # 这个小时没戏：跳到下个小时零分零秒
+            moment = (moment + timedelta(hours=1)).replace(minute=0, second=0)
         raise CronError(f"cron {self!s} 一年内没有触发点，检查日 / 周 / 月的组合")
 
     def matches(self, dt: datetime) -> bool:
@@ -158,15 +184,17 @@ class CronExpr:
             dt.month in self.month.values
             and dt.hour in self.hour.values
             and dt.minute in self.minute.values
+            and dt.second in self.second.values
             and self._day_matches(dt)
         )
 
     @override
     def __str__(self) -> str:
-        """还原成 ``"*/5 * * * *"`` 形式的文本。"""
-        return " ".join(
-            str(field) for field in (self.minute, self.hour, self.day, self.month, self.weekday)
-        )
+        """还原成 ``"*/5 * * * *"`` / ``"*/30 * * * * *"`` 形式的文本（按解析时的段数）。"""
+        fields = [self.minute, self.hour, self.day, self.month, self.weekday]
+        if self.with_seconds:
+            fields.insert(0, self.second)
+        return " ".join(str(field) for field in fields)
 
     def _day_matches(self, dt: datetime) -> bool:
         """日 / 周的命中判断：都受限取 OR（vixie 语义），否则取 AND。"""
@@ -180,7 +208,7 @@ class CronExpr:
         return day_hit and weekday_hit
 
     @staticmethod
-    def _next_value(values: frozenset[int], current: int) -> int | None:
-        """集合里比 current 大的最小值；没有则 None。"""
-        bigger = [value for value in values if value > current]
+    def _next_value(values: frozenset[int], current: int, inclusive: bool = False) -> int | None:
+        """集合里比 current 大（inclusive=True 时 >=）的最小值；没有则 None。"""
+        bigger = [value for value in values if value > current or inclusive and value == current]
         return min(bigger) if bigger else None

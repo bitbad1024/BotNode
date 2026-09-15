@@ -23,15 +23,32 @@ class TestParse:
         assert CronExpr.parse("0 0 * * 7").weekday.values == frozenset({0})
         assert CronExpr.parse("0 0 * * 0").weekday.values == frozenset({0})
 
+    def test_six_fields_with_seconds(self) -> None:
+        expr = CronExpr.parse("*/30 5,35 9-17 1,15 * 1-5")
+        assert expr.second.values == frozenset({0, 30})
+        assert expr.minute.values == frozenset({5, 35})
+        assert expr.hour.values == frozenset(range(9, 18))
+        assert expr.with_seconds is True
+
+    def test_five_fields_default_second_to_zero(self) -> None:
+        """5 段写法秒固定 0，语义与原来一致。"""
+        expr = CronExpr.parse("*/15 * * * *")
+        assert expr.second.values == frozenset({0})
+        assert expr.with_seconds is False
+
     def test_extra_spaces_are_fine(self) -> None:
         expr = CronExpr.parse("  0   12   *   *   *  ")
         assert expr.minute.values == frozenset({0})
+        assert CronExpr.parse(" 0  0  12  *  *  * ").minute.values == frozenset({0})
 
     def test_str_roundtrip(self) -> None:
         assert str(CronExpr.parse("*/5 * * * *")) == "*/5 * * * *"
         assert str(CronExpr.parse("30 2 * * *")) == "30 2 * * *"
         assert str(CronExpr.parse("0 9-17 * * 1-5")) == "0 9-17 * * 1-5"
         assert str(CronExpr.parse("1,15 0 * * *")) == "1,15 0 * * *"
+        # 6 段按原样还原，不会退化成 5 段
+        assert str(CronExpr.parse("*/30 * * * * *")) == "*/30 * * * * *"
+        assert str(CronExpr.parse("5,45 0 12 * * *")) == "5,45 0 12 * * *"
 
     def test_field_str_variants(self) -> None:
         assert str(CronField.parse("*", "minute", 0, 59)) == "*"
@@ -56,7 +73,9 @@ class TestParse:
             "a * * * *",  # 不是数字
             "1, * * * *",  # 空项
             "0 0 * *",  # 少一段
-            "0 0 * * * *",  # 多一段
+            "0 0 * * * * *",  # 七段，最多 6 段
+            "60 * * * * *",  # 秒越界
+            "* 60 * * * *",  # 6 段的分钟越界
             "",  # 空串
         ],
     )
@@ -126,6 +145,30 @@ class TestNextAfter:
         expr = CronExpr.parse("5,45 8 * * *")
         assert expr.next_after(DT(2026, 9, 15, 8, 46)) == DT(2026, 9, 16, 8, 5)
 
+    def test_second_step(self) -> None:
+        """6 段秒级：落点精确到秒，分钟内的秒用完了就进下一分钟。"""
+        expr = CronExpr.parse("*/15 * * * * *")
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 0)) == DT(2026, 9, 15, 10, 0, 15)
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 44)) == DT(2026, 9, 15, 10, 0, 45)
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 45)) == DT(2026, 9, 15, 10, 1, 0)
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 59)) == DT(2026, 9, 15, 10, 1, 0)
+
+    def test_fixed_second_each_minute(self) -> None:
+        expr = CronExpr.parse("30 * * * * *")  # 每分钟的第 30 秒
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 29)) == DT(2026, 9, 15, 10, 0, 30)
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 30)) == DT(2026, 9, 15, 10, 1, 30)
+        assert expr.next_after(DT(2026, 9, 15, 10, 0, 31)) == DT(2026, 9, 15, 10, 1, 30)
+
+    def test_seconds_roll_over_hour(self) -> None:
+        expr = CronExpr.parse("*/10 * * * * *")
+        # 本小时剩下的秒都没戏：跨到下个小时 0 分 0 秒
+        assert expr.next_after(DT(2026, 9, 15, 23, 59, 55)) == DT(2026, 9, 16, 0, 0, 0)
+
+    def test_five_field_expr_keeps_zero_second(self) -> None:
+        """5 段写法不受影响，仍然落在 0 秒。"""
+        expr = CronExpr.parse("*/5 * * * *")
+        assert expr.next_after(DT(2026, 9, 15, 10, 7, 3)).second == 0
+
     def test_impossible_date_raises(self) -> None:
         """2 月 31 日永远不存在，一年内找不到就该报错而不是死循环。"""
         with pytest.raises(CronError, match="一年内没有触发点"):
@@ -142,6 +185,14 @@ class TestMatches:
         expr = CronExpr.parse("0 0 1 2 *")  # 2 月 1 日
         assert expr.matches(DT(2027, 2, 1, 0, 0))
         assert not expr.matches(DT(2026, 1, 1, 0, 0))
+
+    def test_second_field_is_checked(self) -> None:
+        expr = CronExpr.parse("*/15 * * * * *")
+        assert expr.matches(DT(2026, 9, 15, 10, 0, 30))
+        assert not expr.matches(DT(2026, 9, 15, 10, 0, 31))
+        # 5 段写法的秒固定 0：非 0 秒不命中
+        assert CronExpr.parse("*/10 * * * *").matches(DT(2026, 9, 15, 10, 20, 0))
+        assert not CronExpr.parse("*/10 * * * *").matches(DT(2026, 9, 15, 10, 20, 5))
 
     def test_or_semantics_in_matches(self) -> None:
         expr = CronExpr.parse("0 0 13 * 5")  # 13 号或周五

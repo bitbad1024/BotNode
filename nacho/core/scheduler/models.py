@@ -27,7 +27,7 @@ class Task:
 
     # ---- 定义 ----
     task_id: str  # 唯一 ID；add 时传入或自动生成
-    cron: CronExpr  # 触发规则
+    cron: CronExpr  # 触发规则：5 段（分 时 日 月 周）或 6 段（秒开头）
     func: TaskFunc  # 到点执行的函数
     name: str = ""  # 显示名，空则展示时用 task_id
     description: str = ""  # 描述
