@@ -141,6 +141,33 @@ async def test_running_task_skips_next_hit(tm: TaskManager) -> None:
         await tm.stop()
 
 
+async def test_multi_instance_task_overlaps(tm: TaskManager) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow() -> None:
+        started.set()
+        release.wait(2.0)
+
+    task = tm.add("* * * * *", slow, task_id="multi", multi_instance=True)
+    await tm.start()
+    try:
+        task.next_run = past()
+        tm.wake()
+        assert await wait_until(lambda: task.running)  # 第一次执行已开跑
+        task.next_run = past()  # 执行期间又到点
+        tm.wake()
+        assert await wait_until(lambda: task.run_count == 2)  # 多实例：照样开新实例
+        assert task.active == 2
+        release.set()
+        assert await wait_until(lambda: not task.running)  # 两个都收尾才算不忙
+        assert task.active == 0
+        assert task.run_count == 2
+    finally:
+        release.set()
+        await tm.stop()
+
+
 async def test_disabled_task_never_fires(tm: TaskManager) -> None:
     hits: list[int] = []
 

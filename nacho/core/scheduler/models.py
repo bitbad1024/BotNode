@@ -32,6 +32,8 @@ class Task:
     name: str = ""  # 显示名，空则展示时用 task_id
     description: str = ""  # 描述
     enabled: bool = True  # 停用后不排程、到点不执行
+    #: 实例策略：False（默认，单实例）上一次没跑完就跳过本次；True（多实例）到点就开新的，允许叠加
+    multi_instance: bool = False
 
     # ---- 运行状态 ----
     next_run: datetime | None = None  # 下次触发时刻；停用时为 None
@@ -40,8 +42,13 @@ class Task:
     last_error: str = ""  # 上次失败的异常摘要（一行）
     run_count: int = 0  # 累计执行次数
     fail_count: int = 0  # 累计失败次数
-    #: 此刻是否正在执行（Scheduler 维护，用于并发保护与状态展示）
-    running: bool = field(default=False, repr=False, compare=False)
+    #: 此刻正在跑的实例数（Scheduler 维护；单实例任务只会在 0/1 之间来回）
+    active: int = field(default=0, repr=False, compare=False)
+
+    @property
+    def running(self) -> bool:
+        """是否有实例正在跑（= :attr:`active` > 0）。"""
+        return self.active > 0
 
     @property
     def display_name(self) -> str:

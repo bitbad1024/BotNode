@@ -5,7 +5,8 @@
 不靠固定间隔轮询。
 
 行为约定：
-- **并发保护**：同一任务上次还没跑完又到触发点 -> 跳过本次，记一条 warning；
+- **单 / 多实例**：默认单实例 —— 上次还没跑完又到触发点就跳过本次并记一条 warning；
+  ``multi_instance=True`` 的任务不受此限，到点照样开新实例，允许叠加；
 - **错过不补**：停机 / 卡顿期间错过的触发点不补跑，醒来后从 ``next_after(now)`` 重排；
 - **失败隔离**：任务抛异常只更新 :class:`Task` 的失败状态并打 error 日志，绝不带崩循环。
 """
@@ -62,8 +63,12 @@ class Scheduler:
 
     # ---- 给 TaskManager 的手动触发 ----
     def run_once(self, task: Task) -> asyncio.Task[None]:
-        """立即手动执行一次（TaskManager.run_now 用），不影响 cron 排程。"""
-        return asyncio.create_task(self._execute(task))
+        """立即手动执行一次（TaskManager.run_now 用），不影响 cron 排程。
+
+        手动触发是强制的：单实例任务正在跑也照跑不误（计入 :attr:`Task.active`）。
+        """
+        task.active += 1
+        return self._launch(task)
 
     # ---- 内部 ----
     # NOTE(性能：别急着改成堆): 这里每圈都 O(n) 全扫一遍取最近的 next_run，看着朴素，
@@ -117,11 +122,11 @@ class Scheduler:
             get_logger("scheduler").error(f"任务 {task.display_name} 的 cron 排不了程：{exc}")
 
     def _fire_if_due(self, now: datetime) -> None:
-        """扫一遍启用任务，把 next_run <= now 的派发出去（派发前做并发保护检查）。"""
+        """扫一遍启用任务，把 next_run <= now 的派发出去（派发前按实例策略做并发保护检查）。"""
         for task in list(self._registry.values()):
             if not task.enabled or task.next_run is None or task.next_run > now:
                 continue
-            if task.running:
+            if task.running and not task.multi_instance:
                 get_logger("scheduler").warning(
                     f"任务 {task.display_name} 上一次还没跑完，跳过 {task.next_run} 这次"
                 )
@@ -130,12 +135,17 @@ class Scheduler:
             self._spawn(task, now)
 
     def _spawn(self, task: Task, now: datetime) -> None:
-        """把一次执行包成 asyncio.Task 放进 _inflight；先排下一次，执行期间循环不空转。"""
-        task.running = True
+        """到点触发一次：先记实例数、排下一次（执行期间循环不空转），再派发。"""
+        task.active += 1
         self._reschedule(task, now)
+        self._launch(task)
+
+    def _launch(self, task: Task) -> asyncio.Task[None]:
+        """把一次执行包成 asyncio.Task 放进 _inflight，供 stop 时等收尾。"""
         runner = asyncio.create_task(self._execute(task))
         self._inflight.add(runner)
         runner.add_done_callback(self._inflight.discard)
+        return runner
 
     async def _execute(self, task: Task) -> None:
         """单次执行：更新运行状态 -> 跑函数（协程直接 await，同步的丢线程池）-> 记成败。"""
@@ -157,7 +167,7 @@ class Scheduler:
             task.last_ok = True
             task.last_error = ""
         finally:
-            task.running = False
+            task.active -= 1
 
     async def _drain(self, timeout: float) -> None:
         """等 _inflight 全部收尾，最多等 timeout 秒。"""
