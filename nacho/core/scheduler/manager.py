@@ -87,14 +87,15 @@ class TaskManager:
             multi_instance=multi_instance,
         )
         self._tasks[final_id] = task
-        self._scheduler.wake()  # 循环醒来看看，把新任务排上
+        self._scheduler.note_changed(task)  # 循环醒来看看，把新任务排上
         return task
 
     def remove(self, task_id: str) -> bool:
         """删除任务；存在并删掉了返回 True，不存在返回 False。正在跑的那次不受影响。"""
-        if self._tasks.pop(task_id, None) is None:
+        task = self._tasks.pop(task_id, None)
+        if task is None:
             return False
-        self._scheduler.wake()
+        self._scheduler.note_removed(task)
         return True
 
     def get(self, task_id: str) -> Task:
@@ -112,7 +113,7 @@ class TaskManager:
         task = self._require(task_id)
         task.enabled = enabled
         task.next_run = None
-        self._scheduler.wake()
+        self._scheduler.note_changed(task)
 
     def set_func(self, task_id: str, func: TaskFunc) -> None:
         """修改任务激活的函数（排程不变，下一拍就跑新的）。"""
@@ -131,7 +132,7 @@ class TaskManager:
         task = self._require(task_id)
         task.cron = self._parse_cron(cron)
         task.next_run = None
-        self._scheduler.wake()
+        self._scheduler.note_changed(task)
 
     def set_name(self, task_id: str, name: str) -> None:
         """改显示名。"""

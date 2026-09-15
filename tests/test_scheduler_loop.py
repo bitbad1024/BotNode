@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
 
 import pytest
@@ -25,6 +25,14 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 2.0) -> boo
 def past() -> datetime:
     """一个刚刚过去的时刻：塞给 next_run 就是「到点了」。"""
     return datetime.now() - timedelta(seconds=1)
+
+
+def recorder(hits: list[int]) -> Callable[[], Coroutine[None, None, None]]:
+    """造一个协程任务函数：跑一次就往 hits 里记一笔（判据：iscoCoroutineFunction 为真）。"""
+    async def job() -> None:
+        hits.append(1)
+
+    return job
 
 
 @pytest.fixture
@@ -138,6 +146,73 @@ async def test_running_task_skips_next_hit(tm: TaskManager) -> None:
         assert task.run_count == 1
     finally:
         release.set()
+        await tm.stop()
+
+
+async def test_add_while_running_schedules_at_once(tm: TaskManager) -> None:
+    """循环跑着的时候加任务：不用等对账，登记完当场就排上。"""
+    await tm.start()
+    try:
+        task = tm.add("* * * * *", recorder([]), task_id="late")
+        assert await wait_until(lambda: task.next_run is not None) or task.next_run is not None
+    finally:
+        await tm.stop()
+
+
+async def test_set_cron_reschedules_at_once(tm: TaskManager) -> None:
+    """运行中改 cron：下一次触发点当场重算，不是等下一圈。"""
+    task = tm.add("* * * * *", recorder([]), task_id="t")
+    await tm.start()
+    try:
+        assert await wait_until(lambda: task.next_run is not None)
+        before = task.next_run
+        tm.set_cron("t", "0 0 1 1 *")  # 一年一遇：肯定比原来的下一分钟远
+        assert task.next_run is not None and before is not None and task.next_run > before
+    finally:
+        await tm.stop()
+
+
+async def test_due_tasks_fire_in_scheduled_order(tm: TaskManager) -> None:
+    """队头顺序 = 触发时间顺序：更早到点的先派发。"""
+    order: list[str] = []
+
+    def make_job(name: str) -> Callable[[], Coroutine[None, None, None]]:
+        async def job() -> None:
+            order.append(name)
+
+        return job
+
+    first = tm.add("0 0 1 1 *", make_job("first"), task_id="first")
+    second = tm.add("0 0 1 1 *", make_job("second"), task_id="second")
+    await tm.start()
+    try:
+        assert await wait_until(lambda: first.next_run is not None)
+        now = datetime.now()
+        first.next_run = now - timedelta(seconds=5)  # 两个都过期，first 更早
+        second.next_run = now - timedelta(seconds=1)
+        tm.wake()
+        assert await wait_until(lambda: len(order) == 2)
+        assert order == ["first", "second"]
+    finally:
+        await tm.stop()
+
+
+async def test_second_level_cron_schedules_on_seconds(tm: TaskManager) -> None:
+    hits: list[int] = []
+
+    async def job() -> None:
+        hits.append(1)
+
+    task = tm.add("*/15 * * * * *", job, task_id="sec")  # 6 段：每 15 秒
+    await tm.start()
+    try:
+        assert await wait_until(lambda: task.next_run is not None)
+        assert task.next_run is not None and task.next_run.second % 15 == 0  # 排到了秒上
+        task.next_run = past()
+        tm.wake()
+        assert await wait_until(lambda: task.run_count == 1)
+        assert hits == [1]
+    finally:
         await tm.stop()
 
 
