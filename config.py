@@ -51,6 +51,8 @@ _T = TypeVar("_T")
 BASE_DIR: Path = Path(__file__).resolve().parent
 #: 默认配置文件（不入库）
 CONFIG_PATH: Path = BASE_DIR / "config.toml"
+#: 配置模板（入库）
+TEMPLATE_PATH: Path = BASE_DIR / "config.toml.example"
 
 #: 合法的日志级别名，报错提示用
 _LEVEL_NAMES: str = "/".join(level.name for level in LogLevel)
@@ -75,7 +77,7 @@ def _parse_level(value: object, key: str) -> LogLevel:
 def _section(data: dict[str, object], name: str) -> dict[str, object]:
     """取一节配置；没写或不是表格就当空节。"""
     section = data.get(name)
-    return cast("dict[str, object]", section) if isinstance(section, dict) else {}
+    return cast(dict[str, object], section) if isinstance(section, dict) else {}
 
 
 def _where_in(section_name: str) -> Callable[[str], str]:
