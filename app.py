@@ -28,6 +28,7 @@ from typing import cast
 
 from config import CONFIG_PATH, TEMPLATE_PATH, ConfigError, Settings
 from nacho import __version__
+from nacho.core.cache import CacheOptions, cache
 from nacho.core.logger import (
     BaseLogProcessor,
     DatabaseLogProcessor,
@@ -49,10 +50,13 @@ _db_adapters: list[SqliteAdapter | MariadbAdapter] = []
 
 
 async def setup(settings: Settings) -> LogCore:
-    """按设置初始化进程默认日志系统：configure 建核心（顺带挂文件 / 数据库出口）-> start。"""
+    """按设置初始化进程默认日志系统：configure 建核心（顺带挂文件 / 数据库出口）-> start。
+
+    日志先起来，再拉缓存 —— 缓存层的启动信息（用了哪个后端 / 有没有降级）要走日志核心。
+    """
     app, log = settings.app, settings.logging  # 区域：[app] / [logging]
     file_log, db_log = log.file, log.database  # 子区域：[logging.file] / [logging.database]
-
+    #(TODO)用models包装logger的配置,几个模块对齐一下
     processors: list[BaseLogProcessor] = []
     if file_log.enabled:
         processors.append(
@@ -102,6 +106,9 @@ async def setup(settings: Settings) -> LogCore:
         processors=processors,
     )
     _ = await core.start()
+    # 缓存：默认（memory）就是本地内存，配了 redis 而连不上时按 fallback_to_memory 处理
+    cache.configure(CacheOptions.from_mapping(settings.cache.model_dump()))
+    await cache.start()
     return core
 
 
@@ -131,6 +138,7 @@ async def _shutdown() -> None:
     收尾期间再按一次 Ctrl+C 会被强杀，那一下由 :func:`main` 兜住。
     """
     await scheduler.stop()  # 等在飞的任务自然收尾（默认 5 秒，超时只记 warning，不强杀）
+    await cache.stop()  # 再停缓存：任务收完了，后面不会再有业务来读写
     await manager.stop()  # 停机自动冲刷余量
     for adapter in _db_adapters:  # 余量落库之后再关连接
         adapter.close()

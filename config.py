@@ -20,6 +20,8 @@ sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在�
     [logging.file]       -> ...logging.file             本地文件出口
     [logging.database]   -> ...logging.database         数据库出口
     [logging.queue]      -> ...logging.queue            异步队列与分发器
+    [cache]              -> Settings.cache              缓存总控：用哪个后端
+    [cache.redis]        -> ...cache.redis              Redis 连接（backend=redis 时才用）
 
 数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
 （driver / path / host / port / user / password / database），``[logging.database]`` 是
@@ -190,6 +192,8 @@ OptionalLevel: TypeAlias = Annotated[LogLevel | None, BeforeValidator(_parse_opt
 ConfigPath: TypeAlias = Annotated[Path, AfterValidator(_resolve)]
 #: 支持的数据库后端
 Driver: TypeAlias = Literal["sqlite", "mariadb"]
+#: 支持的缓存后端：memory = 进程内存（默认），redis = Redis 服务
+CacheBackendName: TypeAlias = Literal["memory", "redis"]
 
 
 class _Region(BaseModel):
@@ -308,6 +312,55 @@ def _load_logging(section: dict[str, object], public_db: dict[str, object]) -> L
     )
 
 
+# ------------------------------------------------------------------------- 区域：[cache]
+class RedisCacheSettings(_Region):
+    """``[cache.redis]``：连一份 Redis 要的参数（只有 ``backend = "redis"`` 时才用）。"""
+
+    host: str = "127.0.0.1"
+    port: int = Field(default=6379, ge=1, le=65535, description="1-65535 的端口")
+    db: int = Field(default=0, ge=0, description="不小于 0 的整数")
+    username: str = ""  # Redis 6+ 的 ACL 用户名；空 = 默认用户
+    password: str = ""  # config.toml 不入库，密码写这里不会进 git
+    socket_timeout: float = Field(default=5.0, gt=0, description="大于 0 的秒数")
+    max_connections: int = Field(default=10, ge=1, description="不小于 1 的整数")
+
+
+class CacheSettings(_Region):
+    """``[cache]``：缓存总控 —— 用哪个后端、怎么降级；连接参数在 ``[cache.redis]``。
+
+    默认 ``backend = "memory"``（进程内存），所以**不装 Redis、不写这一节也能用**；
+    换成 ``"redis"`` 之后连不上时，``fallback_to_memory`` 决定是退回内存（记 warning）
+    还是当场报错。两项都只影响后端怎么建，不影响上层看到的接口。
+    """
+
+    backend: CacheBackendName = "memory"  # memory（进程内存）/ redis
+    namespace: str = "nacho"  # Redis 上的键前缀（共用实例时隔离）
+    default_ttl: float = Field(default=0.0, ge=0, description="不小于 0 的秒数")
+    fallback_to_memory: bool = True  # Redis 连不上时退回内存；false = 启动阶段就报错
+    sweep_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    redis: RedisCacheSettings = Field(default_factory=RedisCacheSettings)
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        """命名空间要拼进键名（``<namespace>:key``），不能空着、也不能自带空格或冒号。"""
+        if not value.strip() or " " in value or ":" in value:
+            raise ValueError(f"命名空间要非空且不含空格与冒号，收到 {value!r}")
+        return value
+
+
+def _load_cache(section: dict[str, object]) -> CacheSettings:
+    """读 ``[cache]``：本节各项 + ``[cache.redis]`` 连接子区域。
+
+    和 ``[logging]`` 一样，子区域（值是表格）交回各自的出处校验，报错才指得准。
+    """
+    own: dict[str, object] = {k: v for k, v in section.items() if not isinstance(v, dict)}
+    redis = _load(RedisCacheSettings, _section(section, "redis"), _where_in("cache.redis"))
+    return _load(CacheSettings, own, _where_in("cache")).model_copy(
+        update={"redis": redis}
+    )
+
+
 # --------------------------------------------------------------------------- 整份设置
 class Settings(_Region):
     """一份设置：字段就是配置文件里的区域，一一对应；最后一项是元信息，不是配置项。
@@ -316,6 +369,7 @@ class Settings(_Region):
     """
 
     app: AppSettings = Field(default_factory=AppSettings)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
@@ -345,6 +399,7 @@ class Settings(_Region):
         public_db = _section(data, "database")
         return cls(
             app=_load(AppSettings, _section(data, "app"), _where_in("app")),
+            cache=_load_cache(_section(data, "cache")),
             database=_load(DatabaseSettings, public_db, _where_in("database")),
             logging=_load_logging(_section(data, "logging"), public_db),
             config_path=config_path,
