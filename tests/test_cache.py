@@ -30,16 +30,33 @@ def write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def free_port() -> int:
-    """要一个当前没人监听的端口：连它会被立刻拒绝，用来模拟「Redis 没起」。"""
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def redis_reachable(host: str, port: int, timeout: float = 0.25) -> bool:
+    """Redis 在不在听：一次 TCP 握手探一下（毫秒级）。
+
+    不能靠「让门面去连、连不上再跳过」来判断有没有服务：redis-py 默认带 10 次指数退避
+    重试，连不上时要白等二十几秒 —— 那是驱动在重试，不是缓存层的行为，不该让测试套件买单。
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
-def unreachable_redis() -> RedisOptions:
-    """一份指向「没人监听」的 Redis 选项。"""
-    return RedisOptions(host="127.0.0.1", port=free_port(), socket_timeout=1.0)
+def stub_redis_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把驱动的 ping 打桩成「当场拒绝连接」，绕开默认的 10 次重试退避。
+
+    给门面留下的只有「连不上」这一个结果，正好是要测的那条分支；真实 TCP 连不上长什么样，
+    是驱动自己的事（真连成功那条路径由 :func:`redis_reachable` 放行的用例覆盖）。
+    """
+    pytest.importorskip("redis.asyncio")  # 驱动是可选依赖：没装就跳过这个用例
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    async def refuse(_self: object) -> None:
+        raise RedisConnectionError("连接被拒绝（本用例打桩）")
+
+    # 属性路径交给 pytest 自己去解析：这里不必再 import 一遍驱动
+    monkeypatch.setattr("redis.asyncio.Redis.ping", refuse)
 
 
 @pytest.fixture
@@ -249,9 +266,9 @@ class TestMemoryBackend:
     async def test_structures_reject_non_string_items(self, memory: Cache) -> None:
         """元素 / 字段值必须是字符串：误把整个列表当元素塞进来会被拦下。"""
         with pytest.raises(CacheError, match="必须是字符串"):
-            await memory.list_push("q", ["a", "b"])  # type: ignore[arg-type]
+            await memory.list_push("q", ["a", "b"])  # pyright: ignore[reportArgumentType]
         with pytest.raises(CacheError, match="必须是字符串"):
-            await memory.hash_set("h", {"f": 1})  # type: ignore[dict-item]
+            await memory.hash_set("h", {"f": 1})  # pyright: ignore[reportArgumentType]
         assert await memory.exists("q") is False  # 报错就别留下半截数据
         assert await memory.exists("h") is False
 
@@ -321,10 +338,12 @@ class TestRedisBackend:
         assert isinstance(MemoryCache(), CacheBackend)
         assert isinstance(RedisCache(RedisOptions()), CacheBackend)
 
-    async def test_unreachable_redis_degrades_to_memory(self) -> None:
+    async def test_unreachable_redis_degrades_to_memory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """配了 Redis 但连不上：退回本地缓存，上层照旧读写，只是能问出 degraded。"""
-        pytest.importorskip("redis")
-        facade = Cache(CacheOptions(backend="redis", redis=unreachable_redis()))
+        stub_redis_refused(monkeypatch)
+        facade = Cache(CacheOptions(backend="redis"))
         await facade.start()
         try:
             assert facade.degraded is True
@@ -334,28 +353,31 @@ class TestRedisBackend:
         finally:
             await facade.stop()
 
-    async def test_unreachable_redis_raises_without_fallback(self) -> None:
-        pytest.importorskip("redis")
-        options = CacheOptions(
-            backend="redis", fallback_to_memory=False, redis=unreachable_redis()
-        )
+    async def test_unreachable_redis_raises_without_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stub_redis_refused(monkeypatch)
+        options = CacheOptions(backend="redis", fallback_to_memory=False)
         facade = Cache(options)
         with pytest.raises(CacheError, match="连不上"):
             await facade.start()
         assert facade.running is False  # 起不来就别留个半死的门面
 
     async def test_real_redis_roundtrip_if_available(self) -> None:
-        """本机有 Redis 就顺带把真后端跑一遍；没有就跳过（不强制装服务）。"""
+        """本机有 Redis 就顺带把真后端跑一遍；没有就跳过（不强制装服务）。
+
+        先探一次 TCP 再决定跑不跑：让门面直接去连、失败了再 skip 的话，「本机没 Redis」
+        这一常见情况会因为驱动的重试白等二十几秒（见 :func:`stub_redis_refused`）。
+        """
         pytest.importorskip("redis")
-        facade = Cache(
-            CacheOptions(
-                backend="redis", namespace="nacho-test", redis=RedisOptions(socket_timeout=1.0)
-            )
-        )
-        await facade.start()
-        if facade.degraded:
-            await facade.stop()
+        options = RedisOptions(socket_timeout=1.0)
+        if not redis_reachable(options.host, options.port):  # 探的就是待会儿真连的地址
             pytest.skip("本机没有可用的 Redis，跳过真连用例")
+        facade = Cache(CacheOptions(backend="redis", namespace="nacho-test", redis=options))
+        await facade.start()
+        if facade.degraded:  # 探得到却连不上：多半是本机 Redis 要认证，这种也跳过
+            await facade.stop()
+            pytest.skip("本机 6379 在听但连不上，跳过真连用例")
         try:
             await facade.clear()
             await facade.set("k", "v", ttl=30)
