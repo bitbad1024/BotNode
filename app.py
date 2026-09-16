@@ -14,6 +14,9 @@
     configure(...)                     # 建立（或复用）进程默认核心
     get_logger("app")                  # 业务模块取自己的实例（与核心共享队列）
     await manager.stop()               # 停机自动冲刷余量
+
+Ctrl+C 走优雅停机：业务协程被取消 -> 等调度器在飞的任务收尾 -> 冲刷日志 -> 关库连接，
+安静退出不吐 traceback（收尾期间再按一次 Ctrl+C 才是强杀）。
 """
 from __future__ import annotations
 
@@ -106,13 +109,27 @@ async def run() -> None:
     log.info("业务开始", version=__version__)
     log.warning("业务占位：把实现接进 run() 即可")
     await scheduler.start()
-    #scheduler.add("*/1 * * * *", lambda:print("每秒一次"),  name="巡检")
-    #scheduler.add("*/5 * * * *", lambda:print("每五秒一次"), name="巡检")
+    scheduler.add("*/1 * * * * *", lambda:print("每秒一次"),  name="巡检")
+    scheduler.add("*/5 * * * * *", lambda:print("每五秒一次"), name="巡检")
     step = 0
     while True:
         log.info(f"{step}写入")
         step += 1
         await asyncio.sleep(1)
+
+
+# --------------------------------------------------------------------------- 收尾
+async def _shutdown() -> None:
+    """收尾：等调度器跑完在飞的任务 -> 冲刷日志余量 -> 关库连接。
+
+    顺序不能反：任务里还会写日志，得等它们收尾了再冲刷、关库，收尾日志才不会丢。
+    Ctrl+C 取消的只是业务主协程，事件循环要等本函数跑完才停，所以这里能正常 await；
+    收尾期间再按一次 Ctrl+C 会被强杀，那一下由 :func:`main` 兜住。
+    """
+    await scheduler.stop()  # 等在飞的任务自然收尾（默认 5 秒，超时只记 warning，不强杀）
+    await manager.stop()  # 停机自动冲刷余量
+    for adapter in _db_adapters:  # 余量落库之后再关连接
+        adapter.close()
 
 
 # --------------------------------------------------------------------------- 入口
@@ -150,16 +167,18 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
         await run()
+    except (KeyboardInterrupt, asyncio.CancelledError):  # Ctrl+C / 被外部取消：不算故障
+        core.info("收到中断信号，开始停机")
     finally:
-        await manager.stop()  # 停机自动冲刷余量，收尾日志不会丢
-        await scheduler.stop()
-        for adapter in _db_adapters:  # 余量落库之后再关连接
-            adapter.close()
+        await _shutdown()
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     """同步入口：``python app.py`` 走这里。"""
-    asyncio.run(_main(argv))
+    try:
+        asyncio.run(_main(argv))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass  # Ctrl+C（含收尾被打断）：能收的已在 _main 里收完，安静退即可
 
 
 if __name__ == "__main__":
