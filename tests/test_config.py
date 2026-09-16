@@ -1,7 +1,6 @@
 """config.py 的单元测试：TOML 解析、数据库三层覆盖（专用 > 公共 > 默认）、报错定位。"""
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from textwrap import dedent
 
@@ -27,7 +26,7 @@ class TestDatabaseLayers:
 
     def test_empty_file_falls_back_to_defaults(self, tmp_path: Path) -> None:
         settings = Settings.load(write(tmp_path, ""))
-        assert replace(settings, config_path=None) == Settings()
+        assert settings.model_copy(update={"config_path": None}) == Settings()
 
     def test_public_section_supplies_log_connection(self, tmp_path: Path) -> None:
         """只写公共节：日志出口的连接项整项继承它，日志特有的项还走默认值。"""
@@ -155,4 +154,5 @@ class TestTemplate:
 
     def test_template_agrees_with_defaults(self) -> None:
         """模板里的值要和代码默认值一致，否则「照抄模板启动」会悄悄改行为。"""
-        assert replace(Settings.load(TEMPLATE_PATH), config_path=None) == Settings()
+        loaded = Settings.load(TEMPLATE_PATH)
+        assert loaded.model_copy(update={"config_path": None}) == Settings()

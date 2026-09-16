@@ -1,4 +1,4 @@
-"""配置：读 TOML、校验取值，产出一份 :class:`Settings`。
+"""配置：读 TOML、用 pydantic 校验取值，产出一份 :class:`Settings`。
 
 配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成
 ``config.toml`` 才生效；后者已进 ``.gitignore`` 不入库。
@@ -8,8 +8,11 @@
 sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在启动阶段就报出来，而不是静默
 用默认值。
 
-代码按配置文件里的区域切块：一节一个 dataclass、一个解析函数，配置里写哪节就在代码里翻
-哪块::
+校验交给 pydantic：类型、取值范围（端口 1-65535、driver 只能 sqlite/mariadb）、路径解析
+都写在字段旁边 —— 不用再手写 ``isinstance`` 那一套；pydantic 的报错再由 :func:`_describe`
+翻成统一格式的中文提示（带完整出处，如 ``logging.database.port``）。
+
+代码按配置文件里的区域切块：一节一个模型，配置里写哪节就在代码里翻哪块::
 
     [app]                -> Settings.app                进程名、调试开关
     [database]           -> Settings.database           整项目共用的数据库连接
@@ -38,14 +41,22 @@ from __future__ import annotations
 
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import Annotated, ClassVar, Literal, TypeAlias, TypeVar, cast, get_args
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
+from pydantic.fields import FieldInfo
 
 from nacho.core.logger import LogLevel
 from nacho.db import require_table_name
-
-_T = TypeVar("_T")
 
 #: 项目根目录：配置、日志、数据库文件的相对路径都相对它解析
 BASE_DIR: Path = Path(__file__).resolve().parent
@@ -56,8 +67,14 @@ TEMPLATE_PATH: Path = BASE_DIR / "config.toml.example"
 
 #: 合法的日志级别名，报错提示用
 _LEVEL_NAMES: str = "/".join(level.name for level in LogLevel)
-#: 支持的数据库后端（driver 的取值）
-_DRIVERS: tuple[str, ...] = ("sqlite", "mariadb")
+#: 报错里「要 xxx」用的类型名
+_LABELS: dict[object, str] = {
+    str: "str",
+    int: "int",
+    float: "float",
+    bool: "bool",
+    Path: "字符串路径",
+}
 
 
 class ConfigError(ValueError):
@@ -65,44 +82,15 @@ class ConfigError(ValueError):
 
 
 # --------------------------------------------------------------------------- 通用工具
-def _parse_level(value: object, key: str) -> LogLevel:
-    if isinstance(value, str):
-        try:
-            return LogLevel.parse(value)
-        except ValueError:
-            pass
-    raise ConfigError(f"{key} 要日志级别（{_LEVEL_NAMES}），收到 {value!r}")
-
-
-def _section(data: dict[str, object], name: str) -> dict[str, object]:
-    """取一节配置；没写或不是表格就当空节。"""
-    section = data.get(name)
-    return cast(dict[str, object], section) if isinstance(section, dict) else {}
-
-
 def _where_in(section_name: str) -> Callable[[str], str]:
     """报错定位用：``section_name`` 这一节里某项的完整出处（如 ``database.port``）。"""
     return lambda key: f"{section_name}.{key}"
 
 
-def _pick(section: dict[str, object], key: str, default: _T, where: str = "") -> _T:
-    """取一项：没写用默认值，类型对不上报 :class:`ConfigError`。
-
-    ``where`` 是这项的完整出处（如 ``database.driver``），只在报错时用 —— 多层
-    覆盖之后同一个键可能来自不同的节，报错得指对地方。
-    """
-    value = section.get(key, default)
-    if isinstance(default, bool):
-        ok = isinstance(value, bool)
-    elif isinstance(default, float):
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-    elif isinstance(default, int):
-        ok = isinstance(value, int) and not isinstance(value, bool)
-    else:
-        ok = isinstance(value, type(default))
-    if not ok:
-        raise ConfigError(f"{where or key} 要 {type(default).__name__}，收到 {value!r}")
-    return cast("_T", value)
+def _section(data: dict[str, object], name: str) -> dict[str, object]:
+    """取一节配置；没写或不是表格就当空节。"""
+    section = data.get(name)
+    return cast("dict[str, object]", section) if isinstance(section, dict) else {}
 
 
 def _overlay(
@@ -110,8 +98,8 @@ def _overlay(
 ) -> tuple[dict[str, object], dict[str, str]]:
     """按「靠后的层覆盖靠前的层」合并配置。
 
-    返回 ``(合并后的映射, 每项来自哪一节)``；后者给 :func:`_pick` 的 ``where`` 用
-    —— 覆盖之后光看键名已经不知道值写在哪个节里了。
+    返回 ``(合并后的映射, 每项来自哪一节)``；后者用来定位报错 —— 覆盖之后光看键名
+    已经不知道值写在哪个节里了。
     """
     merged: dict[str, object] = {}
     origin: dict[str, str] = {}
@@ -122,38 +110,104 @@ def _overlay(
     return merged, origin
 
 
-def _resolve(path: str | Path) -> Path:
-    """文件和数据库的相对路径相对项目根目录解析。"""
-    result = Path(path)
-    return result if result.is_absolute() else BASE_DIR / result
+def _requirement(field: FieldInfo) -> str:
+    """这一项的要求，也就是报错里「要 xxx」的那一段。
+
+    字段自己声明了要求（如端口范围）就用它，否则从类型推：``Literal`` 取候选值，
+    ``LogLevel`` 取级别名，其余按类型名。
+    """
+    if field.description:
+        return field.description
+    for candidate in (field.annotation, *get_args(field.annotation)):
+        if isinstance(candidate, type) and issubclass(candidate, LogLevel):
+            return f"日志级别（{_LEVEL_NAMES}）"
+    args: tuple[object, ...] = get_args(field.annotation)
+    names: list[str] = [arg for arg in args if isinstance(arg, str)]
+    if names:
+        return "/".join(names)
+    return _LABELS.get(field.annotation, str(field.annotation))
 
 
-def _pick_path(section: dict[str, object], key: str, default: Path, where: str) -> Path:
-    """取一项路径：配置里写的是字符串，相对路径按项目根目录解析。"""
-    return _resolve(_pick(section, key, str(default), where))
+def _describe(
+    model: type[BaseModel], exc: ValidationError, where: Callable[[str], str]
+) -> str:
+    """把 pydantic 的第一条错误翻成本项目的报错：完整出处 + 要求 + 收到的值。"""
+    error = exc.errors()[0]
+    key: str = str(error["loc"][0]) if error["loc"] else "?"
+    if error["type"] == "value_error":  # 我们自己校验器说的话（如表名），原样带上
+        return f"{where(key)}: {str(error['msg']).removeprefix('Value error, ')}"
+    field: FieldInfo | None = model.model_fields.get(key)
+    requirement: str = _requirement(field) if field else "合法取值"
+    # 中文要求（「大于 0 的秒数」）前不留空格，类型名（str / int）前留一个
+    gap: str = " " if requirement[0].isascii() else ""
+    return f"{where(key)} 要{gap}{requirement}，收到 {error['input']!r}"
+
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def _load(
+    model: type[_ModelT], section: dict[str, object], where: Callable[[str], str]
+) -> _ModelT:
+    """校验一节配置：没写的项按字段默认值补，值写错就翻成 :class:`ConfigError`。
+
+    ``where`` 给出一项的完整出处（如 ``logging.file.path``），只在报错时用。
+    """
+    try:
+        return model.model_validate(section)
+    except ValidationError as exc:
+        raise ConfigError(_describe(model, exc, where)) from exc
+
+
+# ----------------------------------------------------- 字段级校验器与区域公共底
+def _parse_level(value: object) -> object:
+    """级别名（``"info"``）/ 级别值都收；认不出来就原样交回，让 pydantic 报错。"""
+    if isinstance(value, str):
+        try:
+            return LogLevel.parse(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _parse_optional_level(value: object) -> object:
+    """同 :func:`_parse_level`，但留空（或没写）表示「跟随 level」，用 None 表示。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _parse_level(value)
+
+
+def _resolve(path: Path) -> Path:
+    """相对路径相对项目根目录解析（配置里写的都是相对项目根目录）。"""
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+#: 日志级别：写级别名（``"INFO"``）或级别值都行
+Level: TypeAlias = Annotated[LogLevel, BeforeValidator(_parse_level)]
+#: 可选日志级别：留空表示跟随上面的 level
+OptionalLevel: TypeAlias = Annotated[LogLevel | None, BeforeValidator(_parse_optional_level)]
+#: 路径：配置里写字符串，相对路径按项目根目录解析
+ConfigPath: TypeAlias = Annotated[Path, AfterValidator(_resolve)]
+#: 支持的数据库后端
+Driver: TypeAlias = Literal["sqlite", "mariadb"]
+
+
+class _Region(BaseModel):
+    """一块配置区域的公共底：冻结（配置读出来就不该被改），缺项按字段默认值补。"""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
 
 # --------------------------------------------------------------------------- 区域：[app]
-@dataclass(frozen=True)
-class AppSettings:
+class AppSettings(_Region):
     """``[app]``：进程级设置，和日志、数据库无关。"""
 
     name: str = "nacho"  # 进程名，同时是日志核心名（子实例都以它为前缀）
     debug: bool = False  # 调试模式：True 时忽略 level 直接开到 DEBUG
 
 
-def _load_app(section: dict[str, object]) -> AppSettings:
-    """读 ``[app]``。"""
-    default = AppSettings()
-    return AppSettings(
-        name=_pick(section, "name", default.name, "app.name"),
-        debug=_pick(section, "debug", default.debug, "app.debug"),
-    )
-
-
 # ---------------------------------------------------------------------- 区域：[database]
-@dataclass(frozen=True)
-class DatabaseSettings:
+class DatabaseSettings(_Region):
     """一份数据库连接参数：``[database]`` 公共节，以及覆盖它之后的日志出口连接。
 
     两种 driver 用的键不一样，没用到的那几个保持默认值即可（模板里也是这么注释的）：
@@ -161,74 +215,29 @@ class DatabaseSettings:
     ``database``。
     """
 
-    driver: str = "sqlite"  # sqlite / mariadb
-    # sqlite 用：数据库文件路径（相对路径相对项目根目录）
-    path: Path = BASE_DIR / "logs" / "nacho.db"
+    driver: Driver = "sqlite"  # sqlite / mariadb
+    path: ConfigPath = BASE_DIR / "logs" / "nacho.db"  # sqlite 用
     # mariadb 用：服务地址与账号
     host: str = "127.0.0.1"
-    port: int = 3306
+    port: int = Field(default=3306, ge=1, le=65535, description="1-65535 的端口")
     user: str = "nacho"
     password: str = ""  # config.toml 不入库，密码写这里不会进 git
     database: str = "nacho"  # 库名（要事先建好）
 
 
-def _load_connection(
-    section: dict[str, object], where: Callable[[str], str]
-) -> DatabaseSettings:
-    """读一个连接节（``[database]``，或覆盖后的 ``[logging.database]``）并逐项校验。
-
-    ``where`` 给出一项的出处（如 ``logging.database.port``）—— 覆盖之后同一个键可能
-    来自不同的节，报错得指对地方。
-    """
-    default = DatabaseSettings()
-    driver = _pick(section, "driver", default.driver, where("driver"))
-    if driver not in _DRIVERS:
-        raise ConfigError(f"{where('driver')} 要 {'/'.join(_DRIVERS)}，收到 {driver!r}")
-    port = _pick(section, "port", default.port, where("port"))
-    if not 1 <= port <= 65535:
-        raise ConfigError(f"{where('port')} 要 1-65535 的端口，收到 {port}")
-    return DatabaseSettings(
-        driver=driver,
-        path=_pick_path(section, "path", default.path, where("path")),
-        host=_pick(section, "host", default.host, where("host")),
-        port=port,
-        user=_pick(section, "user", default.user, where("user")),
-        password=_pick(section, "password", default.password, where("password")),
-        database=_pick(section, "database", default.database, where("database")),
-    )
-
-
 # ----------------------------------------------------------------------- 区域：[logging]
-@dataclass(frozen=True)
-class FileLogSettings:
+class FileLogSettings(_Region):
     """``[logging.file]``：本地文件出口。"""
 
     enabled: bool = True  # false 就只有控制台
-    path: Path = BASE_DIR / "logs" / "nacho.log"  # 相对路径相对项目根目录
-    buffer_size: int = 200  # 攒够多少条写一次盘（1 = 每条直写，最慢但最稳）
-    flush_interval: float = 2.0  # 最多攒多久（秒）必须写一次盘
-    max_bytes: int = 20 * 1024 * 1024  # 单个文件超过就切割（20MB）；0 = 不切割
-    backup_count: int = 3  # 切割后保留几个历史文件
+    path: ConfigPath = BASE_DIR / "logs" / "nacho.log"
+    buffer_size: int = Field(default=200, ge=1, description="不小于 1 的整数")
+    flush_interval: float = Field(default=2.0, gt=0, description="大于 0 的秒数")
+    max_bytes: int = Field(default=20 * 1024 * 1024, ge=0, description="不小于 0 的整数")
+    backup_count: int = Field(default=3, ge=0, description="不小于 0 的整数")
 
 
-def _load_file_log(section: dict[str, object]) -> FileLogSettings:
-    """读 ``[logging.file]``。"""
-    default = FileLogSettings()
-    where = _where_in("logging.file")
-    return FileLogSettings(
-        enabled=_pick(section, "enabled", default.enabled, where("enabled")),
-        path=_pick_path(section, "path", default.path, where("path")),
-        buffer_size=_pick(section, "buffer_size", default.buffer_size, where("buffer_size")),
-        flush_interval=_pick(
-            section, "flush_interval", default.flush_interval, where("flush_interval")
-        ),
-        max_bytes=_pick(section, "max_bytes", default.max_bytes, where("max_bytes")),
-        backup_count=_pick(section, "backup_count", default.backup_count, where("backup_count")),
-    )
-
-
-@dataclass(frozen=True)
-class DatabaseLogSettings:
+class DatabaseLogSettings(_Region):
     """``[logging.database]``：把日志再落一份到数据库的出口。
 
     这里只放日志出口特有的项；连接项在 :attr:`connection`（覆盖之后才知道最终值）。
@@ -236,128 +245,79 @@ class DatabaseLogSettings:
 
     enabled: bool = False  # 默认不落库：要多一路数据库出口就置 true
     table: str = "logs"  # 日志表名（启动时自动建表）
-    buffer_size: int = 500  # 攒够多少条写一次库
-    flush_interval: float = 5.0  # 最多攒多久（秒）必须写一次库
+    buffer_size: int = Field(default=500, ge=1, description="不小于 1 的整数")
+    flush_interval: float = Field(default=5.0, gt=0, description="大于 0 的秒数")
     #: 这个出口真正连的库：[logging.database] 的连接项逐项盖在 [database] 上之后的结果；
     #: 没单独配就是 [database] 那一份（不是配置项，是算出来的）
-    connection: DatabaseSettings = field(default_factory=DatabaseSettings)
+    connection: DatabaseSettings = Field(default_factory=DatabaseSettings)
+
+    @field_validator("table")
+    @classmethod
+    def _check_table(cls, value: str) -> str:
+        """表名要拼进 SQL，得是合法标识符。"""
+        return require_table_name(value)
 
 
-def _load_database_log(
-    merged: dict[str, object],
-    connection: DatabaseSettings,
-    where: Callable[[str], str],
-) -> DatabaseLogSettings:
-    """读 ``[logging.database]`` 特有的项；``merged`` 是两层覆盖后的整份连接映射。"""
-    default = DatabaseLogSettings()
-    table = _pick(merged, "table", default.table, where("table"))
-    try:
-        require_table_name(table)
-    except ValueError as exc:
-        raise ConfigError(f"{where('table')}: {exc}") from exc
-    return DatabaseLogSettings(
-        enabled=_pick(merged, "enabled", default.enabled, where("enabled")),
-        table=table,
-        buffer_size=_pick(merged, "buffer_size", default.buffer_size, where("buffer_size")),
-        flush_interval=_pick(
-            merged, "flush_interval", default.flush_interval, where("flush_interval")
-        ),
-        connection=connection,
-    )
-
-
-@dataclass(frozen=True)
-class QueueSettings:
+class QueueSettings(_Region):
     """``[logging.queue]``：日志异步队列与分发器。"""
 
-    maxsize: int = 10_000  # 队列容量，满了按「丢弃最旧」处理
-    dispatch_batch_size: int = 200  # 分发器一轮最多取多少条
-    dispatch_timeout: float = 0.2  # 分发器一轮最多等多久（秒）
+    maxsize: int = Field(default=10_000, ge=1, description="不小于 1 的整数")
+    dispatch_batch_size: int = Field(default=200, ge=1, description="不小于 1 的整数")
+    dispatch_timeout: float = Field(default=0.2, gt=0, description="大于 0 的秒数")
 
 
-def _load_queue(section: dict[str, object]) -> QueueSettings:
-    """读 ``[logging.queue]``。"""
-    default = QueueSettings()
-    where = _where_in("logging.queue")
-    return QueueSettings(
-        maxsize=_pick(section, "maxsize", default.maxsize, where("maxsize")),
-        dispatch_batch_size=_pick(
-            section,
-            "dispatch_batch_size",
-            default.dispatch_batch_size,
-            where("dispatch_batch_size"),
-        ),
-        dispatch_timeout=_pick(
-            section, "dispatch_timeout", default.dispatch_timeout, where("dispatch_timeout")
-        ),
-    )
-
-
-@dataclass(frozen=True)
-class LoggingSettings:
+class LoggingSettings(_Region):
     """``[logging]``：日志总控；下挂三条子区域，一项在哪块看名字就知道。"""
 
-    level: LogLevel = LogLevel.INFO  # DEBUG / INFO / WARNING / ERROR / CRITICAL
+    level: Level = LogLevel.INFO  # DEBUG / INFO / WARNING / ERROR / CRITICAL
     console: bool = True  # 是否往控制台输出（服务端 / 无人值守时置 false）
     console_color: bool = True  # 控制台是否按级别上 ANSI 颜色
-    console_level: LogLevel | None = None  # 控制台单独的级别；None = 跟随 level
-    file: FileLogSettings = field(default_factory=FileLogSettings)
-    database: DatabaseLogSettings = field(default_factory=DatabaseLogSettings)
-    queue: QueueSettings = field(default_factory=QueueSettings)
+    console_level: OptionalLevel = None  # 控制台单独的级别；None = 跟随 level
+    file: FileLogSettings = Field(default_factory=FileLogSettings)
+    database: DatabaseLogSettings = Field(default_factory=DatabaseLogSettings)
+    queue: QueueSettings = Field(default_factory=QueueSettings)
 
 
-def _parse_console_level(section: dict[str, object]) -> LogLevel | None:
-    """``console_level``：留空（或没写）表示跟随 ``level``，用 None 表示。"""
-    value = section.get("console_level")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return _parse_level(value, "logging.console_level")
-
-
-def _load_logging(
-    section: dict[str, object], public_db: dict[str, object]
-) -> LoggingSettings:
+def _load_logging(section: dict[str, object], public_db: dict[str, object]) -> LoggingSettings:
     """读 ``[logging]``：本节开关 + file / database / queue 三条子区域。
 
     ``public_db`` 是 ``[database]`` 公共节；数据库出口的连接项按「专用 > 公共 > 默认」
     逐项覆盖，最后落到 ``logging.database.connection``。
     """
-    default = LoggingSettings()
     # 连接项两层覆盖：[logging.database] 专用项 > [database] 公共项 > 字段默认值
     merged, origin = _overlay(
-        ("database", public_db),
-        ("logging.database", _section(section, "database")),
+        ("database", public_db), ("logging.database", _section(section, "database"))
     )
 
     def where(key: str) -> str:
         """这一项最终写在哪个节里（覆盖之后光看键名看不出来）。"""
         return origin.get(key, f"logging.database.{key}")
 
-    connection = _load_connection(merged, where)
-    return LoggingSettings(
-        level=_parse_level(section.get("level", default.level.name), "logging.level"),
-        console=_pick(section, "console", default.console, "logging.console"),
-        console_color=_pick(
-            section, "console_color", default.console_color, "logging.console_color"
-        ),
-        console_level=_parse_console_level(section),
-        file=_load_file_log(_section(section, "file")),
-        database=_load_database_log(merged, connection, where),
-        queue=_load_queue(_section(section, "queue")),
+    connection = _load(DatabaseSettings, merged, where)
+    log_db = _load(DatabaseLogSettings, merged, where).model_copy(
+        update={"connection": connection}
+    )
+    # 本节自己的项：子区域（值是表格）各自由 _load 用自己的出处校验，报错才指得准
+    own: dict[str, object] = {k: v for k, v in section.items() if not isinstance(v, dict)}
+    return _load(LoggingSettings, own, _where_in("logging")).model_copy(
+        update={
+            "file": _load(FileLogSettings, _section(section, "file"), _where_in("logging.file")),
+            "database": log_db,
+            "queue": _load(QueueSettings, _section(section, "queue"), _where_in("logging.queue")),
+        }
     )
 
 
 # --------------------------------------------------------------------------- 整份设置
-@dataclass(frozen=True)
-class Settings:
+class Settings(_Region):
     """一份设置：字段就是配置文件里的区域，一一对应；最后一项是元信息，不是配置项。
 
     每个字段的默认值 = 配置里没写这一节（项）时的取值，键名同 ``config.toml.example``。
     """
 
-    app: AppSettings = field(default_factory=AppSettings)
-    database: DatabaseSettings = field(default_factory=DatabaseSettings)
-    logging: LoggingSettings = field(default_factory=LoggingSettings)
+    app: AppSettings = Field(default_factory=AppSettings)
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
     #: 配置来源；None = 没找到配置文件，用的全是默认值
     config_path: Path | None = None
@@ -381,11 +341,11 @@ class Settings:
         except OSError as exc:
             raise ConfigError(f"配置文件 {config_path} 无法读取：{exc}") from exc
 
-        # 一块区域一个解析函数：读哪一节、错了报哪一项，都在那一块里说清
+        # 一块区域一次校验：读哪一节、错了报哪一项，都在那一块里说清
         public_db = _section(data, "database")
         return cls(
-            app=_load_app(_section(data, "app")),
-            database=_load_connection(public_db, _where_in("database")),
+            app=_load(AppSettings, _section(data, "app"), _where_in("app")),
+            database=_load(DatabaseSettings, public_db, _where_in("database")),
             logging=_load_logging(_section(data, "logging"), public_db),
             config_path=config_path,
         )
