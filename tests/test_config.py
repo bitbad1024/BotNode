@@ -123,6 +123,55 @@ class TestDatabaseLayers:
         assert settings.logging.database.connection.driver == "sqlite"  # 两层都没写 -> 默认值兜底
 
 
+class TestCacheRegion:
+    """[cache]：默认走本地内存（不启用 Redis 也能用），换 Redis 只是改后端 + 连接参数。"""
+
+    def test_defaults_to_memory_without_section(self, tmp_path: Path) -> None:
+        settings = Settings.load(write(tmp_path, ""))
+        cache = settings.cache
+        assert cache.backend == "memory"
+        assert cache.namespace == "nacho"
+        assert (cache.default_ttl, cache.fallback_to_memory) == (0.0, True)
+        assert cache.redis.port == 6379
+
+    def test_redis_backend_reads_connection(self, tmp_path: Path) -> None:
+        settings = Settings.load(
+            write(
+                tmp_path,
+                dedent(
+                    """\
+                    [cache]
+                    backend = "redis"
+                    namespace = "app"
+                    default_ttl = 30.0
+                    fallback_to_memory = false
+
+                    [cache.redis]
+                    host = "10.0.0.9"
+                    port = 6390
+                    db = 3
+                    password = "pw"
+                    """
+                ),
+            )
+        )
+        cache = settings.cache
+        assert (cache.backend, cache.namespace) == ("redis", "app")
+        assert (cache.default_ttl, cache.fallback_to_memory) == (30.0, False)
+        assert (cache.redis.host, cache.redis.port, cache.redis.db) == ("10.0.0.9", 6390, 3)
+        assert cache.redis.password == "pw"
+
+    def test_redis_section_alone_keeps_memory_backend(self, tmp_path: Path) -> None:
+        """只写连接参数、没把 backend 改成 redis：仍然走本地内存（那份参数备而不用）。"""
+        settings = Settings.load(write(tmp_path, '[cache.redis]\nhost = "10.0.0.9"\n'))
+        assert settings.cache.backend == "memory"
+        assert settings.cache.redis.host == "10.0.0.9"
+
+    def test_empty_namespace_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="cache.namespace"):
+            Settings.load(write(tmp_path, '[cache]\nnamespace = ""\n'))
+
+
 class TestErrors:
     @pytest.mark.parametrize(
         ("text", "prefix"),
@@ -134,6 +183,10 @@ class TestErrors:
             ('[logging.database]\nport = "x"\n', "logging.database.port"),
             ('[logging.database]\ntable = "1bad"\n', "logging.database.table"),
             ('[logging]\nlevel = "LOUD"\n', "logging.level"),
+            ('[cache]\nbackend = "memcached"\n', "cache.backend"),
+            ("[cache]\ndefault_ttl = -1\n", "cache.default_ttl"),
+            ('[cache]\nnamespace = "a b"\n', "cache.namespace"),
+            ("[cache.redis]\nport = 70000\n", "cache.redis.port"),
         ],
     )
     def test_error_names_the_section(self, tmp_path: Path, text: str, prefix: str) -> None:
