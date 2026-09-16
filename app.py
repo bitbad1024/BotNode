@@ -50,51 +50,55 @@ _db_adapters: list[SqliteAdapter | MariadbAdapter] = []
 
 async def setup(settings: Settings) -> LogCore:
     """按设置初始化进程默认日志系统：configure 建核心（顺带挂文件 / 数据库出口）-> start。"""
+    app, log = settings.app, settings.logging  # 区域：[app] / [logging]
+    file_log, db_log = log.file, log.database  # 子区域：[logging.file] / [logging.database]
+
     processors: list[BaseLogProcessor] = []
-    if settings.file_enabled:
+    if file_log.enabled:
         processors.append(
             LocalFileLogProcessor(
-                settings.file_path,
+                file_log.path,
                 name="file",
-                buffer_size=settings.buffer_size,
-                flush_interval=settings.flush_interval,
-                max_bytes=settings.max_bytes if settings.max_bytes > 0 else None,
-                backup_count=settings.backup_count,
+                buffer_size=file_log.buffer_size,
+                flush_interval=file_log.flush_interval,
+                max_bytes=file_log.max_bytes if file_log.max_bytes > 0 else None,
+                backup_count=file_log.backup_count,
             )
         )
-    if settings.db_enabled:
-        if settings.db_driver == "mariadb":
+    if db_log.enabled:
+        conn = db_log.connection  # 日志出口最终用的那份连接
+        if conn.driver == "mariadb":
             adapter = MariadbAdapter(
-                host=settings.db_host,
-                port=settings.db_port,
-                user=settings.db_user,
-                password=settings.db_password,
-                database=settings.db_database,
-                table=settings.db_table,
+                host=conn.host,
+                port=conn.port,
+                user=conn.user,
+                password=conn.password,
+                database=conn.database,
+                table=db_log.table,
             )
             paramstyle = "format"  # PyMySQL 的 %s 占位
         else:
-            adapter = SqliteAdapter(settings.db_path, table=settings.db_table)
+            adapter = SqliteAdapter(conn.path, table=db_log.table)
             paramstyle = "qmark"  # sqlite 的 ? 占位
         _db_adapters.append(adapter)
         processors.append(
             DatabaseLogProcessor(
                 adapter,
-                table=settings.db_table,
+                table=db_log.table,
                 paramstyle=paramstyle,
-                buffer_size=settings.db_buffer_size,
-                flush_interval=settings.db_flush_interval,
+                buffer_size=db_log.buffer_size,
+                flush_interval=db_log.flush_interval,
             )
         )
     core = configure(
-        settings.name,
-        level=LogLevel.DEBUG if settings.debug else settings.level,
-        console=settings.console,
-        console_color=settings.console_color,
-        console_level=settings.console_level,
-        queue_maxsize=settings.queue_maxsize,
-        dispatch_batch_size=settings.dispatch_batch_size,
-        dispatch_timeout=settings.dispatch_timeout,
+        app.name,
+        level=LogLevel.DEBUG if app.debug else log.level,
+        console=log.console,
+        console_color=log.console_color,
+        console_level=log.console_level,
+        queue_maxsize=log.queue.maxsize,
+        dispatch_batch_size=log.queue.dispatch_batch_size,
+        dispatch_timeout=log.queue.dispatch_timeout,
         processors=processors,
     )
     _ = await core.start()
