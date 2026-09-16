@@ -152,6 +152,82 @@ class RedisCache:
         found = await self.keys()
         return await self.delete_many(found) if found else 0
 
+    # ---- 列表 ----
+    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
+        return await self._push(key, values, left=False, ttl=ttl)
+
+    async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
+        return await self._push(key, values, left=True, ttl=ttl)
+
+    async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
+        items = await self._call("lrange", self._full(key), start, stop)
+        return [str(item) for item in items]
+
+    async def list_length(self, key: str) -> int:
+        return int(await self._call("llen", self._full(key)))
+
+    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+        if count <= 0:
+            return []
+        # 带 count 的 RPOP 要 Redis 6.2+；更早的服务端会由驱动报错，翻成 CacheError 抛出去
+        popped = await self._call("rpop", self._full(key), count)
+        return [] if popped is None else [str(item) for item in popped]
+
+    async def _push(self, key: str, values: Sequence[str], *, left: bool, ttl: float | None) -> int:
+        """推元素（``RPUSH`` / ``LPUSH``）；``ttl`` 只在键不存在时用。
+
+        空推入不发给 Redis（``RPUSH`` 至少要一个元素）：当「问长度」处理，与内存后端一致。
+        """
+        if not values:
+            return await self.list_length(key)
+        full = self._full(key)
+        client = self._require_client()
+        # 一趟往返问两件事：键在不在（决定要不要设 TTL）、推完多长
+        pipe = client.pipeline(transaction=False)
+        pipe.exists(full)
+        if left:
+            pipe.lpush(full, *values)
+        else:
+            pipe.rpush(full, *values)
+        try:
+            existed, length = await pipe.execute()
+        except self._errors as exc:
+            raise CacheError(f"Redis 推入列表失败：{exc}") from exc
+        if not existed and ttl is not None:  # 已有键的 TTL 不动（与 Redis 一致）
+            await self._call("expire", full, timedelta(seconds=ttl))
+        return int(length)
+
+    # ---- 哈希 ----
+    async def hash_set(self, key: str, items: Mapping[str, str], ttl: float | None = None) -> int:
+        if not items:  # HSET 不给字段会报错：空映射当「没新增」
+            return 0
+        full = self._full(key)
+        client = self._require_client()
+        pipe = client.pipeline(transaction=False)
+        pipe.exists(full)
+        # 驱动 stub 把 mapping 声明成了 TypeVar 组合，字段串类型推断不出来，压掉这条告警
+        pipe.hset(full, mapping=dict(items))  # pyright: ignore[reportArgumentType]
+        try:
+            existed, added = await pipe.execute()
+        except self._errors as exc:
+            raise CacheError(f"Redis 写哈希失败：{exc}") from exc
+        if not existed and ttl is not None:  # 已有键的 TTL 不动（与 Redis 一致）
+            await self._call("expire", full, timedelta(seconds=ttl))
+        return int(added)
+
+    async def hash_get(self, key: str, field: str) -> str | None:
+        value = await self._call("hget", self._full(key), field)
+        return None if value is None else str(value)
+
+    async def hash_get_all(self, key: str) -> dict[str, str]:
+        raw = await self._call("hgetall", self._full(key))
+        return {str(field): str(value) for field, value in raw.items()}
+
+    async def hash_delete(self, key: str, *fields: str) -> int:
+        if not fields:
+            return 0
+        return int(await self._call("hdel", self._full(key), *fields))
+
     # ---- 内部 ----
     @staticmethod
     def _ex(ttl: float | None) -> timedelta | None:

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 
 from nacho.core.cache.interfaces import CacheBackend
@@ -164,6 +165,69 @@ class Cache:
     async def clear(self) -> int:
         """清掉本缓存的所有键（Redis 后端只清自己命名空间下的），返回清掉的键数。"""
         return await self._require().clear()
+
+    # ---- 列表（Redis 的 list）----
+    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
+        """从右侧推入元素，返回推入后的长度；``ttl`` 只在键不存在时用。"""
+        return await self._require().list_push(key, *values, ttl=self._resolve_ttl(ttl))
+
+    async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
+        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push`。"""
+        return await self._require().list_push_left(key, *values, ttl=self._resolve_ttl(ttl))
+
+    async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
+        """取下标区间内的元素（两端都含，负数从右数）；键不存在返回空列表。"""
+        return await self._require().list_range(key, start, stop)
+
+    async def list_length(self, key: str) -> int:
+        """列表长度（键不存在算 0）。"""
+        return await self._require().list_length(key)
+
+    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+        """从右侧弹出至多 ``count`` 个元素，按弹出顺序返回；弹空之后键就没了。"""
+        return await self._require().list_pop(key, count)
+
+    # ---- 哈希（Redis 的 hash）----
+    async def hash_set(self, key: str, items: Mapping[str, str], ttl: float | None = None) -> int:
+        """写字段（一次可写多个），返回新增的字段数；``ttl`` 只在键不存在时用。"""
+        return await self._require().hash_set(key, items, self._resolve_ttl(ttl))
+
+    async def hash_get(self, key: str, field: str) -> str | None:
+        """取一个字段；键或字段不存在返回 ``None``。"""
+        return await self._require().hash_get(key, field)
+
+    async def hash_get_all(self, key: str) -> dict[str, str]:
+        """取回整个哈希（键不存在返回空字典）。"""
+        return await self._require().hash_get_all(key)
+
+    async def hash_delete(self, key: str, *fields: str) -> int:
+        """删若干个字段，返回真删掉的个数；字段被删空的键就没了。"""
+        return await self._require().hash_delete(key, *fields)
+
+    # ---- JSON（序列化在门面做，后端里存的还是一段字符串）----
+    async def set_json(self, key: str, value: object, ttl: float | None = None) -> None:
+        """把任意可 JSON 序列化的值写进去；``ttl`` 规则同 :meth:`set`。
+
+        落到后端里的就是一段 JSON 文本，所以它本质是个普通字符串键：``get`` / ``ttl`` /
+        ``delete`` 照样能用。嵌套结构（哈希的哈希、对象数组）都走这条路 —— Redis 的哈希
+        字段同样只放得下字符串，嵌不进去。要写 ``datetime`` 之类非 JSON 类型，自己先转成
+        字符串（本层只认标准 JSON）。
+        """
+        text = json.dumps(value, ensure_ascii=False)
+        await self._require().set(key, text, self._resolve_ttl(ttl))
+
+    async def get_json(self, key: str) -> object | None:
+        """读回 :meth:`set_json` 写的值；键不存在返回 ``None``。
+
+        :raises CacheError: 键存在但内容不是合法 JSON（多半是被当普通字符串写过）。
+        """
+        text = await self._require().get(key)
+        if text is None:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise CacheError(f"键 {key} 的内容不是合法 JSON：{exc}") from exc
 
     # ---- 内部 ----
     def _require(self) -> CacheBackend:
