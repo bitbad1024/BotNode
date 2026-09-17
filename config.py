@@ -22,7 +22,7 @@ sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在�
     [logging.queue]      -> ...logging.queue            异步队列与分发器
     [cache]              -> Settings.cache              缓存总控：用哪个后端
     [cache.redis]        -> ...cache.redis              Redis 连接（backend=redis 时才用）
-    [api]                -> Settings.api                接口层：路由前缀、令牌有效期
+    [api]                -> Settings.api                接口层：监听地址、路由前缀、令牌有效期
 
 数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
 （driver / path / host / port / user / password / database），``[logging.database]`` 是
@@ -364,16 +364,19 @@ def _load_cache(section: dict[str, object]) -> CacheSettings:
 
 # --------------------------------------------------------------------------- 区域：[api]
 class ApiSettings(_Region):
-    """``[api]``：接口层对外怎么挂 —— 路由前缀、令牌有效期、访问日志、签名密钥。
+    """``[api]``：接口层对外怎么挂 —— 监听地址、路由前缀、令牌有效期、访问日志、签名密钥。
 
-    四项都只影响接口层自己：前缀决定登录接口挂在哪（``<prefix>/auth/login``），
+    监听地址（``host`` / ``port``）是接口层 HTTP 服务随主程序由 uvicorn 起时绑定的；
+    其余四项只影响接口层自己：前缀决定登录接口挂在哪（``<prefix>/auth/login``），
     ``token_ttl`` 是登录令牌的有效期，``access_log`` 决定要不要逐条记访问日志，
     ``secret`` 是令牌的签名密钥 —— **留空**表示进程启动时现生成一个随机的，能用但
     重启之后已签发的令牌全部失效，正式环境要写一份固定的。
     """
 
+    host: str = "127.0.0.1"  # HTTP 服务监听地址
+    port: int = Field(default=8000, ge=1, le=65535, description="1-65535 的端口")
     prefix: str = "/api"  # 路由前缀（要 / 开头；结尾的 / 会被去掉）
-    token_ttl: float = Field(default=3600.0, gt=0, description="大于 0 的秒数")
+    token_ttl: float = Field(default=3600.0, gt=0, description="大于 0 秒数")
     access_log: bool = True  # 逐条记访问日志（方法 / 路径 / 状态码 / 耗时）
     secret: str = ""  # 令牌签名密钥；留空 = 现生成随机的（重启即失效）
 
