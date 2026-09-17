@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
-from typing import Any, cast
+from typing import cast
 
 #: 默认路由前缀：登录接口最终挂在 ``/api/auth/login``
 DEFAULT_PREFIX: str = "/api"
@@ -44,5 +44,13 @@ class ApiOptions:
     def from_mapping(cls, data: Mapping[str, object]) -> ApiOptions:
         """从一份映射建选项：缺的项用默认值，多出来的键忽略。"""
         allowed: set[str] = {field.name for field in fields(class_or_instance=cls)}
-        # 字段是运行时按名字挑出来的，静态没法逐个对上构造器的参数类型，这里显式 cast
-        return cls(**cast("dict[str, Any]", _pick(data, allowed)))
+        picked: dict[str, object] = _pick(data, allowed)
+        # 字段是运行时按名挑出来的，这里逐个显式收窄到构造器对应的具体类型；
+        # 不写 ``cast(dict[str, Any])``，否则实参会带 ``Any`` 触发类型检查告警。
+        # cast 运行时是恒等，行为与原来一致。
+        return cls(
+            prefix=cast(str, picked.get("prefix", DEFAULT_PREFIX)),
+            token_ttl=cast(float, picked.get("token_ttl", DEFAULT_TOKEN_TTL)),
+            access_log=cast(bool, picked.get("access_log", True)),
+            secret=cast(str, picked.get("secret", "")),
+        )
