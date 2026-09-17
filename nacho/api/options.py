@@ -1,0 +1,48 @@
+"""接口层的选项（对应配置文件里的 ``[api]``）。
+
+和缓存层一个路子：**接口层不读配置文件**，配置系统把 ``[api]`` 那一节校验完，由入口
+（``app.py`` / 示例）用 :meth:`ApiOptions.from_mapping` 转成这里的一份不可变选项传进来
+—— 两边靠普通映射解耦，接口层不知道 TOML 长什么样。
+
+``Settings.api.model_dump()`` 可以直接喂给 :meth:`from_mapping`。
+"""
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, fields
+from typing import Any, cast
+
+#: 默认路由前缀：登录接口最终挂在 ``/api/auth/login``
+DEFAULT_PREFIX: str = "/api"
+#: 默认令牌有效期（秒）
+DEFAULT_TOKEN_TTL: float = 3600.0
+
+
+def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, object]:
+    """挑出 ``data`` 里 ``allowed`` 认的字段；多出来的键忽略。
+
+    校验归配置系统管：配置里多写了接口层不认的项，不该让接口层启动失败。
+    """
+    keys: set[str] = set(allowed)
+    return {key: value for key, value in data.items() if key in keys}
+
+
+@dataclass(frozen=True)
+class ApiOptions:
+    """接口层的选项（对应 ``[api]`` 一节）。"""
+
+    #: 路由前缀，登录接口挂在 ``<prefix>/auth/login``
+    prefix: str = DEFAULT_PREFIX
+    #: 登录令牌有效期（秒）
+    token_ttl: float = DEFAULT_TOKEN_TTL
+    #: 是否逐条记访问日志（方法 / 路径 / 状态码 / 耗时）
+    access_log: bool = True
+    #: 令牌签名密钥；空串表示启动时现生成一个随机的（重启后已签发的令牌失效）
+    secret: str = ""
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object]) -> ApiOptions:
+        """从一份映射建选项：缺的项用默认值，多出来的键忽略。"""
+        allowed: set[str] = {field.name for field in fields(class_or_instance=cls)}
+        # 字段是运行时按名字挑出来的，静态没法逐个对上构造器的参数类型，这里显式 cast
+        return cls(**cast("dict[str, Any]", _pick(data, allowed)))
