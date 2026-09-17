@@ -17,6 +17,10 @@
 
 Ctrl+C 走优雅停机：业务协程被取消 -> 等调度器在飞的任务收尾 -> 冲刷日志 -> 关库连接，
 安静退出不吐 traceback（收尾期间再按一次 Ctrl+C 才是强杀）。
+
+接口层（``nacho.api``）随主程序由 uvicorn 起成 HTTP 服务，和业务循环同进程、同事件循环跑；
+停机时由 :func:`_shutdown` 一并停（先让 uvicorn 优雅退出，再关业务）。监听地址在 ``[api]``
+配置的 ``host`` / ``port``。
 """
 from __future__ import annotations
 
@@ -24,10 +28,14 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import cast
 
-from config import CONFIG_PATH, TEMPLATE_PATH, ConfigError, Settings
+import uvicorn
+
+from config import BASE_DIR, CONFIG_PATH, TEMPLATE_PATH, ConfigError, Settings
 from nacho import __version__
+from nacho.api import ApiOptions, attach_api_logging, create_app
 from nacho.core.cache import CacheOptions, cache
 from nacho.core.logger import (
     BaseLogProcessor,
@@ -47,6 +55,17 @@ from nacho.db import MariadbAdapter, SqliteAdapter
 # --------------------------------------------------------------------------- 初始化
 #: setup 建立的数据库适配器，停机后由 _main 统一关连接
 _db_adapters: list[SqliteAdapter | MariadbAdapter] = []
+
+#: 接口层 HTTP 服务（随主程序由 uvicorn 起）；引用放模块级，供 _shutdown 停机时取用
+_api_server: uvicorn.Server | None = None
+_api_task: asyncio.Task[None] | None = None
+
+
+class _NoSignalServer(uvicorn.Server):
+    """随主程序跑时信号由主程序统一管：覆盖掉 uvicorn 自带的 SIGINT 安装，免得抢了业务循环的停机。"""
+
+    def install_signal_handlers(self) -> None:
+        pass
 
 
 async def setup(settings: Settings) -> LogCore:
@@ -118,25 +137,32 @@ async def run() -> None:
     log = get_logger("app")
     log.debug("这条 DEBUG 默认被级别挡住")
     log.info("业务开始", version=__version__)
-    log.warning("业务占位：把实现接进 run() 即可")
-    await scheduler.start()
-    scheduler.add("*/1 * * * * *", lambda:print("每秒一次"),  name="巡检")
-    scheduler.add("*/5 * * * * *", lambda:print("每五秒一次"), name="巡检")
-    step = 0
+    #log.warning("业务占位：把实现接进 run() 即可")
+    #await scheduler.start()
+    #scheduler.add("*/1 * * * * *", lambda:print("每秒一次"),  name="巡检")
+    #scheduler.add("*/5 * * * * *", lambda:print("每五秒一次"), name="巡检")
+    #step = 0
     while True:
-        log.info(f"{step}写入")
-        step += 1
+    #    log.info(f"{step}写入")
+    #    step += 1
         await asyncio.sleep(1)
 
 
 # --------------------------------------------------------------------------- 收尾
 async def _shutdown() -> None:
-    """收尾：等调度器跑完在飞的任务 -> 冲刷日志余量 -> 关库连接。
+    """收尾：先停接口层 HTTP 服务 -> 等调度器跑完在飞的任务 -> 冲刷日志余量 -> 关库连接。
 
     顺序不能反：任务里还会写日志，得等它们收尾了再冲刷、关库，收尾日志才不会丢。
+    接口层 HTTP 服务先优雅退出（信号由主程序统一管，不会抢 SIGINT），再关业务侧；
     Ctrl+C 取消的只是业务主协程，事件循环要等本函数跑完才停，所以这里能正常 await；
     收尾期间再按一次 Ctrl+C 会被强杀，那一下由 :func:`main` 兜住。
     """
+    # 先停接口层 HTTP 服务：让 uvicorn 优雅退出（在飞的请求处理完再关）
+    if _api_server is not None:
+        _api_server.should_exit = True
+    if _api_task is not None:
+        with suppress(asyncio.CancelledError):
+            await _api_task
     await scheduler.stop()  # 等在飞的任务自然收尾（默认 5 秒，超时只记 warning，不强杀）
     await cache.stop()  # 再停缓存：任务收完了，后面不会再有业务来读写
     await manager.stop()  # 停机自动冲刷余量
@@ -170,6 +196,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
+    global _api_server, _api_task
     try:
         core.info(
             "应用启动完成",
@@ -178,6 +205,20 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         )
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
+
+        # 接口层：先挂日志（落 logs/api.log），再建应用，最后用 uvicorn 随主程序起 HTTP 服务
+        attach_api_logging(BASE_DIR / "logs" / "api.log")
+        api_app = create_app(ApiOptions.from_mapping(settings.api.model_dump()))
+        _api_server = _NoSignalServer(
+            uvicorn.Config(
+                api_app,
+                host=settings.api.host,
+                port=settings.api.port,
+                log_config=None,  # 不接管日志系统（接口层走 nacho.core.logger）
+                access_log=False,  # 访问日志交给接口层自己的中间件
+            )
+        )
+        _api_task = asyncio.create_task(_api_server.serve(), name="api")
         await run()
     except (KeyboardInterrupt, asyncio.CancelledError):  # Ctrl+C / 被外部取消：不算故障
         core.info("收到中断信号，开始停机")
