@@ -22,6 +22,7 @@ sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在�
     [logging.queue]      -> ...logging.queue            异步队列与分发器
     [cache]              -> Settings.cache              缓存总控：用哪个后端
     [cache.redis]        -> ...cache.redis              Redis 连接（backend=redis 时才用）
+    [api]                -> Settings.api                接口层：路由前缀、令牌有效期
 
 数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
 （driver / path / host / port / user / password / database），``[logging.database]`` 是
@@ -361,6 +362,30 @@ def _load_cache(section: dict[str, object]) -> CacheSettings:
     )
 
 
+# --------------------------------------------------------------------------- 区域：[api]
+class ApiSettings(_Region):
+    """``[api]``：接口层对外怎么挂 —— 路由前缀、令牌有效期、访问日志、签名密钥。
+
+    四项都只影响接口层自己：前缀决定登录接口挂在哪（``<prefix>/auth/login``），
+    ``token_ttl`` 是登录令牌的有效期，``access_log`` 决定要不要逐条记访问日志，
+    ``secret`` 是令牌的签名密钥 —— **留空**表示进程启动时现生成一个随机的，能用但
+    重启之后已签发的令牌全部失效，正式环境要写一份固定的。
+    """
+
+    prefix: str = "/api"  # 路由前缀（要 / 开头；结尾的 / 会被去掉）
+    token_ttl: float = Field(default=3600.0, gt=0, description="大于 0 的秒数")
+    access_log: bool = True  # 逐条记访问日志（方法 / 路径 / 状态码 / 耗时）
+    secret: str = ""  # 令牌签名密钥；留空 = 现生成随机的（重启即失效）
+
+    @field_validator("prefix")
+    @classmethod
+    def _check_prefix(cls, value: str) -> str:
+        """前缀要拼进路由：得以 ``/`` 开头、不含空白；结尾的 ``/`` 去掉，免得拼出双斜杠。"""
+        if not value.startswith("/") or any(char.isspace() for char in value):
+            raise ValueError(f"路由前缀要以 / 开头且不含空白，收到 {value!r}")
+        return value.rstrip("/") or "/"
+
+
 # --------------------------------------------------------------------------- 整份设置
 class Settings(_Region):
     """一份设置：字段就是配置文件里的区域，一一对应；最后一项是元信息，不是配置项。
@@ -369,6 +394,7 @@ class Settings(_Region):
     """
 
     app: AppSettings = Field(default_factory=AppSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
@@ -395,10 +421,12 @@ class Settings(_Region):
         except OSError as exc:
             raise ConfigError(f"配置文件 {config_path} 无法读取：{exc}") from exc
 
+        #(TODO)api数据库也要加入默认公共，可以被覆盖功能
         # 一块区域一次校验：读哪一节、错了报哪一项，都在那一块里说清
         public_db = _section(data, "database")
         return cls(
             app=_load(AppSettings, _section(data, "app"), _where_in("app")),
+            api=_load(ApiSettings, _section(data, "api"), _where_in("api")),
             cache=_load_cache(_section(data, "cache")),
             database=_load(DatabaseSettings, public_db, _where_in("database")),
             logging=_load_logging(_section(data, "logging"), public_db),

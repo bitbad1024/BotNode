@@ -10,10 +10,13 @@ requires-python = ">=3.12"
 dependencies = ["pydantic>=2.7"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "ruff>=0.4"]
+# httpx：接口层测试用它发请求（不走真实网络）
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "ruff>=0.4", "httpx>=0.27"]
 mariadb = ["PyMySQL>=1.1"]
 # 缓存层的 Redis 后端；不装也能用（走本地内存）
 redis = ["redis>=5"]
+# 接口层（FastAPI 实现）；不装也不影响核心层与缓存层
+api = ["fastapi>=0.110", "uvicorn>=0.27"]
 
 [tool.setuptools.packages.find]
 include = ["nacho*"]
