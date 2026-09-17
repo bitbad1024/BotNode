@@ -42,12 +42,12 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app: "object",
+        app: object,
         *,
         options: ApiOptions | None = None,
         logger: BaseLogger | None = None,
     ) -> None:
-        super().__init__(app)  # type: ignore[arg-type]
+        super().__init__(app)  # pyright: ignore[reportArgumentType]
         self._options: ApiOptions = options if options is not None else ApiOptions()
         self._logger: BaseLogger | None = logger
 
