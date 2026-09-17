@@ -8,8 +8,8 @@
 ``trace_id`` 是这一次请求的编号（请求进来时由日志中间件生成，也写在响应头
 ``X-Trace-Id`` 上），排障时用户报这一个号就够查日志。
 
-业务模块自己的响应体（登录结果、用户资料）不在这里 —— 它们在各自的模块里（如
-:mod:`nacho.api.modules.auth.responses`），填进 ``data``。这一份只管**外面那层壳**。
+业务自己的响应体（登录结果、用户资料）不在这里 —— 入口层自己的响应模型在
+:mod:`nacho.api.api.auth.responses`，填进 ``data``。这一份只管**外面那层壳**。
 """
 from __future__ import annotations
 

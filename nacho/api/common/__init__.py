@@ -7,7 +7,7 @@
     middlewares/     请求中间件：编号 + 访问日志
     dependencies.py  路由通用依赖：取这次请求的编号
 
-业务自己的东西（它们各自的请求 / 响应 / 服务 / 实现）在 :mod:`nacho.api.modules` 下。
+业务自己的东西：HTTP 入口在 :mod:`nacho.api.api`、业务逻辑在 :mod:`nacho.api.services`。
 
 这里的一律**不认识具体业务**：响应壳不知道 ``data`` 里装的是什么，错误出口也不知道哪一
 个码是登录用的 —— 加一个业务模块不需要动这里。
