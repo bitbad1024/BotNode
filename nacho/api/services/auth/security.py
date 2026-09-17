@@ -15,7 +15,7 @@ import hmac
 import json
 import secrets
 import time
-from typing import Final
+from typing import Final, cast
 
 from ...common.encoding import b64, unb64
 from ...common.errors import TokenExpiredError, TokenInvalidError
@@ -78,19 +78,29 @@ class HmacTokenService:
         if not hmac.compare_digest(self._sign(body), signature):
             raise TokenInvalidError()
         try:
-            payload: object = json.loads(unb64(body))
+            raw = cast("object", json.loads(unb64(body)))
         except (ValueError, UnicodeDecodeError) as exc:  # 坏 base64 / 不是 JSON
             raise TokenInvalidError() from exc
-        if not isinstance(payload, dict):
+        if not isinstance(raw, dict):
+            raise TokenInvalidError()
+        payload = cast("dict[str, object]", raw)
+        sub = payload["sub"]
+        iat = payload["iat"]
+        exp = payload["exp"]
+        if (
+            not isinstance(sub, str)
+            or not isinstance(iat, (int, float))
+            or not isinstance(exp, (int, float))
+        ):
             raise TokenInvalidError()
         try:
             claims = TokenClaims(
-                subject=str(payload["sub"]),
-                issued_at=float(payload["iat"]),
-                expires_at=float(payload["exp"]),
+                subject=str(sub),
+                issued_at=float(iat),
+                expires_at=float(exp),
                 token_id=str(payload.get("jti", "")),
             )
-        except (KeyError, TypeError, ValueError) as exc:  # 缺字段 / 类型不对
+        except (KeyError, ValueError) as exc:  # 缺字段 / 类型不对（兜底）
             raise TokenInvalidError() from exc
         if claims.is_expired():
             raise TokenExpiredError()
