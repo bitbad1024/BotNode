@@ -120,6 +120,10 @@ class OneBotLike(Protocol):
         """吊销一个令牌（按记录 id），并把正用它连着的客户端断开。"""
         ...
 
+    async def set_token_enabled(self, token_id: str, enabled: bool) -> bool:
+        """启用 / 停用一条令牌（记录还在）；停用会连同断开正用它连着的客户端。"""
+        ...
+
     @property
     def tokens(self) -> TokenRegistryLike | None:
         """令牌注册表；``None`` 表示没配（不校验，也没有令牌可管）。"""

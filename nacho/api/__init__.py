@@ -78,6 +78,7 @@ from .api.onebot import (
     IssueTokenRequest,
     KickData,
     RevokeData,
+    SetTokenEnabledRequest,
     TokenData,
 )
 from .services.auth import AuthService, HmacTokenService, TokenClaims, TokenService, resolve_secret
@@ -110,6 +111,7 @@ __all__ = [
     "onebot_router",
     # OneBot 管理接口
     "IssueTokenRequest",
+    "SetTokenEnabledRequest",
     "ClientData",
     "TokenData",
     "IssuedTokenData",

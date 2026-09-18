@@ -20,3 +20,16 @@ class IssueTokenRequest(BaseModel):
         json_schema_extra={"example": {"account": "alice", "remark": "主号"}},
         frozen=True,
     )
+
+
+class SetTokenEnabledRequest(BaseModel):
+    """启用 / 停用一条令牌（记录还在，随时能启用回来；和"吊销"不同）。"""
+
+    enabled: bool = Field(
+        description="true 启用；false 停用——不许再连，并把正用它连着的客户端断开"
+    )
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra={"example": {"enabled": False}},
+        frozen=True,
+    )

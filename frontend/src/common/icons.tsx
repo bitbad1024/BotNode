@@ -165,3 +165,30 @@ export const IconBolt = (p: IconProps) => (
     <path d="M13 3L5 13h6l-1 8 8-10h-6l1-8z" />
   </svg>
 )
+
+export const IconKey = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="7.5" cy="16.5" r="3.5" />
+    <path d="M10 14l9.5-9.5M16 7l2.5 2.5M13.8 9.2l2.5 2.5" />
+  </svg>
+)
+
+export const IconPlus = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+)
+
+export const IconRefresh = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M20 12a8 8 0 10-2.9 6.2" />
+    <path d="M20 5.5V12h-6.2" />
+  </svg>
+)
+
+export const IconTrash = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2h9.2L17.5 7" />
+    <path d="M10.4 10.6v5.5M13.6 10.6v5.5" />
+  </svg>
+)

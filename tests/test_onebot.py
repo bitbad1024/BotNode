@@ -349,6 +349,41 @@ async def test_revoke_by_id_disconnects_client() -> None:
         assert await server.revoke_by_id(issued.record.id) is False  # 已经没有了
 
 
+async def test_set_enabled_disables_and_disconnects() -> None:
+    """停用：不许再连（握手 401），正连着的客户端一并断开；启用回来又能连。"""
+    registry = InMemoryTokenRegistry()
+    issued = await registry.issue("alice")
+
+    async with opened_server(registry) as server:
+        port = port_of(server)
+        async with connect(ws_url(port, issued.token)) as ws:
+            await ws.send(json.dumps(PRIVATE_MESSAGE))
+            assert await wait_until(lambda: len(server.roster()) == 1)
+
+            assert await server.set_token_enabled(issued.record.id, False) is True
+            with pytest.raises(ConnectionClosed):
+                await ws.recv()
+            assert await wait_until(lambda: server.roster() == ())
+            assert await registry.resolve(issued.token) is None  # 停用后认不出来
+
+        with pytest.raises(InvalidStatus):  # 重连被拒
+            async with connect(ws_url(port, issued.token)):
+                pass
+
+        # 和吊销不同：记录还在，启用回来照样能用
+        assert len(await registry.items()) == 1
+        assert await server.set_token_enabled(issued.record.id, True) is True
+        async with connect(ws_url(port, issued.token)):
+            assert await wait_until(lambda: len(server.roster()) == 1)
+            assert server.roster()[0].account == "alice"
+
+
+async def test_set_enabled_unknown_id() -> None:
+    """id 不存在：改不动，返回 False。"""
+    async with opened_server(InMemoryTokenRegistry()) as server:
+        assert await server.set_token_enabled("t-不存在", True) is False
+
+
 # --------------------------------------------------------------------------- 管理用的 HTTP 接口
 async def test_management_requires_login() -> None:
     """管理接口都要登录：没带令牌一律 401（先鉴权，再看服务接没接）。"""
@@ -445,6 +480,39 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
                 f"/api/onebot/tokens/{issued_data.record.id}", headers=headers
             )
             assert again.status_code == 404
+
+
+async def test_management_toggles_token_enabled() -> None:
+    """PATCH /onebot/tokens/{id}：停用 -> 状态变了 -> 启用回来；id 不存在 404。"""
+    registry = InMemoryTokenRegistry()
+    async with opened_server(registry) as server:
+        app = api_app(server)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            headers = {"Authorization": f"Bearer {await login(client)}"}
+            issued = await registry.issue("alice")
+
+            off = await client.patch(
+                f"/api/onebot/tokens/{issued.record.id}",
+                headers=headers,
+                json={"enabled": False},
+            )
+            assert off.status_code == 200, off.text
+            assert ApiResponse[TokenData].model_validate(off.json()).data.enabled is False
+
+            on = await client.patch(
+                f"/api/onebot/tokens/{issued.record.id}",
+                headers=headers,
+                json={"enabled": True},
+            )
+            assert on.status_code == 200, on.text
+            assert ApiResponse[TokenData].model_validate(on.json()).data.enabled is True
+
+            missing = await client.patch(
+                "/api/onebot/tokens/t-不存在", headers=headers, json={"enabled": True}
+            )
+            assert missing.status_code == 404
 
 
 async def test_management_kick_with_revoke() -> None:

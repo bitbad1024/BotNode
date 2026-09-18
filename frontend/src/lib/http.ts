@@ -115,4 +115,9 @@ export const http = {
   get: <T>(url: string) => request<T>(instance.get(url)),
   post: <T, B = unknown>(url: string, body?: B) =>
     request<T>(instance.post(url, body)),
+  /** DELETE：令牌吊销、踢下线这类动作用；查询串直接拼在 url 上。 */
+  del: <T>(url: string) => request<T>(instance.delete(url)),
+  /** PATCH：改单个字段（如令牌启用 / 停用）用。 */
+  patch: <T, B = unknown>(url: string, body?: B) =>
+    request<T>(instance.patch(url, body)),
 }
