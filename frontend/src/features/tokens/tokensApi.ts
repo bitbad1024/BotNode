@@ -73,6 +73,19 @@ export function issueToken(account: string, remark = '') {
   )
 }
 
+/**
+ * PATCH /onebot/tokens/{id}：启用 / 停用。
+ *
+ * 停用 = 不许再连（握手 401），并把正用它连着的客户端一并断开；记录还在，
+ * 随时能启用回来 —— 和 revokeToken（吊销，删记录、不可逆）是两回事。
+ */
+export function setTokenEnabled(tokenId: string, enabled: boolean) {
+  return http.patch<OneBotToken, { enabled: boolean }>(
+    `/onebot/tokens/${encodeURIComponent(tokenId)}`,
+    { enabled },
+  )
+}
+
 /** DELETE /onebot/tokens/{id}：吊销令牌，并把正用它连着的客户端断开。 */
 export function revokeToken(tokenId: string) {
   return http.del<RevokeResult>(`/onebot/tokens/${encodeURIComponent(tokenId)}`)
