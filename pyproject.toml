@@ -19,6 +19,8 @@ redis = ["redis>=5"]
 # 接口层（FastAPI 实现）；不装也不影响核心层与缓存层
 # sqlmodel：表结构与查询（底层 SQLAlchemy）；aiosqlite：sqlite 的异步驱动
 api = ["fastapi>=0.110", "uvicorn>=0.27", "sqlmodel>=0.0.22", "aiosqlite>=0.20"]
+# OneBot 反向 WS 接入层（websockets 提供 WS 服务端）；不装也不影响核心层 / api 层
+onebot = ["websockets>=13"]
 
 [tool.setuptools.packages.find]
 include = ["nacho*"]

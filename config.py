@@ -23,6 +23,7 @@ sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在�
     [cache]              -> Settings.cache              缓存总控：用哪个后端
     [cache.redis]        -> ...cache.redis              Redis 连接（backend=redis 时才用）
     [api]                -> Settings.api                接口层：监听地址、路由前缀、令牌有效期
+    [onebot]             -> Settings.onebot             反向 WS 接入：监听地址、路径、令牌
 
 数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
 （driver / path / host / port / user / password / database），``[logging.database]`` 是
@@ -389,6 +390,30 @@ class ApiSettings(_Region):
         return value.rstrip("/") or "/"
 
 
+# ------------------------------------------------------------------------ 区域：[onebot]
+class OneBotSettings(_Region):
+    """``[onebot]``：OneBot 反向 WS 接入 —— 框架当服务端，等 OneBot 实现连进来。
+
+    监听地址（``host`` / ``port`` / ``path``）是 ``onebot.py`` 起的 WS 服务绑定的；OneBot 实现
+    （go-cqhttp / NapCat / LLOneBot …）那边把「反向 WS」地址配成 ``ws://<host>:<port><path>``。
+    ``access_token`` 留空表示不校验；非空时握手要带 ``Authorization: Bearer <token>`` 或
+    ``?access_token=<token>``。``action_timeout`` 是发出一个动作后等回应的超时。
+    """
+
+    host: str = "127.0.0.1"  # WS 服务监听地址
+    port: int = Field(default=6700, ge=1, le=65535, description="1-65535 的端口")
+    path: str = "/"  # 只接受该路径的连接
+    action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+
+    @field_validator("path")
+    @classmethod
+    def _check_path(cls, value: str) -> str:
+        """路径要拼进 WS 地址：得从 ``/`` 开始。"""
+        if not value.startswith("/"):
+            raise ValueError(f"WS 路径要以 / 开头，收到 {value!r}")
+        return value
+
+
 # --------------------------------------------------------------------------- 整份设置
 class Settings(_Region):
     """一份设置：字段就是配置文件里的区域，一一对应；最后一项是元信息，不是配置项。
@@ -401,6 +426,7 @@ class Settings(_Region):
     cache: CacheSettings = Field(default_factory=CacheSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    onebot: OneBotSettings = Field(default_factory=OneBotSettings)
 
     #: 配置来源；None = 没找到配置文件，用的全是默认值
     config_path: Path | None = None
@@ -433,5 +459,6 @@ class Settings(_Region):
             cache=_load_cache(_section(data, "cache")),
             database=_load(DatabaseSettings, public_db, _where_in("database")),
             logging=_load_logging(_section(data, "logging"), public_db),
+            onebot=_load(OneBotSettings, _section(data, "onebot"), _where_in("onebot")),
             config_path=config_path,
         )
