@@ -1,0 +1,128 @@
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.title {
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.desc {
+  margin: 7px 0 0;
+  font-size: 13.5px;
+  color: var(--text-2);
+  max-width: 640px;
+}
+
+.panel {
+  overflow: hidden;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 30px 32px;
+  border-bottom: 1px solid var(--border);
+  background:
+    radial-gradient(
+      80% 120% at 0% 0%,
+      var(--accent-soft),
+      transparent 60%
+    );
+}
+
+.hero-icon {
+  width: 62px;
+  height: 62px;
+  flex-shrink: 0;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--accent-border);
+}
+
+.hero-title {
+  font-size: 16.5px;
+  font-weight: 600;
+}
+
+.hero-desc {
+  margin: 5px 0 0;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  padding: 26px 32px 30px;
+}
+
+.block-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  margin-bottom: 13px;
+}
+
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.bullet {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.endpoint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--accent);
+  transition: border-color 0.16s ease;
+}
+.endpoint:hover {
+  border-color: var(--accent-border);
+}
+.endpoint code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+@media (max-width: 720px) {
+  .body {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding: 22px 20px 26px;
+  }
+  .hero {
+    padding: 24px 20px;
+  }
+}
