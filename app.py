@@ -21,6 +21,13 @@ Ctrl+C 走优雅停机：业务协程被取消 -> 等调度器在飞的任务收
 接口层（``nacho.api``）随主程序由 uvicorn 起成 HTTP 服务，和业务循环同进程、同事件循环跑；
 停机时由 :func:`_shutdown` 一并停（先让 uvicorn 优雅退出，再关业务）。监听地址在 ``[api]``
 配置的 ``host`` / ``port``。
+
+OneBot 反向 WS（``nacho.onebot``）同样随主程序起：监听 ``[onebot]`` 的 ``host`` / ``port``，
+等 OneBot 实现连进来，事件交给 :func:`on_event`；日志单独落 ``logs/onebot.log``（同进程共用
+日志核心，只是换个文件），停机时一并收。
+
+依赖：``app.py`` 需要 ``nacho[api]`` + ``nacho[onebot]``（``fastapi`` / ``uvicorn`` /
+``sqlmodel`` / ``aiosqlite`` / ``websockets``）。
 """
 from __future__ import annotations
 
@@ -60,6 +67,16 @@ from nacho.core.scheduler import (
     scheduler
 )
 from nacho.db import MariadbAdapter, SqliteAdapter
+from nacho.onebot import (
+    ONEBOT_LOGGER_NAME,
+    OneBotConnection,
+    OneBotEvent,
+    OneBotOptions,
+    OneBotServer,
+    SqlTokenRegistry,
+    attach_onebot_logging,
+    onebot_logger,
+)
 
 # --------------------------------------------------------------------------- 初始化
 #: setup 建立的数据库适配器，停机后由 _main 统一关连接
@@ -70,6 +87,8 @@ _api_server: uvicorn.Server | None = None
 _api_task: asyncio.Task[None] | None = None
 #: 接口层用的异步引擎（SQLModel 查 users 表）；停机时要 dispose
 _api_engine: AsyncEngine | None = None
+#: OneBot 反向 WS 服务（同进程随主程序起）；停机时由 _shutdown 一并停
+_onebot_server: OneBotServer | None = None
 
 
 class _NoSignalServer(uvicorn.Server):
@@ -159,12 +178,24 @@ async def run() -> None:
         await asyncio.sleep(1)
 
 
+async def on_event(conn: OneBotConnection, event: OneBotEvent) -> None:
+    """OneBot 事件钩子：业务接这里。
+
+    现在只记一条日志，演示「收到了事件」；要发动作就这么写::
+
+        await conn.call("send_msg", message_type="private", user_id=..., message="hi")
+    """
+    log = onebot_logger(ONEBOT_LOGGER_NAME)
+    log.info("收到事件", post_type=event.post_type, self_id=event.self_id, remote=conn.remote)
+
+
 # --------------------------------------------------------------------------- 收尾
 async def _shutdown() -> None:
-    """收尾：先停接口层 HTTP 服务 -> 等调度器跑完在飞的任务 -> 冲刷日志余量 -> 关库连接。
+    """收尾：先停对外的两个服务（接口层 HTTP + OneBot 反向 WS）-> 等调度器跑完在飞的任务
+    -> 冲刷日志余量 -> 关库连接。
 
     顺序不能反：任务里还会写日志，得等它们收尾了再冲刷、关库，收尾日志才不会丢。
-    接口层 HTTP 服务先优雅退出（信号由主程序统一管，不会抢 SIGINT），再关业务侧；
+    对外服务先优雅退出（信号由主程序统一管，不会抢 SIGINT），再关业务侧；
     Ctrl+C 取消的只是业务主协程，事件循环要等本函数跑完才停，所以这里能正常 await；
     收尾期间再按一次 Ctrl+C 会被强杀，那一下由 :func:`main` 兜住。
     """
@@ -174,6 +205,9 @@ async def _shutdown() -> None:
     if _api_task is not None:
         with suppress(asyncio.CancelledError):
             await _api_task
+    # 再停 OneBot 反向 WS：关监听并断开所有客户端
+    if _onebot_server is not None:
+        await _onebot_server.stop()
     await scheduler.stop()  # 等在飞的任务自然收尾（默认 5 秒，超时只记 warning，不强杀）
     await cache.stop()  # 再停缓存：任务收完了，后面不会再有业务来读写
     await manager.stop()  # 停机自动冲刷余量
@@ -224,11 +258,14 @@ async def _main(argv: Sequence[str] | None = None) -> None:
     try:
         core = await setup(settings)
         user_engine = _build_user_engine(settings.database)  # RuntimeError = 数据库连不上
+        # 令牌注册表：和 users 表同一个库；「连进来的客户端属于哪个账号」由它定
+        token_registry = SqlTokenRegistry(user_engine)
+        await token_registry.ensure_schema()
     except (ConfigError, RuntimeError) as exc:  # RuntimeError = 数据库连不上等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
-    global _api_server, _api_task, _api_engine
+    global _api_server, _api_task, _api_engine, _onebot_server
     try:
         core.info(
             "应用启动完成",
@@ -238,12 +275,22 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
 
-        # 接口层：先挂日志（落 logs/api.log），再建应用（注入真实数据库引擎），最后用 uvicorn 随主程序起
+        # OneBot 反向 WS：同进程同事件循环，共用日志核心（只是换个文件落盘），随主程序一起起。
+        # 服务要**先建好**再交给接口层：<prefix>/onebot/* 那组管理接口（在线列表 / 踢人 / 令牌）用它
+        attach_onebot_logging(BASE_DIR / "logs" / "onebot.log")
+        _onebot_server = OneBotServer(
+            OneBotOptions.from_mapping(settings.onebot.model_dump()),
+            handler=on_event,
+            tokens=token_registry,  # 令牌 -> 账号；一个端口接多个客户端，靠它认归属
+        )
+
+        # 接口层：先挂日志（落 logs/api.log），再建应用（注入真实数据库引擎与 OneBot 服务）
         attach_api_logging(BASE_DIR / "logs" / "api.log")
         _api_engine = user_engine
         api_app = create_app(
             ApiOptions.from_mapping(settings.api.model_dump()),
             db=user_engine,
+            onebot=_onebot_server,
         )
         _api_server = _NoSignalServer(
             uvicorn.Config(
@@ -255,6 +302,22 @@ async def _main(argv: Sequence[str] | None = None) -> None:
             )
         )
         _api_task = asyncio.create_task(_api_server.serve(), name="api")
+
+        if not await token_registry.items():  # 一枚令牌都没有：客户端连上来会被 401 拒
+            hint = f"{settings.api.prefix}/onebot/tokens"
+            core.warning(f"还没有任何 OneBot 令牌，客户端连不上；签一个：POST {hint}")
+
+        try:
+            await _onebot_server.start()
+        except OSError as exc:  # 端口被占等：报清楚，别带着半截状态往下跑
+            core.error(
+                "OneBot 反向 WS 监听失败（端口被占？）",
+                host=settings.onebot.host,
+                port=settings.onebot.port,
+                error=str(exc),
+            )
+            raise SystemExit(2) from exc
+
         await run()
     except (KeyboardInterrupt, asyncio.CancelledError):  # Ctrl+C / 被外部取消：不算故障
         core.info("收到中断信号，开始停机")

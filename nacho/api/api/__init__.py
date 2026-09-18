@@ -4,7 +4,8 @@
 业务怎么算（查人、验密码、签令牌）在 :mod:`nacho.api.services` —— 依赖方向是
 **入口层 -> 业务层**，业务层不认识 FastAPI，也不 import 本包。
 
-    auth/   鉴权入口：``POST <prefix>/auth/login``、``GET <prefix>/auth/me``
+    auth/     鉴权入口：``POST <prefix>/auth/login``、``GET <prefix>/auth/me``
+    onebot/   OneBot 管理入口：``<prefix>/onebot/clients``、``<prefix>/onebot/tokens``
 
 加一个接口就动这一个目录；跨业务的通用件（响应壳、错误出口、中间件、日志）在
 :mod:`nacho.api.common`。
@@ -12,5 +13,6 @@
 from __future__ import annotations
 
 from .auth.router import router as auth_router
+from .onebot.router import router as onebot_router
 
-__all__ = ["auth_router"]
+__all__ = ["auth_router", "onebot_router"]
