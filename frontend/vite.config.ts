@@ -15,7 +15,11 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    // 5173 是 Vite 的默认端口，但 Windows 会随机保留一段动态端口范围
+    // （netsh interface ipv4 show excludedportrange protocol=tcp 可见），
+    // 本机 5135-5234 就在保留范围内：绑上去报 EACCES（权限）而不是 EADDRINUSE（被占用），
+    // 换端口才能解决。这里取范围外的 5273；想临时换：npm run dev -- --port 5300
+    port: 5273,
     proxy: {
       '/api': { target: backend, changeOrigin: true },
       '/docs': { target: backend, changeOrigin: true },
