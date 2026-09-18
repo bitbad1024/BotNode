@@ -6,7 +6,9 @@
  * - **明文只在签发那一次出现**：库里只存摘要，关掉提示就拿不回来了，所以签出来
  *   立刻整块显示 + 一键复制，并写明后果；
  * - **删一个客户端要走两条腿**：OneBot 实现断线都会自动重连，只断开不吊销的话
- *   过几秒它又回到列表里 —— 所以「断开」与「断开并吊销」是两个按钮，说清区别。
+ *   过几秒它又回到列表里 —— 所以「断开」与「断开并吊销」是两个按钮，说清区别；
+ * - **停用 ≠ 吊销**：停用只是不许再连（记录还在，开关能拨回来，所以不弹二次确认），
+ *   吊销是删记录、不可逆，所以那颗按钮要走确认。
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
@@ -15,6 +17,7 @@ import {
   issueToken,
   kickClient,
   revokeToken,
+  setTokenEnabled,
   type IssuedToken,
   type OneBotClient,
   type OneBotToken,
@@ -138,8 +141,9 @@ export default function TokensPage() {
         <div>
           <h2 className={styles.title}>令牌管理</h2>
           <p className={styles.desc}>
-            令牌决定「连进来的机器人属于哪个账号」。明文只在签发时显示一次，之后查不回来；
-            吊销令牌会把用它连着的客户端一并断开，并且它再也连不上。
+            令牌决定「连进来的机器人属于哪个账号」。明文只在签发时显示一次，之后查不回来。
+            停用只是不许再连（可随时启用回来）；吊销则是删掉记录、不可逆。两者都会把用它
+            连着的客户端一并断开。
           </p>
         </div>
         <div className={styles.actions}>
@@ -345,9 +349,29 @@ export default function TokensPage() {
                     </td>
                     <td className={styles.muted}>{formatTime(t.created_at)}</td>
                     <td>
-                      <span className={`chip ${t.enabled ? 'chip-success' : ''}`}>
-                        {t.enabled ? '启用' : '停用'}
-                      </span>
+                      <div className={styles.switchRow}>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={t.enabled}
+                          aria-label={t.enabled ? '停用令牌' : '启用令牌'}
+                          className={`${styles.switch} ${t.enabled ? styles.switchOn : ''}`}
+                          disabled={busy}
+                          onClick={() =>
+                            void run(
+                              () => setTokenEnabled(t.id, !t.enabled),
+                              t.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
+                            )
+                          }
+                        >
+                          <span className={styles.switchDot} />
+                        </button>
+                        <span
+                          className={t.enabled ? styles.switchOnLabel : styles.muted}
+                        >
+                          {t.enabled ? '启用' : '停用'}
+                        </span>
+                      </div>
                     </td>
                     <td>
                       {active ? (
