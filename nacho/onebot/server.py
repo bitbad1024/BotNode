@@ -1,0 +1,483 @@
+"""OneBot 反向 WS 服务端：框架监听端口，等 OneBot 实现（go-cqhttp / NapCat / LLOneBot …）连进来。
+
+反向 WS 的收发规则（v11）::
+
+    客户端 -> 框架：事件（带 post_type）；或某个动作的回应（带 status / retcode / echo）
+    框架 -> 客户端：动作（{"action": ..., "params": {...}, "echo": ...}）
+
+**一个端口接很多客户端**：谁连进来由**令牌**决定归属 —— 配了 :class:`TokenRegistry` 时，
+握手阶段把令牌翻成账号（查不到就 401），账号绑在这条连接上（:attr:`OneBotConnection.account`）。
+没配注册表就不校验（谁都能连，归属记成匿名），所以不接数据库照样能跑起来。
+
+在线的客户端像路由器的「已连接设备」那样列得出来（:meth:`OneBotServer.roster`），也能踢掉
+（:meth:`OneBotServer.kick`）—— 但 OneBot 实现都会自动重连，要真删掉得连令牌一起吊销
+（``kick(..., revoke=True)`` 或 :meth:`OneBotServer.revoke`）。
+
+本模块只管「连接 + 协议」这一层：握手鉴权、连接管理、事件分发、动作发送；**业务不在这里** ——
+要处理事件，建服务时传一个 ``handler``：``async def on_event(conn, event) -> None``。没传就只记日志。
+
+用法::
+
+    from nacho.onebot import OneBotOptions, OneBotServer, attach_onebot_logging
+
+    attach_onebot_logging(Path("logs/onebot.log"))
+    server = OneBotServer(OneBotOptions(host="0.0.0.0", port=6700), handler=on_event)
+    await server.start()
+    await server.serve_forever()
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+import weakref
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
+from dataclasses import dataclass
+from http import HTTPStatus
+from typing import TypeAlias, cast
+from urllib.parse import unquote
+from uuid import uuid4
+
+from pydantic import ValidationError
+from websockets.asyncio.server import Server, ServerConnection, serve
+from websockets.exceptions import ConnectionClosed
+from websockets.http11 import Request, Response
+
+from nacho.core.logger import BaseLogger
+
+from .logging import ONEBOT_LOGGER_NAME, onebot_logger
+from .models import (
+    ActionResponse,
+    MetaEvent,
+    OneBotEvent,
+    is_event,
+    parse_action_response,
+    parse_event,
+)
+from .options import OneBotOptions
+from .tokens import TokenRegistry
+
+#: 事件处理器：收到一条事件时的回调。抛出的异常只会被记下来，不影响后续事件。
+EventHandler: TypeAlias = Callable[["OneBotConnection", OneBotEvent], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class ClientEntry:
+    """在线列表里的一行（路由器「已连接设备」那样的一条）。
+
+    注意这是**快照**：调用 :meth:`OneBotServer.roster` 那一刻的样子，不代表此刻还连着。
+    """
+
+    #: 这条连接的编号（踢人时按它定位）
+    id: str
+    #: 属于哪个账号（由握手时的令牌定下来）
+    account: str
+    #: 机器人号；还没收到事件时是 ``None``
+    self_id: int | None
+    #: 对端地址
+    remote: str
+    #: 连上的时刻（Unix 秒）
+    connected_at: float
+
+
+class OneBotConnection:
+    """一条已连上的 OneBot 连接：发动作、等回应。
+
+    连接上带三样身份信息，注意它们的**时点**不同：
+
+    * ``account`` —— **握手时就定下来了**（令牌翻出来的），比任何事件都早；
+    * ``token`` —— 客户端带的明文令牌（吊销时用得着），同样握手时就有；
+    * ``self_id`` —— 收到第一条事件后才学到（``None`` 表示还没收到）。
+    """
+
+    def __init__(
+        self,
+        ws: ServerConnection,
+        *,
+        options: OneBotOptions,
+        logger: BaseLogger,
+        account: str = "",
+        token: str = "",
+        token_id: str = "",
+    ) -> None:
+        self._ws: ServerConnection = ws
+        self._options: OneBotOptions = options
+        self._log: BaseLogger = logger
+        #: echo -> 等回应的 future；发动作时装上，收到回应 / 断开时摘掉
+        self._pending: dict[str, asyncio.Future[ActionResponse]] = {}
+        #: 这条连接的编号（在线列表列出来、踢人时按它定位）
+        self.id: str = uuid4().hex[:12]
+        #: 连上的时刻（Unix 秒）
+        self.connected_at: float = time.time()
+        #: 属于哪个账号（没配令牌注册表时是空串 = 匿名）
+        self.account: str = account
+        #: 握手时带的明文令牌；没配注册表时是空串
+        self.token: str = token
+        #: 该令牌在注册表里的记录 id（删令牌时靠它对上号）；没配注册表时是空串
+        self.token_id: str = token_id
+        #: 最近一次事件里的机器人号；一条连接通常就一个 bot
+        self.self_id: int | None = None
+
+    @property
+    def remote(self) -> str:
+        """对端地址（形如 ``127.0.0.1:53210``）。"""
+        # websockets 把 remote_address 标成 Any（unix socket 时可能是别的形状），这里 cast 表态
+        address = cast("tuple[str, int] | None", self._ws.remote_address)
+        return f"{address[0]}:{address[1]}" if address is not None else "?"
+
+    @property
+    def path(self) -> str:
+        """握手请求的路径（含查询串）。"""
+        request = self._ws.request
+        return request.path if request is not None else ""
+
+    def entry(self) -> ClientEntry:
+        """在线列表里的一行（快照）。"""
+        return ClientEntry(
+            id=self.id,
+            account=self.account,
+            self_id=self.self_id,
+            remote=self.remote,
+            connected_at=self.connected_at,
+        )
+
+    async def call(self, action: str, /, **params: object) -> ActionResponse:
+        """发一个动作并等它的回应。
+
+        ``echo`` 由本方法自动生成，用来把回应认回这一次调用；超过 ``action_timeout`` 还没
+        回应就抛 :class:`TimeoutError`，连接中途断了则抛 :class:`ConnectionError`。
+        """
+        echo = uuid4().hex
+        future: asyncio.Future[ActionResponse] = asyncio.get_running_loop().create_future()
+        self._pending[echo] = future
+        payload = json.dumps(
+            {"action": action, "params": params, "echo": echo}, ensure_ascii=False
+        )
+        try:
+            await self._ws.send(payload)
+            return await asyncio.wait_for(future, self._options.action_timeout)
+        finally:
+            self._pending.pop(echo, None)
+
+    async def close(self, *, code: int = 1000, reason: str = "") -> None:
+        """主动断开这条连接。"""
+        await self._ws.close(code, reason)
+
+    # ------------------------------------------------- 供 OneBotServer 调用
+    def accept(self, payload: Mapping[str, object]) -> OneBotEvent | None:
+        """处理一条入站报文：动作回应就地交给等待方并返回 ``None``，事件解析后返回给服务端分发。
+
+        :raises pydantic.ValidationError: 是事件但形状不对（缺字段 / ``post_type`` 不认）。
+        """
+        if not is_event(payload):
+            response = parse_action_response(payload)
+            if not self._resolve(response):
+                self._log.warning(
+                    "onebot 收到对不上的动作回应，已忽略", echo=response.echo, remote=self.remote
+                )
+            return None
+        return parse_event(payload)
+
+    def fail_pending(self, exc: BaseException) -> None:
+        """连接断了：把还在等回应的调用全部叫醒（抛 ``exc``），别让它们干等到超时。"""
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(exc)
+        self._pending.clear()
+
+    # ------------------------------------------------------------------ 内部
+    def _resolve(self, response: ActionResponse) -> bool:
+        """把一条动作回应交回等它的调用；``echo`` 对不上返回 ``False``。"""
+        future = self._pending.get(response.echo) if response.echo else None
+        if future is None or future.done():
+            return False
+        future.set_result(response)
+        return True
+
+
+def _token_of(request: Request) -> str:
+    """从握手请求里取令牌：``Authorization: Bearer <token>`` 或 ``?access_token=<token>``。
+
+    取不到返回空串（由调用方按 401 处理）。
+    """
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        return header[7:].strip()
+    query = request.path.split("?", 1)[1] if "?" in request.path else ""
+    for item in query.split("&"):
+        key, _, value = item.partition("=")
+        if key == "access_token":
+            return unquote(value)
+    return ""
+
+
+class OneBotServer:
+    """反向 WS 服务端：监听端口、管理连接、把事件分发给 ``handler``。"""
+
+    def __init__(
+        self,
+        options: OneBotOptions | None = None,
+        *,
+        handler: EventHandler | None = None,
+        tokens: TokenRegistry | None = None,
+        logger: BaseLogger | None = None,
+    ) -> None:
+        """
+        :param options: 监听地址 / 路径 / 动作超时，默认全用 :class:`OneBotOptions` 的默认值；
+        :param handler: 事件处理钩子，``async def on_event(conn, event) -> None``；不传就只记日志；
+        :param tokens: 令牌注册表（令牌 -> 账号）；传了就**必须**带有效令牌才让连，
+            不传则不校验（谁都能连，归属记成匿名）——不接数据库也能跑起来；
+        :param logger: 业务日志实例，默认 ``onebot`` 那个。
+        """
+        self._options: OneBotOptions = options if options is not None else OneBotOptions()
+        self._handler: EventHandler | None = handler
+        self._tokens: TokenRegistry | None = tokens
+        self._log: BaseLogger = (
+            logger if logger is not None else onebot_logger(ONEBOT_LOGGER_NAME)
+        )
+        self._server: Server | None = None
+        self._connections: set[OneBotConnection] = set()
+        # 握手阶段查出的归属（connection -> (账号, 明文令牌, 令牌记录 id)），_handle 里取走。
+        # 用弱键字典：万一连接没走到 _handle 就被丢掉，条目会随对象回收自动消失，不会攒着
+        self._greeted: weakref.WeakKeyDictionary[ServerConnection, tuple[str, str, str]] = (
+            weakref.WeakKeyDictionary()
+        )
+
+    @property
+    def options(self) -> OneBotOptions:
+        """当前生效的选项。"""
+        return self._options
+
+    @property
+    def tokens(self) -> TokenRegistry | None:
+        """令牌注册表（没配就是 ``None`` = 不校验）。"""
+        return self._tokens
+
+    @property
+    def connections(self) -> tuple[OneBotConnection, ...]:
+        """当前连着的客户端（快照）。"""
+        return tuple(self._connections)
+
+    # ------------------------------------------------------------------ 在线列表
+    def roster(self, *, account: str | None = None) -> tuple[ClientEntry, ...]:
+        """在线客户端列表（快照）：路由器「已连接设备」那一张表。
+
+        :param account: 只看某个账号下的客户端；``None`` 表示全部。
+        """
+        entries = [conn.entry() for conn in self._connections]
+        if account is None:
+            return tuple(entries)
+        return tuple(entry for entry in entries if entry.account == account)
+
+    async def kick(self, client_id: str, *, revoke: bool = False) -> bool:
+        """把一个客户端踢下线；没有这条连接返回 ``False``。
+
+        :param revoke: 连它的令牌一起吊销。OneBot 实现**都会自动重连**，
+            只踢不断令牌的话过几秒它又会出现在列表里；要真删掉就用 ``revoke=True``。
+        """
+        conn = next((item for item in self._connections if item.id == client_id), None)
+        if conn is None:
+            return False
+        if revoke and conn.token_id and self._tokens is not None:
+            await self._tokens.remove_by_id(conn.token_id)
+        self._log.info(
+            "onebot 客户端被踢下线", client=client_id, account=conn.account, revoked=revoke
+        )
+        await conn.close(reason="kicked")
+        return True
+
+    async def revoke_by_id(self, token_id: str) -> bool:
+        """吊销一个令牌（按记录 id），并把正用它连着的客户端全部断开。
+
+        从列表里「删掉」一个客户端走的正是这条路径：只删令牌不断连接，它还挂在列表上；
+        只断连接不删令牌，它过几秒就重连回来。
+
+        返回令牌是不是真被删掉了（本来就不存在返回 ``False``）。
+        """
+        if self._tokens is None:
+            return False
+        removed = await self._tokens.remove_by_id(token_id)
+        # 先快照再关：关连接会改动 _connections，边遍历边删不安全
+        for conn in tuple(self._connections):
+            if conn.token_id and conn.token_id == token_id:
+                await conn.close(reason="token revoked")
+        return removed
+
+    # ------------------------------------------------------------------ 生命周期
+    async def start(self) -> None:
+        """开始监听（幂等：已经在监听就什么都不做）。"""
+        if self._server is not None:
+            return
+        self._server = await serve(
+            self._handle,
+            self._options.host,
+            self._options.port,
+            process_request=self._process_request,
+            # websockets 自己每条连接都记一条，太吵；连接事件我们自己记
+            logger=None,
+        )
+        self._log.info(
+            "onebot 反向 WS 已监听",
+            host=self._options.host,
+            port=self._options.port,
+            path=self._options.path,
+            auth=self._tokens is not None,
+        )
+
+    async def serve_forever(self) -> None:
+        """起服务并一直等到被停（``stop`` 或进程被中断）。"""
+        await self.start()
+        assert self._server is not None
+        await self._server.wait_closed()
+
+    async def stop(self) -> None:
+        """停服：关掉监听并断开所有客户端。"""
+        server = self._server
+        self._server = None
+        if server is not None:
+            server.close()  # 不再收新连接，并关掉现有连接（对端会收到 GOING_AWAY）
+            await server.wait_closed()
+            self._connections.clear()
+            self._log.info("onebot 反向 WS 已停止")
+
+    # ------------------------------------------------------------------ 握手
+    async def _process_request(
+        self, connection: ServerConnection, request: Request
+    ) -> Response | None:
+        """握手时把门：路径不对 404、令牌认不出账号 401（返回 ``Response`` 即拒绝）。
+
+        令牌要查注册表（可能是一次查库），所以这里是协程——``websockets`` 允许
+        ``process_request`` 是协程函数。查出来的归属先暂存进 :attr:`_greeted`，紧接着的
+        :meth:`_handle` 会取走（同一个 ``connection`` 对象）。
+        """
+        path = request.path.split("?", 1)[0]
+        if self._options.path and path != self._options.path:
+            self._log.warning(
+                "onebot 握手路径不匹配，已拒绝", path=request.path, expect=self._options.path
+            )
+            return connection.respond(HTTPStatus.NOT_FOUND, "path not found\n")
+        registry = self._tokens
+        if registry is None:
+            return None  # 没配注册表：不校验，归属记成匿名
+        token = _token_of(request)
+        record = await registry.resolve(token) if token else None
+        if record is None:
+            self._log.warning("onebot 握手令牌无效，已拒绝", path=request.path)
+            return connection.respond(HTTPStatus.UNAUTHORIZED, "access token mismatch\n")
+        self._greeted[connection] = (record.account, token, record.id)
+        return None
+
+    # ------------------------------------------------------------------ 连接与分发
+    async def _handle(self, ws: ServerConnection) -> None:
+        """一条客户端连接的生命周期：登记 -> 收报文 -> 断开时清理。
+
+        收报文和跑业务**分成两条腿**：本协程只管读、解析、把事件塞进 ``inbox``；另起一个
+        worker（:meth:`_consume`）按序取出来交给 handler。这样 handler 里
+        ``await conn.call(...)`` 等动作回应时，收报文这条腿还是活的 —— 否则回应读不进来，
+        双方就死锁了。
+        """
+        # 握手阶段查出的归属（账号 / 令牌 / 令牌记录 id），见 _process_request；没配时是匿名
+        account, token, token_id = self._greeted.pop(ws, ("", "", ""))
+        conn = OneBotConnection(
+            ws,
+            options=self._options,
+            logger=self._log,
+            account=account,
+            token=token,
+            token_id=token_id,
+        )
+        self._connections.add(conn)
+        inbox: asyncio.Queue[OneBotEvent] = asyncio.Queue()
+        worker = asyncio.create_task(
+            self._consume(conn, inbox), name=f"onebot-events:{conn.remote}"
+        )
+        self._log.info(
+            "onebot 客户端接入",
+            remote=conn.remote,
+            path=conn.path,
+            account=conn.account,
+            total=len(self._connections),
+        )
+        try:
+            async for raw in ws:
+                await self._dispatch(conn, raw, inbox)
+        except ConnectionClosed:
+            pass  # 正常断开：对端关了，或我们主动关的
+        except Exception:
+            self._log.exception("onebot 连接处理异常", remote=conn.remote)
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+            self._connections.discard(conn)
+            conn.fail_pending(ConnectionError("连接已断开"))
+            self._log.info(
+                "onebot 客户端断开",
+                remote=conn.remote,
+                account=conn.account,
+                total=len(self._connections),
+            )
+
+    async def _consume(self, conn: OneBotConnection, inbox: asyncio.Queue[OneBotEvent]) -> None:
+        """worker：按序把事件交给 handler（一条处理完再下一条，业务不用自己排队）。"""
+        while True:
+            event = await inbox.get()
+            await self._emit(conn, event)
+
+    async def _dispatch(
+        self, conn: OneBotConnection, raw: str | bytes, inbox: asyncio.Queue[OneBotEvent]
+    ) -> None:
+        """一条原始报文：解 JSON -> 事件入队给 worker，动作回应就地交给等它的调用。"""
+        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        try:
+            # json.loads 在 typeshed 里返回 Any，先 cast 成 object 表态，下面用 isinstance 现场校验
+            loaded = cast(object, json.loads(text))
+        except ValueError:
+            self._log.warning("onebot 收到非 JSON 文本，已忽略", remote=conn.remote)
+            return
+        if not isinstance(loaded, dict):
+            self._log.warning("onebot 收到非对象 JSON，已忽略", remote=conn.remote)
+            return
+
+        payload = cast("dict[str, object]", loaded)
+        try:
+            event = conn.accept(payload)
+        except ValidationError as exc:
+            self._log.warning("onebot 报文解析失败，已忽略", remote=conn.remote, error=str(exc))
+            return
+        if event is not None:
+            # 机器人号要到第一条事件才露面：记到连接上，在线列表才列得出来
+            if conn.self_id is None and event.self_id:
+                conn.self_id = event.self_id
+            inbox.put_nowait(event)
+
+    async def _emit(self, conn: OneBotConnection, event: OneBotEvent) -> None:
+        """把事件交给业务钩子。
+
+        心跳（``meta_event`` / ``heartbeat``）只记日志、**不打扰业务**（几秒一条，交给 handler
+        会逼着业务自己过滤）；其余事件（含生命周期）都照常交给 handler。
+        """
+        if isinstance(event, MetaEvent):
+            if event.meta_event_type == "heartbeat":
+                self._log.debug("onebot 心跳", remote=conn.remote, self_id=event.self_id)
+                return
+            self._log.info(
+                "onebot 生命周期",
+                remote=conn.remote,
+                self_id=event.self_id,
+                sub_type=event.sub_type,
+            )
+        if self._handler is None:
+            self._log.debug(
+                "onebot 未注册事件处理器，事件已丢弃",
+                post_type=event.post_type,
+                remote=conn.remote,
+            )
+            return
+        try:
+            await self._handler(conn, event)
+        except Exception:
+            self._log.exception(
+                "onebot 事件处理器抛出异常", post_type=event.post_type, remote=conn.remote
+            )
