@@ -1,0 +1,54 @@
+.layout {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* 桌面：左侧留出侧栏宽度（侧栏固定定位时也成立） */
+  margin-left: var(--sidebar-w);
+  transition: margin-left 0.22s var(--ease-out);
+}
+
+/* 桌面折叠：主区跟着收 */
+.collapsed .main {
+  margin-left: var(--sidebar-w-collapsed);
+}
+
+.content {
+  flex: 1;
+  padding: 28px 32px 48px;
+}
+
+/* 遮罩：仅小屏出现 */
+.overlay {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   小屏：侧栏脱离文档流变抽屉，主区占满
+   --------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  .main,
+  .collapsed .main {
+    margin-left: 0;
+  }
+
+  .content {
+    padding: 20px 16px 40px;
+  }
+
+  .overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: var(--overlay);
+    backdrop-filter: blur(2px);
+    animation: fade-in 0.2s ease;
+  }
+}

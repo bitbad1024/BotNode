@@ -1,0 +1,222 @@
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: var(--topbar-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 24px;
+  background: var(--topbar-bg);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* 汉堡仅小屏显示，折叠按钮仅桌面显示。
+   用 button.类 提升特异性，避免与全局 .icon-btn 的 display 规则
+   因样式注入顺序而互相覆盖。 */
+button.menu-btn {
+  display: none;
+}
+button.collapse-btn {
+  display: inline-flex;
+}
+
+.title {
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 用户菜单 */
+.user-wrap {
+  position: relative;
+}
+
+.user-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px 5px 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-1);
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+.user-btn:hover {
+  background: var(--nav-hover-bg);
+  border-color: var(--border);
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+
+.user-meta {
+  display: flex;
+  align-items: center;
+}
+.user-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caret {
+  color: var(--text-3);
+}
+
+/* 下拉 */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 101;
+  width: 248px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  padding: 8px;
+  animation: rise-in 0.18s var(--ease-out);
+}
+
+.menu-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px;
+}
+.menu-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+.menu-user {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.menu-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-account {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.menu-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px 8px;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.logout-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  background: none;
+  color: var(--danger);
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  transition: background 0.16s ease;
+}
+.logout-btn:hover {
+  background: var(--danger-bg);
+}
+
+/* 手机（<768）：汉堡显示、折叠按钮隐藏、只留头像 */
+@media (max-width: 767px) {
+  .topbar {
+    padding: 0 14px;
+  }
+  button.menu-btn {
+    display: inline-flex;
+  }
+  button.collapse-btn {
+    display: none;
+  }
+  .user-meta,
+  .caret {
+    display: none;
+  }
+  .user-btn {
+    padding: 0;
+    border: none;
+    background: transparent;
+  }
+  .user-btn:hover {
+    background: transparent;
+  }
+  .title {
+    font-size: 15.5px;
+  }
+}
