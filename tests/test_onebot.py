@@ -22,6 +22,7 @@ pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip in
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 from websockets.asyncio.client import connect  # noqa: E402
 from websockets.exceptions import ConnectionClosed, InvalidStatus  # noqa: E402
@@ -45,6 +46,7 @@ from nacho.onebot import (  # noqa: E402
     OneBotServer,
     SqlTokenRegistry,
 )
+from nacho.onebot import tokens as tokens_module  # noqa: E402
 
 #: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
 ADMIN = {"account": "admin", "password": "nacho-admin"}
@@ -161,6 +163,64 @@ async def test_sql_registry_roundtrip(tmp_path: Path) -> None:
         assert await registry.remove_by_id(issued.record.id) is True
     finally:
         await engine.dispose()
+
+
+def sql_engine(tmp_path: Path) -> AsyncEngine:
+    """临时库上的异步引擎（签发重试那几个用例自己管 dispose）。"""
+    return create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'collide.db').as_posix()}")
+
+
+async def test_issue_retries_when_digest_collides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """摘要撞上已有记录：换一个令牌再来（把生成器钉死，碰撞就能确定性地造出来）。"""
+    engine = sql_engine(tmp_path)
+    try:
+        registry = SqlTokenRegistry(engine)
+        await registry.ensure_schema()
+        first = await registry.issue("alice")
+
+        # 第一次还生成 first.token（必撞），第二次给一个新的：应当重试后成功
+        generated = iter([first.token, "nbo_fresh"])
+        monkeypatch.setattr(tokens_module, "generate_token", lambda: next(generated))
+
+        second = await registry.issue("alice")
+        assert second.token == "nbo_fresh"
+        assert await registry.resolve(first.token) is not None  # 原来那个还在
+        assert await registry.resolve("nbo_fresh") is not None
+    finally:
+        await engine.dispose()
+
+
+async def test_issue_gives_up_after_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """一直撞：试满上限就把错抛出来——绝不退回一个跟别人一样的令牌。"""
+    engine = sql_engine(tmp_path)
+    try:
+        registry = SqlTokenRegistry(engine)
+        await registry.ensure_schema()
+        first = await registry.issue("alice")
+        monkeypatch.setattr(tokens_module, "generate_token", lambda: first.token)
+
+        with pytest.raises(IntegrityError):
+            await registry.issue("alice")
+        assert len(await registry.items()) == 1  # 没留下半截记录
+    finally:
+        await engine.dispose()
+
+
+async def test_memory_issue_skips_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """内存版没有唯一索引兜底，自己看一眼摘要：撞了就换一个。"""
+    registry = InMemoryTokenRegistry()
+    first = await registry.issue("alice")
+
+    generated = iter([first.token, "nbo_fresh"])
+    monkeypatch.setattr(tokens_module, "generate_token", lambda: next(generated))
+
+    second = await registry.issue("alice")
+    assert second.token == "nbo_fresh"
+    assert await registry.resolve(first.token) is not None
 
 
 # --------------------------------------------------------------------------- 握手：令牌定归属
