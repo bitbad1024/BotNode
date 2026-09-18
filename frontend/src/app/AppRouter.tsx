@@ -5,6 +5,7 @@ import AppLayout from '../features/layout/AppLayout'
 import LoginPage from '../features/auth/LoginPage'
 import DashboardPage from '../features/dashboard/DashboardPage'
 import RobotsPage from '../features/robots/RobotsPage'
+import TokensPage from '../features/tokens/TokensPage'
 import SchedulePage from '../features/schedule/SchedulePage'
 import LogsPage from '../features/logs/LogsPage'
 
@@ -17,6 +18,7 @@ export default function AppRouter() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/robots" element={<RobotsPage />} />
+          <Route path="/tokens" element={<TokensPage />} />
           <Route path="/schedule" element={<SchedulePage />} />
           <Route path="/logs" element={<LogsPage />} />
         </Route>

@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import { NAV_ITEMS } from '../layout/nav'
 import {
   IconRobot,
+  IconKey,
   IconSchedule,
   IconLogs,
   IconCopy,
@@ -23,6 +24,7 @@ import styles from './DashboardPage.module.css'
 
 const MODULE_ICONS = {
   '/robots': IconRobot,
+  '/tokens': IconKey,
   '/schedule': IconSchedule,
   '/logs': IconLogs,
 } as const
@@ -209,6 +211,7 @@ export default function DashboardPage() {
                   <span className={styles.moduleName}>{m.label}</span>
                   <span className={styles.moduleHint}>
                     {m.path === '/robots' && '机器人在线状态与任务'}
+                    {m.path === '/tokens' && 'OneBot 令牌签发、吊销与在线客户端'}
                     {m.path === '/schedule' && 'cron 定时任务编排'}
                     {m.path === '/logs' && '运行日志检索'}
                   </span>
