@@ -30,10 +30,19 @@ import sys
 from collections.abc import Sequence
 from contextlib import suppress
 from typing import cast
+from urllib.parse import quote_plus
 
 import uvicorn
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from config import BASE_DIR, CONFIG_PATH, TEMPLATE_PATH, ConfigError, Settings
+from config import (
+    BASE_DIR,
+    CONFIG_PATH,
+    TEMPLATE_PATH,
+    ConfigError,
+    DatabaseSettings,
+    Settings,
+)
 from nacho import __version__
 from nacho.api import ApiOptions, attach_api_logging, create_app
 from nacho.core.cache import CacheOptions, cache
@@ -59,6 +68,8 @@ _db_adapters: list[SqliteAdapter | MariadbAdapter] = []
 #: 接口层 HTTP 服务（随主程序由 uvicorn 起）；引用放模块级，供 _shutdown 停机时取用
 _api_server: uvicorn.Server | None = None
 _api_task: asyncio.Task[None] | None = None
+#: 接口层用的异步引擎（SQLModel 查 users 表）；停机时要 dispose
+_api_engine: AsyncEngine | None = None
 
 
 class _NoSignalServer(uvicorn.Server):
@@ -168,9 +179,29 @@ async def _shutdown() -> None:
     await manager.stop()  # 停机自动冲刷余量
     for adapter in _db_adapters:  # 余量落库之后再关连接
         adapter.close()
+    if _api_engine is not None:  # 接口层的引擎（连接池）单独收
+        await _api_engine.dispose()
 
 
 # --------------------------------------------------------------------------- 入口
+def _build_user_engine(db: DatabaseSettings) -> AsyncEngine:
+    """按配置建接口层的异步引擎（接口层用 SQLModel 查 ``users`` 表，不手写 SQL）。
+
+    复用 ``[database]`` 公共节的连接信息；异步驱动与数据库层那份同步驱动不同：
+    sqlite 走 ``aiosqlite``，mariadb 走 ``aiomysql``（数据库层日志落库用的是
+    sqlite3 / PyMySQL，两套驱动各管一段，互不干扰）。
+    """
+    if db.driver == "mariadb":
+        url = (
+            f"mysql+aiomysql://{quote_plus(db.user)}:{quote_plus(db.password)}"
+            f"@{db.host}:{db.port}/{db.database}"
+        )
+    else:
+        db.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
+        url = f"sqlite+aiosqlite:///{db.path.as_posix()}"
+    return create_async_engine(url)
+
+
 def _parse_args(argv: Sequence[str] | None) -> str:
     """解析命令行参数，返回配置文件路径。"""
     parser = argparse.ArgumentParser(description="nacho 应用入口")
@@ -192,11 +223,12 @@ async def _main(argv: Sequence[str] | None = None) -> None:
 
     try:
         core = await setup(settings)
+        user_engine = _build_user_engine(settings.database)  # RuntimeError = 数据库连不上
     except (ConfigError, RuntimeError) as exc:  # RuntimeError = 数据库连不上等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
-    global _api_server, _api_task
+    global _api_server, _api_task, _api_engine
     try:
         core.info(
             "应用启动完成",
@@ -206,9 +238,13 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
 
-        # 接口层：先挂日志（落 logs/api.log），再建应用，最后用 uvicorn 随主程序起 HTTP 服务
+        # 接口层：先挂日志（落 logs/api.log），再建应用（注入真实数据库引擎），最后用 uvicorn 随主程序起
         attach_api_logging(BASE_DIR / "logs" / "api.log")
-        api_app = create_app(ApiOptions.from_mapping(settings.api.model_dump()))
+        _api_engine = user_engine
+        api_app = create_app(
+            ApiOptions.from_mapping(settings.api.model_dump()),
+            db=user_engine,
+        )
         _api_server = _NoSignalServer(
             uvicorn.Config(
                 api_app,

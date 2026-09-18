@@ -10,7 +10,8 @@
    ``app.state`` 上给路由注入。
 
 依赖全是可选的：不传 ``user_store`` 就用内存演示账号，不传 ``hasher`` / ``tokens`` 就走
-默认实现，所以 **不接数据库也能直接跑起来**。
+默认实现；传了 ``db``（``AsyncEngine``）就改用落库版 :class:`~nacho.api.services.user.store_sql.SqlUserStore`
+（SQLModel 查 ``users`` 表，启动时建表），所以 **不接数据库也能直接跑起来**。
 
 用法::
 
@@ -28,6 +29,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from nacho import __version__
 from nacho.core.logger import BaseLogger
 
@@ -40,6 +43,7 @@ from .services.auth.protocols import TokenService
 from .services.user.protocols import PasswordHasher, UserStore
 from .services.user.security import Pbkdf2PasswordHasher
 from .services.user.store import InMemoryUserStore
+from .services.user.store_sql import SqlUserStore
 from .options import ApiOptions
 
 
@@ -49,6 +53,7 @@ def create_app(
     user_store: UserStore | None = None,
     hasher: PasswordHasher | None = None,
     tokens: TokenService | None = None,
+    db: AsyncEngine | None = None,
     title: str = "nacho",
     version: str = __version__,
     logger: BaseLogger | None = None,
@@ -56,18 +61,31 @@ def create_app(
     """装配一个 FastAPI 应用（接口层的对外门面）。
 
     :param options: 接口层选项（路由前缀、令牌有效期、访问日志开关、签名密钥）；
-    :param user_store: 用户存储，默认内存演示账号；
+    :param user_store: 用户存储，默认内存演示账号；传了就直接用；
     :param hasher: 密码哈希器，默认 PBKDF2；
     :param tokens: 令牌签发器，默认 HMAC 令牌（密钥取 ``options.secret``，空则随机）；
+    :param db: 异步引擎（``AsyncEngine``）；传了就用落库版
+        :class:`~nacho.api.services.user.store_sql.SqlUserStore`（SQLModel 查 ``users`` 表），
+        没传（也没传 ``user_store``）就退回内存演示账号——**不接数据库也能直接跑起来**；
     :param title / version: OpenAPI 文档上的标题与版本；
     :param logger: 业务日志实例，默认 ``api`` 那个。
     """
     chosen: ApiOptions = options if options is not None else ApiOptions()
     log: BaseLogger = logger if logger is not None else api_logger(API_LOGGER_NAME)
+    chosen_hasher: PasswordHasher = hasher if hasher is not None else Pbkdf2PasswordHasher()
+
+    # 选用户存储：显式传的优先 -> 给了 db 就用落库版 -> 否则内存演示（保证开箱即跑）
+    store: UserStore
+    if user_store is not None:
+        store = user_store
+    elif db is not None:
+        store = SqlUserStore(db, hasher=chosen_hasher)
+    else:
+        store = InMemoryUserStore.demo(chosen_hasher)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        """启动 / 停机各记一条：什么时候起的服务、令牌多久过期，日志里一眼能看到。"""
+        """启动 / 停机各记一条；落库存储在这里建表 + 空表种演示账号。"""
         log.info(
             "接口层启动",
             title=app.title,
@@ -75,6 +93,10 @@ def create_app(
             token_ttl=chosen.token_ttl,
             access_log=chosen.access_log,
         )
+        # 落到库的存储：启动时先确保表在、空表种演示账号（幂等）；store 是闭包里的局部变量
+        if isinstance(store, SqlUserStore):
+            await store.ensure_schema()
+            await store.seed_demo()
         try:
             yield
         finally:
@@ -92,9 +114,8 @@ def create_app(
     app.include_router(auth_router, prefix=chosen.prefix)
 
     # 依赖注入：服务在这一层建好挂上去（换存储 / 换算法只改这一处）
-    chosen_hasher: PasswordHasher = hasher if hasher is not None else Pbkdf2PasswordHasher()
     app.state.auth_service = AuthService(
-        user_store if user_store is not None else InMemoryUserStore.demo(chosen_hasher),
+        store,
         hasher=chosen_hasher,
         tokens=tokens,
         ttl=chosen.token_ttl,

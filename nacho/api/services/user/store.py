@@ -15,15 +15,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from .demo import DEMO_USERS
 from .models import UserRecord
 from .protocols import PasswordHasher
-
-#: 演示账号：账号 -> (密码, 昵称, 角色, 是否停用)
-_DEMO_USERS: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = (
-    ("admin", "nacho-admin", "管理员", ("admin", "user"), False),
-    ("robot", "nacho-robot", "巡检机器人", ("user",), False),
-    ("guest", "nacho-guest", "停用账号", ("user",), True),
-)
 
 
 class InMemoryUserStore:
@@ -78,9 +72,9 @@ class InMemoryUserStore:
 
     @classmethod
     def demo(cls, hasher: PasswordHasher) -> "InMemoryUserStore":
-        """造一份带演示账号的存储（三个固定账号，见本模块文档）。"""
+        """造一份带演示账号的存储（三个固定账号，见 :mod:`~nacho.api.services.user.demo`）。"""
         store = cls()
-        for account, password, nickname, roles, disabled in _DEMO_USERS:
+        for account, password, nickname, roles, disabled in DEMO_USERS:
             store.add(
                 account,
                 password,
