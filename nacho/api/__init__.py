@@ -16,6 +16,7 @@
         encoding.py     base64 编解码（哈希串与令牌共用）
     api/            入口层：认识 FastAPI（路由 / 依赖 / 请求响应）
         auth/           鉴权接口：登录、当前用户
+        onebot/         OneBot 管理接口：在线客户端列表、踢人、令牌签发与吊销
     services/       业务层：不认识 FastAPI
         user/           用户：形状 / 校验规则 / 协议 / 默认实现
         auth/           鉴权：令牌 / 凭据换令牌的服务
@@ -68,9 +69,17 @@ from .logging import (
     api_logger,
     attach_api_logging,
 )
-from .api import auth_router
+from .api import auth_router, onebot_router
 from .api.auth.requests import LoginRequest
 from .api.auth.responses import LoginData
+from .api.onebot import (
+    ClientData,
+    IssuedTokenData,
+    IssueTokenRequest,
+    KickData,
+    RevokeData,
+    TokenData,
+)
 from .services.auth import AuthService, HmacTokenService, TokenClaims, TokenService, resolve_secret
 from .services.auth.models import Credentials, LoginResult
 from .services.user import (
@@ -98,6 +107,14 @@ __all__ = [
     "DEFAULT_PREFIX",
     "DEFAULT_TOKEN_TTL",
     "auth_router",
+    "onebot_router",
+    # OneBot 管理接口
+    "IssueTokenRequest",
+    "ClientData",
+    "TokenData",
+    "IssuedTokenData",
+    "KickData",
+    "RevokeData",
     # 响应壳
     "ApiResponse",
     "ErrorResponse",

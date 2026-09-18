@@ -21,11 +21,17 @@ nacho/api/
 │   ├── dependencies.py   取请求编号
 │   └── encoding.py       base64 编解码
 ├── api/              ★ 入口层：只管「对外怎么说」，认识 FastAPI
-│   └── auth/
-│       ├── router.py         POST /auth/login、GET /auth/me
-│       ├── dependencies.py   get_auth_service / bearer_scheme
-│       ├── requests.py       LoginRequest（请求 schema）
-│       └── responses.py      LoginData（响应 schema）
+│   ├── auth/
+│   │   ├── router.py         POST /auth/login、GET /auth/me
+│   │   ├── dependencies.py   get_auth_service / bearer_scheme
+│   │   ├── requests.py       LoginRequest（请求 schema）
+│   │   └── responses.py      LoginData（响应 schema）
+│   └── onebot/       OneBot 管理（服务本身在 nacho.onebot，按协议取用，不 import）
+│       ├── router.py         在线列表 / 踢人 / 令牌签发与吊销
+│       ├── protocols.py      OneBotLike / TokenRegistryLike（结构化协议）
+│       ├── dependencies.py   get_onebot / CurrentUserDep
+│       ├── requests.py       IssueTokenRequest
+│       └── responses.py      ClientData / TokenData / IssuedTokenData…
 └── services/        ★ 业务层：只算「业务怎么办」，不认识 FastAPI
     ├── user/        用户：models/protocols/security/store/validation
     └── auth/        鉴权：models/service/protocols/security
@@ -83,8 +89,9 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/__init__.py` | 入口层总览，导出 `auth_router`。 |
+| `api/__init__.py` | 入口层总览，导出 `auth_router`、`onebot_router`。 |
 | `api/auth/__init__.py` | 鉴权入口汇总（登录 / 当前用户两个接口）。 |
+| `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销）。 |
 
 ### 3.2 api/auth/ —— 鉴权入口
 
@@ -94,6 +101,20 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/auth/dependencies.py` | 路由注入件：`get_auth_service`（从 `app.state` 取服务）、`bearer_scheme`/`BearerDep`/`AuthServiceDep`。 |
 | `api/auth/requests.py` | 请求体 `LoginRequest`，字段复用 `services.user.validation` 的 `Account` / `Password`。 |
 | `api/auth/responses.py` | 响应体 `LoginData`（令牌 + 有效期 + 用户资料），用户资料复用 `UserProfile`。 |
+
+### 3.3 api/onebot/ —— OneBot 管理入口
+
+> 把 OneBot 的「在线客户端列表」与「令牌管理」做成 HTTP 接口。服务本身在 `nacho.onebot`，
+> 由主程序装配时传进 `create_app(onebot=...)`；**这里不 import `nacho.onebot`**（那样等于
+> 装 api 就必装 websockets），只按 `protocols.py` 里的结构化协议取用。
+
+| 文件 | 作用 |
+|---|---|
+| `api/onebot/router.py` | **HTTP 入口**：`GET <prefix>/onebot/clients`（在线列表，可 `?account=` 过滤）、`DELETE <prefix>/onebot/clients/{id}`（踢下线，`?revoke=true` 连令牌一起吊销）、`GET/POST <prefix>/onebot/tokens`（列表 / 签发）、`DELETE <prefix>/onebot/tokens/{id}`（吊销并断开）。全部要求登录。 |
+| `api/onebot/protocols.py` | 结构化协议：`OneBotLike` / `TokenRegistryLike` / `ClientLike` / `TokenLike`（数据成员写成**只读属性**，对面是冻结数据类）。靠它做到两边互不 import。 |
+| `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）。 |
+| `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
+| `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
 
 ---
 

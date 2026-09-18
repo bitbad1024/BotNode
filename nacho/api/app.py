@@ -6,12 +6,17 @@
 2. 装 :class:`~nacho.api.common.middlewares.RequestLogMiddleware`（编号 + 访问日志）；
 3. 装异常处理器（:func:`~nacho.api.common.errors.register_exception_handlers`）—— 出去的错误
    都是 :class:`~nacho.api.common.models.ErrorResponse` 那个形状；
-4. 挂各业务模块的路由（现在只有鉴权那一份 ``<prefix>/auth``），并把各模块的服务挂到
-   ``app.state`` 上给路由注入。
+4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``），并把各模块
+   的服务挂到 ``app.state`` 上给路由注入。
 
 依赖全是可选的：不传 ``user_store`` 就用内存演示账号，不传 ``hasher`` / ``tokens`` 就走
 默认实现；传了 ``db``（``AsyncEngine``）就改用落库版 :class:`~nacho.api.services.user.store_sql.SqlUserStore`
 （SQLModel 查 ``users`` 表，启动时建表），所以 **不接数据库也能直接跑起来**。
+
+``onebot`` 同样是可选的：主程序把 :class:`nacho.onebot.OneBotServer` 传进来，
+``<prefix>/onebot/*`` 那组管理接口才有用；没传就回 503（「没接入」和「出错了」分开报）。
+这里按 :class:`~nacho.api.api.onebot.protocols.OneBotLike` 协议接收，所以 **接口层不 import
+``nacho.onebot``** —— 只装 ``nacho[api]`` 也能跑起来（具体说明见那个模块）。
 
 用法::
 
@@ -37,7 +42,8 @@ from nacho.core.logger import BaseLogger
 from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger
-from .api import auth_router
+from .api import auth_router, onebot_router
+from .api.onebot.protocols import OneBotLike
 from .services.auth import AuthService
 from .services.auth.protocols import TokenService
 from .services.user.protocols import PasswordHasher, UserStore
@@ -54,6 +60,7 @@ def create_app(
     hasher: PasswordHasher | None = None,
     tokens: TokenService | None = None,
     db: AsyncEngine | None = None,
+    onebot: OneBotLike | None = None,
     title: str = "nacho",
     version: str = __version__,
     logger: BaseLogger | None = None,
@@ -67,6 +74,8 @@ def create_app(
     :param db: 异步引擎（``AsyncEngine``）；传了就用落库版
         :class:`~nacho.api.services.user.store_sql.SqlUserStore`（SQLModel 查 ``users`` 表），
         没传（也没传 ``user_store``）就退回内存演示账号——**不接数据库也能直接跑起来**；
+    :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``）；传了 ``<prefix>/onebot/*``
+        那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，没传时这些接口回 503；
     :param title / version: OpenAPI 文档上的标题与版本；
     :param logger: 业务日志实例，默认 ``api`` 那个。
     """
@@ -112,6 +121,7 @@ def create_app(
     app.add_middleware(RequestLogMiddleware, options=chosen, logger=None)
     register_exception_handlers(app, logger=log)
     app.include_router(auth_router, prefix=chosen.prefix)
+    app.include_router(onebot_router, prefix=chosen.prefix)
 
     # 依赖注入：服务在这一层建好挂上去（换存储 / 换算法只改这一处）
     app.state.auth_service = AuthService(
@@ -122,4 +132,6 @@ def create_app(
         secret=chosen.secret,
         logger=log,
     )
+    # OneBot 服务端（可空）：没传时 <prefix>/onebot/* 回 503，见 onebot/dependencies.py
+    app.state.onebot_server = onebot
     return app
