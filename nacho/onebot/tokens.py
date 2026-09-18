@@ -22,16 +22,29 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 #: 令牌明文的前缀：日志里一眼能认出这是本框架的令牌
 TOKEN_PREFIX: str = "nbo_"
+#: 签发时撞上已有摘要的重试上限。撞的概率极低（见 :func:`generate_token`），
+#: 这里只是兜底——真试满了就把错抛出去，绝不退回一个"跟别人一样"的令牌
+MAX_ISSUE_ATTEMPTS: int = 3
 
 
 def generate_token() -> str:
-    """造一个新令牌（明文）；只在签发时露一次，之后查不回来（库里只有摘要）。"""
+    """造一个新令牌（明文）；只在签发时露一次，之后查不回来（库里只有摘要）。
+
+    这里**不做插入前查重**：32 字节随机 = 256 位熵，签发一百万个撞上的概率约
+    ``4e-66``（作为对照：UUID4 只有 122 位，而业界向来是直接用、不查重的）。
+    插入前查也没用——查完到插入之间别的进程照样能插进去（TOCTOU），唯一能保证的
+    是数据库那道唯一索引（``token_hash`` 上的 ``ix_onebot_tokens_token_hash``）。
+
+    兜底放在**插入之后**：撞了唯一索引就换一个再试，见 :meth:`SqlTokenRegistry.issue`，
+    最多 :data:`MAX_ISSUE_ATTEMPTS` 次；试满就把错抛出去，绝不退回一个跟别人一样的令牌。
+    """
     return TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
@@ -87,7 +100,9 @@ class TokenRegistry(Protocol):
         ...
 
     async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        """给 ``account`` 签一个新令牌。"""
+        """给 ``account`` 签一个新令牌；摘要万一撞上已有记录会换一个重试（见
+        :func:`generate_token`），试满 :data:`MAX_ISSUE_ATTEMPTS` 就把错抛出去。
+        """
         ...
 
     async def items(self) -> tuple[TokenRecord, ...]:
@@ -170,17 +185,35 @@ class SqlTokenRegistry:
         return _to_record(row)
 
     async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        token = generate_token()
-        row = TokenTable(
-            id=f"t-{uuid4().hex[:16]}",
-            token_hash=hash_token(token),
-            account=account,
-            remark=remark,
-        )
-        async with self._sessions() as session:
-            session.add(row)
-            await session.commit()
-        return IssuedToken(record=_to_record(row), token=token)
+        """给一个账号签新令牌。
+
+        撞上已有记录（``token_hash`` 或 ``id`` 的唯一约束）就换一个再试，最多
+        :data:`MAX_ISSUE_ATTEMPTS` 次——概率极低，但真撞了要能自己恢复，而不是
+        让客户端拿到一个「已经在用」的令牌。
+
+        :raises sqlalchemy.exc.IntegrityError: 试满还撞（概率可忽略）：响亮地失败，
+            绝不退回一个跟别人一样的令牌。
+        """
+        collision: IntegrityError | None = None
+        for _ in range(MAX_ISSUE_ATTEMPTS):
+            token = generate_token()
+            row = TokenTable(
+                id=f"t-{uuid4().hex[:16]}",
+                token_hash=hash_token(token),
+                account=account,
+                remark=remark,
+            )
+            try:
+                async with self._sessions() as session:
+                    session.add(row)
+                    await session.commit()
+            except IntegrityError as exc:
+                collision = exc  # 撞了：退出时会话会回滚，换个令牌再来
+                continue
+            return IssuedToken(record=_to_record(row), token=token)
+        # 循环体要么 return，要么记下 collision；走到这里说明试满了
+        assert collision is not None
+        raise collision
 
     async def items(self) -> tuple[TokenRecord, ...]:
         async with self._sessions() as session:
@@ -216,15 +249,21 @@ class InMemoryTokenRegistry:
         return None
 
     async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        token = generate_token()
-        record = TokenRecord(
-            id=f"t-{uuid4().hex[:16]}",
-            account=account,
-            remark=remark,
-            created_at=time.time(),
-        )
-        self._rows[record.id] = (record, token)
-        return IssuedToken(record=record, token=token)
+        """同 :meth:`SqlTokenRegistry.issue`；内存版没有唯一索引兜底，所以自己看一眼摘要。"""
+        for _ in range(MAX_ISSUE_ATTEMPTS):
+            token = generate_token()
+            digest = hash_token(token)
+            if any(hash_token(plain) == digest for _, plain in self._rows.values()):
+                continue  # 撞了：换一个
+            record = TokenRecord(
+                id=f"t-{uuid4().hex[:16]}",
+                account=account,
+                remark=remark,
+                created_at=time.time(),
+            )
+            self._rows[record.id] = (record, token)
+            return IssuedToken(record=record, token=token)
+        raise RuntimeError(f"连续 {MAX_ISSUE_ATTEMPTS} 次生成的令牌都撞上已有记录")
 
     async def items(self) -> tuple[TokenRecord, ...]:
         return tuple(record for record, _ in self._rows.values())
