@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 from uuid import uuid4
 
@@ -111,6 +111,16 @@ class TokenRegistry(Protocol):
 
     async def remove_by_id(self, token_id: str) -> bool:
         """按记录 id 吊销（管理接口列表里拿到的是 id）；真删掉了返回 ``True``。"""
+        ...
+
+    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
+        """启用 / 停用一条令牌；真改到了返回 ``True``（id 不存在返回 ``False``）。
+
+        停用 = **不许再连**（握手时认不出来，按 401 拒），但记录还在、可以随时启用回来
+        ——和 :meth:`remove_by_id` 的「吊销」（删记录，不可逆）是两回事。
+        已经在连着的客户端由服务端顺带断开，见
+        :meth:`nacho.onebot.OneBotServer.set_token_enabled`。
+        """
         ...
 
 
@@ -229,6 +239,15 @@ class SqlTokenRegistry:
             await session.commit()
             return True
 
+    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
+        async with self._sessions() as session:
+            row = await session.get(TokenTable, token_id)
+            if row is None:
+                return False
+            row.enabled = enabled
+            await session.commit()
+            return True
+
 
 # --------------------------------------------------------------------------- 内存实现
 class InMemoryTokenRegistry:
@@ -270,3 +289,12 @@ class InMemoryTokenRegistry:
 
     async def remove_by_id(self, token_id: str) -> bool:
         return self._rows.pop(token_id, None) is not None
+
+    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
+        existing = self._rows.get(token_id)
+        if existing is None:
+            return False
+        record, plain = existing
+        # TokenRecord 是 frozen：改字段得换一个新对象（dataclasses.replace 正合适）
+        self._rows[token_id] = (replace(record, enabled=enabled), plain)
+        return True

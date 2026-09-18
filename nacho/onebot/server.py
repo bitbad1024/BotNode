@@ -304,6 +304,21 @@ class OneBotServer:
                 await conn.close(reason="token revoked")
         return removed
 
+    async def set_token_enabled(self, token_id: str, enabled: bool) -> bool:
+        """启用 / 停用一条令牌（记录还在，随时能启用回来；和"吊销"不同）。
+
+        停用**不只是**「下次不许连」：正用它连着的客户端会一并断开——否则令牌明明
+        被禁用了，客户端却还挂在在线列表上，看着像开关没生效。断开后它重连会被 401 拒。
+        """
+        if self._tokens is None:
+            return False
+        changed = await self._tokens.set_enabled(token_id, enabled)
+        if changed and not enabled:
+            for conn in tuple(self._connections):
+                if conn.token_id and conn.token_id == token_id:
+                    await conn.close(reason="token disabled")
+        return changed
+
     # ------------------------------------------------------------------ 生命周期
     async def start(self) -> None:
         """开始监听（幂等：已经在监听就什么都不做）。"""
