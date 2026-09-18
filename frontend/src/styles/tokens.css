@@ -1,0 +1,116 @@
+/* ==========================================================================
+   nacho console —— 设计令牌（明 / 暗双主题）
+   简约 · 大气：zinc 中性灰阶撑层级，indigo 只用于焦点 / 激活 / 链接。
+   主题切换：<html data-theme="light | dark">
+   ========================================================================== */
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
+  /* 表面层级 */
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f2f3f6;
+  --inset: #f6f7f9;
+  --sidebar-bg: #ffffff;
+  --topbar-bg: rgba(255, 255, 255, 0.82);
+  --overlay: rgba(15, 16, 20, 0.42);
+
+  /* 文字 */
+  --text-1: #101014;
+  --text-2: #55565f;
+  --text-3: #95969f;
+
+  /* 边框 */
+  --border: rgba(16, 16, 20, 0.09);
+  --border-strong: rgba(16, 16, 20, 0.16);
+
+  /* 强调色 */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(79, 70, 229, 0.1);
+  --accent-border: rgba(79, 70, 229, 0.26);
+
+  /* 侧栏选中态 */
+  --nav-active-bg: var(--accent-soft);
+  --nav-active-text: var(--accent);
+  --nav-hover-bg: rgba(16, 16, 20, 0.045);
+
+  /* 状态 */
+  --danger: #dc2626;
+  --danger-ink: #b91c1c;
+  --danger-bg: #fef2f2;
+  --danger-line: #f7d2d2;
+  --success: #059669;
+  --success-soft: rgba(5, 150, 105, 0.1);
+  --warning: #d97706;
+  --warning-soft: rgba(217, 119, 6, 0.1);
+
+  /* 阴影 */
+  --shadow-card: 0 1px 2px rgba(16, 16, 20, 0.04);
+  --shadow-pop: 0 18px 44px -18px rgba(16, 16, 20, 0.22),
+    0 4px 12px -8px rgba(16, 16, 20, 0.1);
+
+  /* 圆角 */
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+
+  /* 布局尺寸 */
+  --sidebar-w: 236px;
+  --sidebar-w-collapsed: 68px;
+  --topbar-h: 60px;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC',
+    sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono',
+    'Cascadia Code', Consolas, monospace;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0a0a0e;
+  --surface: #14141a;
+  --surface-2: #1d1d24;
+  --inset: #0e0e13;
+  --sidebar-bg: #0d0d12;
+  --topbar-bg: rgba(13, 13, 18, 0.82);
+  --overlay: rgba(0, 0, 0, 0.6);
+
+  --text-1: #f4f4f6;
+  --text-2: #a4a4ae;
+  --text-3: #6a6b76;
+
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.17);
+
+  --accent: #8b8dff;
+  --accent-hover: #a9abff;
+  --accent-contrast: #0c0c14;
+  --accent-soft: rgba(139, 141, 255, 0.15);
+  --accent-border: rgba(139, 141, 255, 0.32);
+
+  --nav-active-bg: var(--accent-soft);
+  --nav-active-text: var(--accent);
+  --nav-hover-bg: rgba(255, 255, 255, 0.055);
+
+  --danger: #fb7185;
+  --danger-ink: #fda4af;
+  --danger-bg: rgba(225, 29, 72, 0.13);
+  --danger-line: rgba(251, 113, 133, 0.28);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.12);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 22px 52px -18px rgba(0, 0, 0, 0.78),
+    0 6px 16px -10px rgba(0, 0, 0, 0.55);
+}

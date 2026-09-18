@@ -1,0 +1,167 @@
+/**
+ * 统一线性图标集：同一套线宽（1.7）、圆角、currentColor 取色。
+ * 仅用 stroke，不使用 emoji，保证全站视觉一致。
+ */
+import type { SVGProps } from 'react'
+
+type IconProps = SVGProps<SVGSVGElement> & { size?: number }
+
+function base({ size = 20, ...rest }: IconProps) {
+  return {
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.7,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    ...rest,
+  }
+}
+
+export const IconDashboard = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="3.5" width="7" height="7" rx="1.8" />
+    <rect x="13.5" y="3.5" width="7" height="7" rx="1.8" />
+    <rect x="3.5" y="13.5" width="7" height="7" rx="1.8" />
+    <rect x="13.5" y="13.5" width="7" height="7" rx="1.8" />
+  </svg>
+)
+
+export const IconRobot = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="4.5" y="7.5" width="15" height="11" rx="3" />
+    <path d="M12 7.5V4.5M12 4.5h-2.2M8.7 3.2h.01M12 4.5h2.2M15.3 3.2h.01" />
+    <circle cx="9.3" cy="13" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="14.7" cy="13" r="1.1" fill="currentColor" stroke="none" />
+    <path d="M9.8 15.7h4.4M2.5 11.5v4M21.5 11.5v4" />
+  </svg>
+)
+
+export const IconSchedule = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l3 2" />
+  </svg>
+)
+
+export const IconLogs = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6 3.5h9L19.5 8v12.5h-13.5z" />
+    <path d="M14.5 3.5V8H19" />
+    <path d="M8.5 12.5h7M8.5 15.7h7M8.5 9.3h2.5" />
+  </svg>
+)
+
+export const IconMenu = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </svg>
+)
+
+export const IconCollapse = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M10.5 6l-6 6 6 6M16.5 6l-6 6 6 6" />
+  </svg>
+)
+
+export const IconExpand = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M13.5 6l6 6-6 6M7.5 6l6 6-6 6" />
+  </svg>
+)
+
+export const IconLogout = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M15 4h3.5a1.5 1.5 0 011.5 1.5v13a1.5 1.5 0 01-1.5 1.5H15M10 8l-4 4 4 4M6 12h11" />
+  </svg>
+)
+
+export const IconSun = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="4.2" />
+    <path d="M12 2.8v2.2M12 19v2.2M21.2 12H19M5 12H2.8M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6M18.5 18.5l-1.6-1.6M7.1 7.1L5.5 5.5" />
+  </svg>
+)
+
+export const IconMoon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M20.2 14.2A8.2 8.2 0 019.8 3.8 8.2 8.2 0 1020.2 14.2z" />
+  </svg>
+)
+
+export const IconUser = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="8" r="3.6" />
+    <path d="M5 20c.7-3.6 3.5-5.2 7-5.2s6.3 1.6 7 5.2" />
+  </svg>
+)
+
+export const IconLock = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="5" y="10.5" width="14" height="9.5" rx="2.2" />
+    <path d="M8 10.5V8a4 4 0 018 0v2.5" />
+  </svg>
+)
+
+export const IconEye = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2.5 12C3.6 10.4 7 6 12 6s8.4 4.4 9.5 6c-1.1 1.6-4.5 6-9.5 6s-8.4-4.4-9.5-6z" />
+    <circle cx="12" cy="12" r="2.8" />
+  </svg>
+)
+
+export const IconEyeOff = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 3l18 18" />
+    <path d="M10.6 6.2A9.8 9.8 0 0112 6c5 0 8.4 4.4 9.5 6a15 15 0 01-3.3 3.9M6.2 7.6A14.7 14.7 0 002.5 12C3.6 13.6 7 18 12 18c1 0 2-.2 2.8-.5" />
+    <path d="M9.9 10a3 3 0 004.2 4.2" />
+  </svg>
+)
+
+export const IconAlert = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7.5v5.5M12 16.4v.35" />
+  </svg>
+)
+
+export const IconCheck = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 12.5l5 5L20 6.5" />
+  </svg>
+)
+
+export const IconInfo = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5" />
+    <circle cx="12" cy="7.6" r="1.05" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+export const IconCopy = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V5a2 2 0 012-2h8" />
+  </svg>
+)
+
+export const IconExternal = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M7 17L17 7M9 7h8v8" />
+  </svg>
+)
+
+export const IconChevronDown = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6 9.5l6 6 6-6" />
+  </svg>
+)
+
+export const IconBolt = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M13 3L5 13h6l-1 8 8-10h-6l1-8z" />
+  </svg>
+)
