@@ -8,7 +8,9 @@
     validation.py  账号与密码的规则（登录、将来注册 / 改资料共用一份）
     protocols.py   两块能力：人到哪查（UserStore）、密码怎么算（PasswordHasher）
     store.py       默认实现：内存用户表（示例与测试用）
+    store_sql.py   落库实现 SqlUserStore（SQLModel + AsyncSession，不手写 SQL）
     security.py    默认实现：PBKDF2 密码哈希
+    demo.py        演示账号的单一来源（内存版与落库版共用）
 
 兩件事的边界在这::
 
@@ -26,6 +28,7 @@ from .models import UserProfile, UserRecord, profile_of
 from .protocols import PasswordHasher, UserStore
 from .security import Pbkdf2PasswordHasher
 from .store import InMemoryUserStore
+from .store_sql import SqlUserStore
 from .validation import (
     ACCOUNT_MAX_LENGTH,
     ACCOUNT_MIN_LENGTH,
@@ -42,6 +45,7 @@ __all__ = [
     "UserStore",
     "PasswordHasher",
     "InMemoryUserStore",
+    "SqlUserStore",
     "Pbkdf2PasswordHasher",
     "Account",
     "Password",
