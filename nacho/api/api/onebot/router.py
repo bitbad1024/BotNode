@@ -1,0 +1,204 @@
+"""OneBot 管理的 HTTP 入口：在线列表、踢人、令牌的签发与吊销。
+
+    GET    <prefix>/onebot/clients          在线客户端（``?account=`` 只看某个账号下的）
+    DELETE <prefix>/onebot/clients/{id}     踢下线（``?revoke=true`` 连令牌一起吊销）
+    GET    <prefix>/onebot/tokens           令牌列表
+    POST   <prefix>/onebot/tokens           签发令牌（明文只露这一次）
+    DELETE <prefix>/onebot/tokens/{id}      吊销令牌（并把用它连着的客户端断开）
+
+这些都要登录：``Authorization: Bearer <token>``，令牌是 ``POST /auth/login`` 给的那个。
+
+**删一个客户端要走两条腿**：OneBot 实现断线都会自动重连，所以「从列表里删掉」= 断开这条
+连接 **并且** 吊销它的令牌 —— 只做一半的话，过几秒它又会回到列表里。``DELETE /clients/{id}``
+默认只踢，带 ``?revoke=true`` 才连令牌一起吊销；``DELETE /tokens/{id}`` 则是先吊销再断开。
+
+路由本身不含业务判断：拿到服务调一下，把结果装进响应模型。服务在哪、令牌存哪由装配
+（:func:`nacho.api.create_app`）决定。
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Request, status
+
+from ...common.dependencies import trace_id_of
+from ...common.errors import ApiError, ErrorCode
+from ...common.models import ApiResponse, ErrorResponse
+from .dependencies import CurrentUserDep, OneBotDep
+from .protocols import ClientLike, TokenLike
+from .requests import IssueTokenRequest
+from .responses import (
+    ClientData,
+    IssuedTokenData,
+    KickData,
+    RevokeData,
+    TokenData,
+)
+
+router = APIRouter(prefix="/onebot", tags=["OneBot 管理"])
+
+
+def _client_of(item: ClientLike) -> ClientData:
+    """把服务端的一行在线记录装成响应模型。"""
+    return ClientData(
+        id=item.id,
+        account=item.account,
+        self_id=item.self_id,
+        remote=item.remote,
+        connected_at=item.connected_at,
+    )
+
+
+def _token_of(record: TokenLike) -> TokenData:
+    """把一条令牌记录装成响应模型（**不含明文**，库里存的本来也只有摘要）。"""
+    return TokenData(
+        id=record.id,
+        account=record.account,
+        enabled=record.enabled,
+        remark=record.remark,
+        created_at=record.created_at,
+    )
+
+
+@router.get(
+    "/clients",
+    response_model=ApiResponse[list[ClientData]],
+    summary="在线客户端列表",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录 / 令牌无效"}
+    },
+)
+async def list_clients(
+    request: Request,
+    _user: CurrentUserDep,  # 先鉴权：没登录就 401，不往外说服务接没接
+    server: OneBotDep,
+    account: str | None = None,
+) -> ApiResponse[list[ClientData]]:
+    """在线客户端（快照）；带 ``?account=xxx`` 只看那一个账号下的。"""
+    trace_id: str = trace_id_of(request)
+    data = [_client_of(item) for item in server.roster(account=account)]
+    return ApiResponse[list[ClientData]](data=data, trace_id=trace_id)
+
+
+@router.delete(
+    "/clients/{client_id}",
+    response_model=ApiResponse[KickData],
+    summary="把一个客户端踢下线",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录 / 令牌无效"},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "没有这个客户端"},
+    },
+)
+async def kick_client(
+    client_id: str,
+    request: Request,
+    _user: CurrentUserDep,
+    server: OneBotDep,
+    revoke: bool = False,
+) -> ApiResponse[KickData]:
+    """踢下线；``?revoke=true`` 连它的令牌一起吊销（否则它会自动重连回列表里）。"""
+    trace_id: str = trace_id_of(request)
+    target = next((item for item in server.roster() if item.id == client_id), None)
+    if target is None:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没有这个客户端", status_code=status.HTTP_404_NOT_FOUND
+        )
+    await server.kick(client_id, revoke=revoke)
+    return ApiResponse[KickData](
+        data=KickData(client_id=client_id, account=target.account, revoked=revoke),
+        trace_id=trace_id,
+    )
+
+
+@router.get(
+    "/tokens",
+    response_model=ApiResponse[list[TokenData]],
+    summary="令牌列表",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录 / 令牌无效"},
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "没配令牌注册表（当前 OneBot 不校验，也没有令牌可管）",
+        },
+    },
+)
+async def list_tokens(
+    request: Request,
+    _user: CurrentUserDep,
+    server: OneBotDep,
+) -> ApiResponse[list[TokenData]]:
+    """全部令牌（**只有记录，明文拿不回来**）。"""
+    trace_id: str = trace_id_of(request)
+    registry = server.tokens
+    if registry is None:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR,
+            "没配令牌注册表：当前 OneBot 不校验，也没有令牌可管",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    data = [_token_of(item) for item in await registry.items()]
+    return ApiResponse[list[TokenData]](data=data, trace_id=trace_id)
+
+
+@router.post(
+    "/tokens",
+    response_model=ApiResponse[IssuedTokenData],
+    status_code=status.HTTP_200_OK,
+    summary="签发一个令牌",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录 / 令牌无效"},
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "没配令牌注册表：签了也没人认",
+        },
+    },
+)
+async def issue_token(
+    payload: IssueTokenRequest,
+    request: Request,
+    _user: CurrentUserDep,
+    server: OneBotDep,
+) -> ApiResponse[IssuedTokenData]:
+    """给一个账号签令牌；**明文只在这一次响应里出现**，客户端要自己存好。
+
+    把明文拿去配到 OneBot 实现的「反向 WS 地址」上（``Authorization: Bearer`` 或
+    ``?access_token=``），它连进来就归到这个账号下。
+    """
+    trace_id: str = trace_id_of(request)
+    registry = server.tokens
+    if registry is None:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR,
+            "没配令牌注册表：签了也没人认",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    issued = await registry.issue(payload.account, remark=payload.remark)
+    return ApiResponse[IssuedTokenData](
+        data=IssuedTokenData(record=_token_of(issued.record), token=issued.token),
+        trace_id=trace_id,
+    )
+
+
+@router.delete(
+    "/tokens/{token_id}",
+    response_model=ApiResponse[RevokeData],
+    summary="吊销一个令牌",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录 / 令牌无效"},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "没有这个令牌"},
+    },
+)
+async def revoke_token(
+    token_id: str,
+    request: Request,
+    _user: CurrentUserDep,
+    server: OneBotDep,
+) -> ApiResponse[RevokeData]:
+    """吊销令牌，并把正用它连着的客户端断开（从在线列表里消失、也重连不回来）。"""
+    trace_id: str = trace_id_of(request)
+    removed = await server.revoke_by_id(token_id)
+    if not removed:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND
+        )
+    return ApiResponse[RevokeData](
+        data=RevokeData(token_id=token_id, removed=True), trace_id=trace_id
+    )
