@@ -4,6 +4,7 @@
     DELETE <prefix>/onebot/clients/{id}     踢下线（``?revoke=true`` 连令牌一起吊销）
     GET    <prefix>/onebot/tokens           令牌列表
     POST   <prefix>/onebot/tokens           签发令牌（明文只露这一次）
+    PATCH  <prefix>/onebot/tokens/{id}      启用 / 停用（停用会断开用它连着的客户端）
     DELETE <prefix>/onebot/tokens/{id}      吊销令牌（并把用它连着的客户端断开）
 
 这些都要登录：``Authorization: Bearer <token>``，令牌是 ``POST /auth/login`` 给的那个。
@@ -23,8 +24,8 @@ from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode
 from ...common.models import ApiResponse, ErrorResponse
 from .dependencies import CurrentUserDep, OneBotDep
-from .protocols import ClientLike, TokenLike
-from .requests import IssueTokenRequest
+from .protocols import ClientLike, OneBotLike, TokenLike
+from .requests import IssueTokenRequest, SetTokenEnabledRequest
 from .responses import (
     ClientData,
     IssuedTokenData,
@@ -56,6 +57,19 @@ def _token_of(record: TokenLike) -> TokenData:
         remark=record.remark,
         created_at=record.created_at,
     )
+
+
+async def _fetch_token(server: OneBotLike, token_id: str) -> TokenData:
+    """按 id 取一条令牌记录（改完状态后回最新的那份给客户端）。"""
+    registry = server.tokens
+    if registry is None:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没配令牌注册表", status_code=status.HTTP_404_NOT_FOUND
+        )
+    for item in await registry.items():
+        if item.id == token_id:
+            return _token_of(item)
+    raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
 
 
 @router.get(
@@ -175,6 +189,35 @@ async def issue_token(
         data=IssuedTokenData(record=_token_of(issued.record), token=issued.token),
         trace_id=trace_id,
     )
+
+
+@router.patch(
+    "/tokens/{token_id}",
+    response_model=ApiResponse[TokenData],
+    summary="启用 / 停用令牌",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录 / 令牌无效"},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "没有这个令牌"},
+    },
+)
+async def set_token_enabled(
+    token_id: str,
+    payload: SetTokenEnabledRequest,
+    request: Request,
+    _user: CurrentUserDep,
+    server: OneBotDep,
+) -> ApiResponse[TokenData]:
+    """启用 / 停用一条令牌；停用它连着的客户端会一并断开，且重连被 401 拒。
+
+    和 ``DELETE``（吊销）的区别：记录还在、随时能启用回来，吊销则是删掉、不可逆。
+    """
+    trace_id: str = trace_id_of(request)
+    changed = await server.set_token_enabled(token_id, payload.enabled)
+    if not changed:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND
+        )
+    return ApiResponse[TokenData](data=await _fetch_token(server, token_id), trace_id=trace_id)
 
 
 @router.delete(

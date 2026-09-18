@@ -16,7 +16,7 @@
 """
 from __future__ import annotations
 
-from .requests import IssueTokenRequest
+from .requests import IssueTokenRequest, SetTokenEnabledRequest
 from .responses import (
     ClientData,
     IssuedTokenData,
@@ -29,6 +29,7 @@ from .router import router
 __all__ = [
     "router",
     "IssueTokenRequest",
+    "SetTokenEnabledRequest",
     "ClientData",
     "TokenData",
     "IssuedTokenData",
