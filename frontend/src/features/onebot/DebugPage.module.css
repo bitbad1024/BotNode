@@ -158,6 +158,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+}
+.paneHeadLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .paneTitle {
   margin: 0;
@@ -165,9 +171,72 @@
   font-weight: 650;
   color: var(--text-1);
 }
+
+/* 视图切换（消息预览 / 原始报文） */
+.viewTabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--inset);
+}
+.tab {
+  border: none;
+  background: transparent;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease;
+}
+.tab:hover {
+  color: var(--text-2);
+}
+.tabActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 550;
+}
 .paneNote {
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* 模拟发送者身份 + 占位符说明 */
+.identityRow {
+  display: flex;
+  gap: 10px;
+}
+.fieldQq {
+  flex: 0 0 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.fieldName {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.phHint {
+  margin: -4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.8;
+  color: var(--text-3);
+}
+.phHint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin: 0 1px;
+  white-space: nowrap;
 }
 .hint {
   margin: -6px 0 0;
@@ -334,4 +403,121 @@
   color: var(--text-2);
   font-family: var(--font-sans);
   font-size: 12.5px;
+}
+
+/* ---------------------------------------------------------------- 聊天预览（仿 QQ） */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: min(560px, 62vh);
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--inset);
+}
+.chatRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.chatRowSelf {
+  flex-direction: row-reverse;
+}
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.avatarIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+.chatMain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 72%;
+  min-width: 0;
+}
+.chatRowSelf .chatMain {
+  align-items: flex-end;
+}
+.chatMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.chatName {
+  font-size: 11px;
+  color: var(--text-3);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chatScope {
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-3);
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.chatTime {
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px 12px 12px 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-1);
+  word-break: break-word;
+}
+.bubbleSelf {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  border-radius: 12px 4px 12px 12px;
+}
+.imgLink {
+  display: inline-block;
+  line-height: 0;
+}
+.bubbleImg {
+  display: block;
+  margin: 2px 0;
+  max-width: 220px;
+  max-height: 180px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+.segAt {
+  color: var(--accent);
+  font-weight: 550;
+}
+.segFace {
+  color: var(--text-2);
+}
+.segOther {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
 }

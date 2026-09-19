@@ -2,7 +2,7 @@
  * WS 调试会话的常驻状态：挂在主框架（AppLayout）上而不是路由页里。
  * 切页面不卸载 —— 连接、令牌、草稿、收发记录都还在；退出登录才随主框架一起断开。
  */
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { WS_PRESETS } from './presets'
 
@@ -28,9 +28,16 @@ interface DebugContextValue {
   autoReply: boolean
   sendError: string
   frames: Frame[]
+  /** 模拟发送者的 QQ 号 / 昵称（占位符 {{qq}} / {{nickname}} 的取值） */
+  senderQq: string
+  senderName: string
+  /** 机器人 QQ：最近一次事件里的 self_id（{{self}} 的取值、机器人头像） */
+  selfQq: string
   setUrl: (value: string) => void
   setAccessToken: (value: string) => void
   setAutoReply: (value: boolean) => void
+  setSenderQq: (value: string) => void
+  setSenderName: (value: string) => void
   /** 手改草稿：自动切成“自定义”，并清掉上次的校验错误 */
   editDraft: (value: string) => void
   pickPreset: (id: string) => void
@@ -66,11 +73,13 @@ export function DebugProvider({ children }: { children: ReactNode }) {
   const [url, setUrl] = useState('ws://127.0.0.1:6700/')
   const [accessToken, setAccessToken] = useState('')
   const [status, setStatus] = useState<ConnStatus>('idle')
-  const [draft, setDraft] = useState(() => JSON.stringify(WS_PRESETS[0].build(), null, 2))
+  const [draft, setDraft] = useState(() => WS_PRESETS[0].template)
   const [presetId, setPresetId] = useState(WS_PRESETS[0].id)
   const [autoReply, setAutoReply] = useState(true)
   const [sendError, setSendError] = useState('')
   const [frames, setFrames] = useState<Frame[]>([])
+  const [senderQq, setSenderQq] = useState('')
+  const [senderName, setSenderName] = useState('')
 
   const wsRef = useRef<WebSocket | null>(null)
   const seqRef = useRef(0)
@@ -79,6 +88,15 @@ export function DebugProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     autoReplyRef.current = autoReply
   }, [autoReply])
+
+  // 机器人 QQ：最近一条带 self_id 的帧（{{self}} 占位符的取值）
+  const selfQq = useMemo(() => {
+    for (let i = frames.length - 1; i >= 0; i--) {
+      const v = frames[i].payload?.self_id
+      if (v != null) return String(v)
+    }
+    return ''
+  }, [frames])
 
   // 主框架卸载（退出登录）时断开；摘掉回调，避免卸载后再碰状态
   useEffect(
@@ -96,8 +114,11 @@ export function DebugProvider({ children }: { children: ReactNode }) {
   )
 
   function append(frame: Omit<Frame, 'id'>) {
+    // id 必须在 updater 外面定死：React 18 里 updater 是异步（StrictMode 还会双调用），
+    // 在里面读 seqRef 会让相邻到达的帧（消息 + 回声）拿到同一个 id → key 重复 → 切视图后渲染错乱。
     seqRef.current += 1
-    setFrames((prev) => [...prev.slice(-(MAX_FRAMES - 1)), { id: seqRef.current, ...frame }])
+    const id = seqRef.current
+    setFrames((prev) => [...prev.slice(-(MAX_FRAMES - 1)), { id, ...frame }])
   }
 
   function pickPreset(id: string) {
@@ -105,7 +126,7 @@ export function DebugProvider({ children }: { children: ReactNode }) {
     if (id === 'custom') return // 自定义：不动已编辑的内容
     const found = WS_PRESETS.find((p) => p.id === id)
     if (found) {
-      setDraft(JSON.stringify(found.build(), null, 2))
+      setDraft(found.template)
       setSendError('')
     }
   }
@@ -211,20 +232,33 @@ export function DebugProvider({ children }: { children: ReactNode }) {
       setSendError('还没连上：先点「连接」')
       return
     }
+    // 占位符替换（找不到的占位符原样保留；手动改过的值不会被碰）
+    const qq = senderQq.replace(/\D/g, '') || '10001'
+    const name = senderName.replace(/["\\\n\r]/g, '').trim() || '调试员'
+    const filled = text
+      .replace(/\{\{time\}\}/g, String(Math.floor(Date.now() / 1000)))
+      .replace(/\{\{self\}\}/g, selfQq || '10000')
+      .replace(/\{\{qq\}\}/g, qq)
+      .replace(/\{\{nickname\}\}/g, name)
     let value: unknown
     try {
-      value = JSON.parse(text) // 先校验再发：发出去的必须是合法 JSON
+      value = JSON.parse(filled) // 先校验再发：发出去的必须是合法 JSON
     } catch (err) {
       setSendError(`JSON 解析失败：${err instanceof Error ? err.message : String(err)}`)
       return
     }
     setSendError('')
-    wsRef.current?.send(text)
+    wsRef.current?.send(JSON.stringify(value))
+    const payload =
+      value !== null && typeof value === 'object'
+        ? (value as Record<string, unknown>)
+        : undefined
     append({
       dir: 'out',
-      kind: classify(value as Record<string, unknown>),
-      text: pretty(value),
+      kind: payload ? classify(payload) : '报文',
+      text: pretty(value), // 显示替换后的真实报文
       at: Date.now(),
+      payload, // 消息事件要进聊天预览，得留着
     })
   }
 
@@ -252,9 +286,14 @@ export function DebugProvider({ children }: { children: ReactNode }) {
     autoReply,
     sendError,
     frames,
+    senderQq,
+    senderName,
+    selfQq,
     setUrl,
     setAccessToken,
     setAutoReply,
+    setSenderQq,
+    setSenderName,
     editDraft,
     pickPreset,
     connect,
