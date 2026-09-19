@@ -6,6 +6,7 @@ import {
   IconKey,
   IconSchedule,
   IconLogs,
+  IconTerminal,
 } from '../../common/icons'
 
 export interface NavItem {
@@ -25,4 +26,5 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/tokens', label: '令牌管理', icon: IconKey },
   { path: '/schedule', label: '调度计划', icon: IconSchedule },
   { path: '/logs', label: '运行日志', icon: IconLogs },
+  { path: '/debug', label: 'WS 调试', icon: IconTerminal },
 ]

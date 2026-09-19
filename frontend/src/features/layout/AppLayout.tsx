@@ -5,6 +5,7 @@
  */
 import { Outlet } from 'react-router-dom'
 import { LayoutProvider, useLayout } from './layoutStore'
+import { DebugProvider } from '../onebot/debugStore'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 import styles from './AppLayout.module.css'
@@ -35,7 +36,10 @@ function AppLayoutInner() {
 export default function AppLayout() {
   return (
     <LayoutProvider>
-      <AppLayoutInner />
+      {/* WS 调试会话挂在主框架上：切页面不卸载，连接与记录都保留 */}
+      <DebugProvider>
+        <AppLayoutInner />
+      </DebugProvider>
     </LayoutProvider>
   )
 }
