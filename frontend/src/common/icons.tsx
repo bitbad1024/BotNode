@@ -192,3 +192,10 @@ export const IconTrash = (p: IconProps) => (
     <path d="M10.4 10.6v5.5M13.6 10.6v5.5" />
   </svg>
 )
+
+export const IconTerminal = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4.5" width="18" height="15" rx="2.2" />
+    <path d="M7 9.3l3.2 2.9L7 15.1M12.8 15.4H17" />
+  </svg>
+)

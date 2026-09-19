@@ -15,6 +15,7 @@ import {
   IconKey,
   IconSchedule,
   IconLogs,
+  IconTerminal,
   IconCopy,
   IconExternal,
   IconChevronDown,
@@ -27,6 +28,7 @@ const MODULE_ICONS = {
   '/tokens': IconKey,
   '/schedule': IconSchedule,
   '/logs': IconLogs,
+  '/debug': IconTerminal,
 } as const
 
 export default function DashboardPage() {
@@ -214,6 +216,7 @@ export default function DashboardPage() {
                     {m.path === '/tokens' && 'OneBot 令牌签发、吊销与在线客户端'}
                     {m.path === '/schedule' && 'cron 定时任务编排'}
                     {m.path === '/logs' && '运行日志检索'}
+                    {m.path === '/debug' && 'OneBot 反向 WS 收发模拟器'}
                   </span>
                 </div>
                 <IconChevronDown size={17} className={styles.moduleArrow} />
