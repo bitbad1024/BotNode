@@ -16,6 +16,7 @@ import {
   IconSchedule,
   IconLogs,
   IconTerminal,
+  IconDevices,
   IconCopy,
   IconExternal,
   IconChevronDown,
@@ -24,6 +25,7 @@ import { backendUrl } from '../../config/env'
 import styles from './DashboardPage.module.css'
 
 const MODULE_ICONS = {
+  '/sessions': IconDevices,
   '/robots': IconRobot,
   '/tokens': IconKey,
   '/schedule': IconSchedule,
@@ -78,6 +80,8 @@ export default function DashboardPage() {
   }, [dispatch, pushToast, navigate])
 
   const remaining = useMemo(() => {
+    // expiresAt === 0：服务端宣告不过期
+    if (state.expiresAt === 0) return '长期有效'
     const secs = Math.max(0, Math.floor((state.expiresAt - now) / 1000))
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(
       secs % 60,
@@ -165,14 +169,26 @@ export default function DashboardPage() {
         <div className={`card ${styles.card}`}>
           <div className={styles.cardHead}>
             <h3 className={styles.cardTitle}>当前会话</h3>
-            <span className={styles.cardNote}>Bearer Token</span>
+            <span className={styles.cardNote}>
+              {state.remembered ? '记住设备 · 30 天' : '会话登录 · 2 小时'}
+            </span>
           </div>
           <div className={styles.ttlRow}>
             <span className={styles.ttlValue}>{remaining}</span>
             <div>
-              <div className={styles.ttlLabel}>令牌剩余有效期</div>
-              <div className={styles.ttlHint}>到期后请重新登录</div>
+              <div className={styles.ttlLabel}>
+                {state.expiresAt === 0 ? '会话状态' : '剩余有效期（滑动续期）'}
+              </div>
+              <div className={styles.ttlHint}>
+                {state.expiresAt === 0
+                  ? '服务端宣告不过期'
+                  : '每次请求自动延后，闲置到期才掉线'}
+              </div>
             </div>
+          </div>
+          <div className={styles.traceRow}>
+            <span className={styles.traceLabel}>本机设备名</span>
+            <span className={styles.traceId}>{state.deviceName || '未知设备'}</span>
           </div>
           <div className={styles.tokenRow}>
             <span className={`${styles.tokenText} ${styles.mono}`}>{maskedToken}</span>
@@ -212,6 +228,7 @@ export default function DashboardPage() {
                 <div className={styles.moduleText}>
                   <span className={styles.moduleName}>{m.label}</span>
                   <span className={styles.moduleHint}>
+                    {m.path === '/sessions' && '查看登录设备，远程下线其他会话'}
                     {m.path === '/robots' && '机器人在线状态与任务'}
                     {m.path === '/tokens' && 'OneBot 令牌签发、吊销与在线客户端'}
                     {m.path === '/schedule' && 'cron 定时任务编排'}

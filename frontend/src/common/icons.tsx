@@ -199,3 +199,46 @@ export const IconTerminal = (p: IconProps) => (
     <path d="M7 9.3l3.2 2.9L7 15.1M12.8 15.4H17" />
   </svg>
 )
+
+export const IconDevices = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.8" y="5" width="13" height="9.5" rx="1.8" />
+    <path d="M6.5 17.5h5.6M9.3 14.5v3" />
+    <rect x="16.6" y="9.5" width="4.8" height="10" rx="1.4" />
+  </svg>
+)
+
+export const IconMonitor = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4.5" width="18" height="12" rx="2" />
+    <path d="M9 20.5h6M12 16.5v4" />
+  </svg>
+)
+
+export const IconPhone = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2.4" />
+    <path d="M10.8 5.5h2.4" />
+    <circle cx="12" cy="18.2" r="0.9" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+export const IconClose = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+)
+
+export const IconClock = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l2.8 1.8" />
+  </svg>
+)
+
+export const IconPin = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 21s6.5-5.6 6.5-11a6.5 6.5 0 1 0-13 0C5.5 15.4 12 21 12 21z" />
+    <circle cx="12" cy="10" r="2.3" />
+  </svg>
+)
