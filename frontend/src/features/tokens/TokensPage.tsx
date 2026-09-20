@@ -24,6 +24,7 @@ import {
 } from './tokensApi'
 import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
+import { useAuth } from '../auth/authStore'
 import { useToast } from '../../common/Toast'
 import {
   IconAlert,
@@ -58,6 +59,7 @@ function describe(err: unknown): string {
 
 export default function TokensPage() {
   const { pushToast } = useToast()
+  const { state } = useAuth()
 
   const [clients, setClients] = useState<OneBotClient[]>([])
   const [tokens, setTokens] = useState<OneBotToken[]>([])
@@ -70,6 +72,13 @@ export default function TokensPage() {
   const [remark, setRemark] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [issued, setIssued] = useState<IssuedToken | null>(null)
+
+  // 归属账号：后端按「范围」判权限（admin 不限、其余只限自己那个账号），所以非管理员这里
+  // 直接把值钉成自己的账号 —— 让他自由填只会填一次错一次，还得靠 403 才知道为什么。
+  // 管理员保持自由填。
+  const isAdmin = state.user?.roles.includes('admin') ?? false
+  const myAccount = state.user?.account ?? ''
+  const accountValue = isAdmin ? account : myAccount
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -106,7 +115,8 @@ export default function TokensPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    const name = account.trim()
+    // 用 accountValue 而不是 account：非管理员的值是钉死的那个（见上面派生）
+    const name = accountValue.trim()
     if (!name) {
       pushToast('error', '请先填写归属账号')
       return
@@ -176,9 +186,10 @@ export default function TokensPage() {
             <input
               id="token-account"
               className={styles.input}
-              value={account}
+              value={accountValue}
               onChange={(e) => setAccount(e.target.value)}
-              placeholder="如 alice"
+              readOnly={!isAdmin}
+              placeholder="这个令牌归哪个账号"
               maxLength={64}
             />
           </div>
