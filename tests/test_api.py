@@ -49,6 +49,8 @@ from nacho.core.logger import LogCore, configure, manager  # noqa: E402
 
 #: 演示账号（见 InMemoryUserStore.demo）
 ADMIN = {"account": "admin", "password": "nacho-admin"}
+#: 第二个账号：测「不是本人的令牌不复用」要用两个人
+ROBOT = {"account": "robot", "password": "nacho-robot"}
 LOGIN_PATH = "/api/auth/login"
 
 #: 测试用的哈希迭代次数。默认 20 万次是**生产该有的值**（单次约 67ms，专门用来拖慢离线爆破），
@@ -331,6 +333,104 @@ class TestToken:
         assert data.reused is False
         assert data.token.startswith("nacho_")
         assert len(listed) == 1  # 这条是这次新开的
+
+    async def test_reuse_is_keyed_on_the_token_not_the_device(self) -> None:
+        """复用认的是**令牌**，不是设备：同一台设备不带旧令牌，照样开一条新会话。
+
+        两次都用同一个 client，并且显式带上同样的 X-Device-Name —— 于是"设备身份"完全一致
+        （同一个 ip、同一个 User-Agent、同一个自报设备名），差别只在于第二次有没有旧令牌。
+
+        （设备名用 ASCII：HTTP 头里放不下中文，httpx 会直接拒绝这个请求。要自报中文名得先
+        百分号编码，见 client_info_of 那边。）
+        """
+        async with client_for(app_with()) as client:
+            headers = {"X-Device-Name": "My-MacBook"}
+            first = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN, headers=headers)).json()
+            ).data
+            # 模拟"令牌丢了/换了一份、但设备没变"：清掉 Cookie，请求体里也不传旧令牌
+            client.cookies.clear()
+            second = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN, headers=headers)).json()
+            ).data
+            listed = ApiResponse[list[SessionData]].model_validate(
+                (await client.get("/api/auth/sessions")).json()
+            ).data
+
+        assert first.reused is False
+        assert second.reused is False  # 设备没变也没用：复用不看设备
+        assert second.token != first.token
+        assert len(listed) == 2  # 于是多出一条设备记录
+        # 两条记录的设备名一模一样 —— 同设备并不构成复用条件
+        assert {row.device_name for row in listed} == {"My-MacBook"}
+
+    async def test_previous_token_in_the_body_wins_over_the_cookie(self) -> None:
+        """请求体里的 previous_token **优先**于 Cookie：它非空时根本不去看 Cookie。
+
+        注意是"优先"不是"回退"——body 里那个用不了，也不会退回去用 Cookie 里那个好的。
+        """
+        async with client_for(app_with()) as client:
+            first = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN)).json()
+            ).data
+            # 此刻 Cookie 里有一份**有效**的令牌（上一次登录留下的），但请求体里塞了个无效的：
+            # body 优先 → 不复用，又开了一条
+            second = ApiResponse[LoginData].model_validate(
+                (
+                    await client.post(
+                        LOGIN_PATH, json={**ADMIN, "previous_token": "nacho_乱编的"}
+                    )
+                ).json()
+            ).data
+            listed = ApiResponse[list[SessionData]].model_validate(
+                (await client.get("/api/auth/sessions")).json()
+            ).data
+
+        assert second.reused is False
+        assert second.token != first.token
+        assert len(listed) == 2  # Cookie 里那份没被用上，所以确实多了一条
+
+    async def test_cookie_of_another_user_is_not_reused(self) -> None:
+        """Cookie 里是**别人**的令牌 → 不复用：不能因为"知道现在是谁在登录"就把别人的续了。"""
+        async with client_for(app_with()) as client:
+            robot = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ROBOT)).json()
+            ).data
+            # Cookie 里还是 robot 那份（不清掉），现在改用 admin 登录
+            admin = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN)).json()
+            ).data
+            # 再把 Cookie 清掉，用 robot 自己的令牌查它那份列表：确认没被这次 admin 登录动过
+            client.cookies.clear()
+            robot_rows = ApiResponse[list[SessionData]].model_validate(
+                (
+                    await client.get(
+                        "/api/auth/sessions",
+                        headers={"Authorization": f"Bearer {robot.token}"},
+                    )
+                ).json()
+            ).data
+
+        assert admin.reused is False
+        assert admin.token != robot.token
+        assert len(robot_rows) == 1  # robot 那条会话原封不动
+        assert robot_rows[0].token_hash == robot.token_hash
+
+    async def test_forged_cookie_is_ignored(self) -> None:
+        """Cookie 是伪造的（认不出来）→ 不复用，照常发新令牌。"""
+        async with client_for(app_with()) as client:
+            data = ApiResponse[LoginData].model_validate(
+                (
+                    await client.post(
+                        LOGIN_PATH,
+                        json=ADMIN,
+                        headers={"Cookie": f"{SESSION_COOKIE}=nacho_forged"},
+                    )
+                ).json()
+            ).data
+
+        assert data.reused is False
+        assert data.token.startswith("nacho_")
 
     async def test_revoked_session_token_is_401(self) -> None:
         """令牌**有状态**：会话一吊销，手里那个旧令牌立刻就不好使了。"""
