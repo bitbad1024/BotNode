@@ -40,6 +40,7 @@ from typing import cast
 from urllib.parse import quote_plus
 
 import uvicorn
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import (
@@ -51,7 +52,13 @@ from config import (
     Settings,
 )
 from nacho import __version__
-from nacho.api import ApiOptions, attach_api_logging, create_app
+from nacho.api import (
+    ApiOptions,
+    SqlSessionStore,
+    SqlUserStore,
+    attach_api_logging,
+    create_app,
+)
 from nacho.core.cache import CacheOptions, cache
 from nacho.core.logger import (
     BaseLogProcessor,
@@ -261,7 +268,16 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         # 令牌注册表：和 users 表同一个库；「连进来的客户端属于哪个账号」由它定
         token_registry = SqlTokenRegistry(user_engine)
         await token_registry.ensure_schema()
-    except (ConfigError, RuntimeError) as exc:  # RuntimeError = 数据库连不上等
+        # 接口层那两张表（users / auth_sessions）**也在这里先建**，不等 lifespan：
+        # 接口服务是 ``create_task`` 起的，启动阶段抛的异常没人 await、会被静默吞掉，
+        # 于是「没建成」只在第一个请求时才炸成 1146（表不存在），离真正的原因很远。
+        # 建在启动阶段：失败就是启动失败，当场看得见。（lifespan 里那次留着做兜底，幂等。）
+        user_store = SqlUserStore(user_engine)  # hasher 默认 PBKDF2，只有 seed_demo 用
+        await user_store.ensure_schema()
+        await user_store.seed_demo()  # 空表才种演示账号，已有数据不动
+        session_store = SqlSessionStore(user_engine)
+        await session_store.ensure_schema()
+    except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
@@ -289,7 +305,9 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         _api_engine = user_engine
         api_app = create_app(
             ApiOptions.from_mapping(settings.api.model_dump()),
-            db=user_engine,
+            # 直接用上面建好表、种好账号的那两份存储（不再传 db 让它另起一份）
+            user_store=user_store,
+            session_store=session_store,
             onebot=_onebot_server,
         )
         _api_server = _NoSignalServer(

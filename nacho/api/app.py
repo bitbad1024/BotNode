@@ -121,7 +121,9 @@ def create_app(
             remember_ttl=chosen.remember_ttl,
             access_log=chosen.access_log,
         )
-        # 落到库的存储：启动时先确保表在、空表种演示账号（幂等）；store 是闭包里的局部变量
+        # 落到库的存储：启动时先确保表在、空表种演示账号（幂等）；store 是闭包里的局部变量。
+        # 主程序（根目录 app.py）在**起服务之前**会先建一次（失败即启动失败，看得见）；这里
+        # 这次是幂等的兜底 —— 直接 ``create_app`` 起来的场合（测试 / 示例）靠它。
         if isinstance(store, SqlUserStore):
             await store.ensure_schema()
             await store.seed_demo()
