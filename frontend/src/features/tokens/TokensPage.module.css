@@ -79,6 +79,11 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+/* 归属账号被钉住时的说明（非管理员）：输入框本身仍可读，只是不许改 */
+.hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
 
 /* 刚签发的明文令牌：只出现一次，所以要显眼 */
 .issued {

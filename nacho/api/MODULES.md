@@ -123,11 +123,21 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 > 由主程序装配时传进 `create_app(onebot=...)`；**这里不 import `nacho.onebot`**（那样等于
 > 装 api 就必装 websockets），只按 `protocols.py` 里的结构化协议取用。
 
+> **登录了还要看范围**：这几个接口是**全局**操作（踢任意账号的客户端、给任意账号签令牌），
+> 只做认证等于把所有人的机器人交给每一个登录用户。权限收成**一个概念** ——
+> `dependencies.scope_of()`：带 `admin` 角色的人范围不限，其余人**只限自己那个账号**
+> （`user.account`）。普通用户照样能用这些接口管自己名下的机器人，只是碰不到别人的。
+>
+> 两种越界的出口**故意不同**：调用方自己写出来的账号名（`?account=`、签发请求体里的
+> `account`）回 **403**，说清楚"你不能碰这个账号"；按 **id** 找东西（`{client_id}` /
+> `{token_id}`）回 **404**，越界与不存在走同一个出口 —— 给 403 等于确认"这条 id 存在"，
+> 拿 id 就能数出别人有几条令牌（同 `/auth/sessions` 吊销别人会话的处理）。
+
 | 文件 | 作用 |
 |---|---|
-| `api/onebot/router.py` | **HTTP 入口**：`GET <prefix>/onebot/clients`（在线列表，可 `?account=` 过滤）、`DELETE <prefix>/onebot/clients/{id}`（踢下线，`?revoke=true` 连令牌一起吊销）、`GET/POST <prefix>/onebot/tokens`（列表 / 签发）、`PATCH <prefix>/onebot/tokens/{id}`（启用 / 停用，停用会断开客户端）、`DELETE <prefix>/onebot/tokens/{id}`（吊销并断开）。全部要求登录。 |
+| `api/onebot/router.py` | **HTTP 入口**：`GET <prefix>/onebot/clients`（在线列表，可 `?account=` 过滤）、`DELETE <prefix>/onebot/clients/{id}`（踢下线，`?revoke=true` 连令牌一起吊销）、`GET/POST <prefix>/onebot/tokens`（列表 / 签发）、`PATCH <prefix>/onebot/tokens/{id}`（启用 / 停用，停用会断开客户端）、`DELETE <prefix>/onebot/tokens/{id}`（吊销并断开）。全部要求登录，并按 `scope_of()` 收范围。 |
 | `api/onebot/protocols.py` | 结构化协议：`OneBotLike` / `TokenRegistryLike` / `ClientLike` / `TokenLike`（数据成员写成**只读属性**，对面是冻结数据类）。靠它做到两边互不 import。 |
-| `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）。 |
+| `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）；以及**范围**：`ADMIN_ROLE` / `scope_of` / `may_touch` / `ensure_can_touch`。 |
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
 
