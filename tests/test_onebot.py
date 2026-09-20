@@ -50,6 +50,8 @@ from nacho.onebot import tokens as tokens_module  # noqa: E402
 
 #: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
 ADMIN = {"account": "admin", "password": "nacho-admin"}
+#: 普通用户（roles 里只有 user）：用来验「只能管自己账号下那部分」
+ROBOT = {"account": "robot", "password": "nacho-robot"}
 #: 测试用的哈希迭代次数：默认 20 万次是生产该有的值，登录断言与迭代次数无关
 TEST_ITERATIONS: int = 1_000
 _TEST_HASHER = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)
@@ -121,11 +123,22 @@ def api_app(server: OneBotServer | None) -> FastAPI:
     )
 
 
-async def login(client: httpx.AsyncClient) -> str:
-    """登录拿令牌（管理接口都要带它）。"""
-    ok = await client.post("/api/auth/login", json=ADMIN)
+async def login(client: httpx.AsyncClient, who: dict[str, str] | None = None) -> str:
+    """登录拿令牌（管理接口都要带它）；``who`` 不传就是 admin。"""
+    ok = await client.post("/api/auth/login", json=who or ADMIN)
     assert ok.status_code == 200, ok.text
     return ApiResponse[LoginData].model_validate(ok.json()).data.token
+
+
+async def issue_via_api(
+    client: httpx.AsyncClient, headers: dict[str, str], account: str
+) -> IssuedTokenData:
+    """走管理接口签一个令牌（顺带断言能签出来），返回签发结果。"""
+    made = await client.post(
+        "/api/onebot/tokens", headers=headers, json={"account": account, "remark": account}
+    )
+    assert made.status_code == 200, made.text
+    return ApiResponse[IssuedTokenData].model_validate(made.json()).data
 
 
 # --------------------------------------------------------------------------- 令牌注册表
@@ -545,3 +558,141 @@ async def test_management_kick_with_revoke() -> None:
             with pytest.raises(InvalidStatus):  # 令牌没了：重连被拒
                 async with connect(ws_url(port_of(server), issued.token)):
                     pass
+
+
+# --------------------------------------------------------------------- 权限范围（授权）
+async def test_scope_admin_sees_every_account() -> None:
+    """admin 的范围不限：所有账号的令牌都看得到、都能管。"""
+    registry = InMemoryTokenRegistry()
+    async with opened_server(registry) as server:
+        app = api_app(server)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            headers = {"Authorization": f"Bearer {await login(client)}"}
+            await issue_via_api(client, headers, "alice")
+            await issue_via_api(client, headers, "bob")
+
+            listed = await client.get("/api/onebot/tokens", headers=headers)
+            assert listed.status_code == 200, listed.text
+            rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
+
+    assert {row.account for row in rows} == {"alice", "bob"}
+
+
+async def test_scope_normal_user_only_sees_own_tokens() -> None:
+    """普通用户（robot）只看得到自己账号下的令牌 —— 这就是原来漏掉的那道隔离。"""
+    registry = InMemoryTokenRegistry()
+    async with opened_server(registry) as server:
+        app = api_app(server)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
+            await issue_via_api(client, admin_headers, "alice")
+            await issue_via_api(client, admin_headers, "robot")
+
+            robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+            listed = await client.get("/api/onebot/tokens", headers=robot_headers)
+            assert listed.status_code == 200, listed.text
+            rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
+
+        assert [row.account for row in rows] == ["robot"]  # alice 那条看不到
+
+
+async def test_scope_normal_user_cannot_issue_for_another_account() -> None:
+    """普通用户给别人的账号签令牌 → 403，而且**真的没签出来**。
+
+    这条原来能得手：``account`` 只是请求体里随便填的字符串，于是普通用户能给自己造一个
+    admin 名下的接入身份 —— 那是提权，不是"看到"。
+    """
+    registry = InMemoryTokenRegistry()
+    async with opened_server(registry) as server:
+        app = api_app(server)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
+            robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+
+            denied = await client.post(
+                "/api/onebot/tokens",
+                headers=robot_headers,
+                json={"account": "admin", "remark": "冒名"},
+            )
+            assert denied.status_code == 403, denied.text
+
+            # 自己账号那条照样能签 —— 不是"普通用户不许签令牌"，是"只能签自己的"
+            assert (await issue_via_api(client, robot_headers, "robot")).record.account == "robot"
+
+            listed = await client.get("/api/onebot/tokens", headers=admin_headers)
+            rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
+
+        assert [row.account for row in rows] == ["robot"]  # 冒名那条没进库
+
+
+async def test_scope_normal_user_cannot_touch_another_accounts_token() -> None:
+    """普通用户停用 / 吊销别人的令牌 → 404（按 id 找东西一律 404，不告诉它这条 id 存在）。"""
+    registry = InMemoryTokenRegistry()
+    async with opened_server(registry) as server:
+        app = api_app(server)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
+            alice = await issue_via_api(client, admin_headers, "alice")
+            robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+
+            off = await client.patch(
+                f"/api/onebot/tokens/{alice.record.id}",
+                headers=robot_headers,
+                json={"enabled": False},
+            )
+            assert off.status_code == 404, off.text
+            gone = await client.delete(
+                f"/api/onebot/tokens/{alice.record.id}", headers=robot_headers
+            )
+            assert gone.status_code == 404, gone.text
+
+            listed = await client.get("/api/onebot/tokens", headers=admin_headers)
+            rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
+
+        # **真没动过**：还在、还是启用、令牌也还能认
+        assert [(row.account, row.enabled) for row in rows] == [("alice", True)]
+        assert await registry.resolve(alice.token) is not None
+
+
+async def test_scope_client_list_is_scoped() -> None:
+    """客户端列表：普通用户不带 ``?account=`` 只看自己账号的；显式要别人的 → 403。"""
+    registry = InMemoryTokenRegistry()
+    alice_token = (await registry.issue("alice")).token
+    robot_token = (await registry.issue("robot")).token
+
+    async with opened_server(registry) as server:
+        app = api_app(server)
+        # 两个账号各连一条：连上就够，归属在握手时就定了，不必再发事件
+        async with (
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client,
+            connect(ws_url(port_of(server), alice_token)),
+            connect(ws_url(port_of(server), robot_token)),
+        ):
+            assert await wait_until(lambda: len(server.roster()) == 2)
+            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
+            robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+
+            mine = await client.get("/api/onebot/clients", headers=robot_headers)
+            assert mine.status_code == 200, mine.text
+            rows = ApiResponse[list[ClientData]].model_validate(mine.json()).data
+            assert [row.account for row in rows] == ["robot"]  # 不写参数就按自己的范围收窄
+
+            denied = await client.get(
+                "/api/onebot/clients", headers=robot_headers, params={"account": "alice"}
+            )
+            assert denied.status_code == 403, denied.text
+
+            every = await client.get("/api/onebot/clients", headers=admin_headers)
+            assert {row.account for row in ApiResponse[list[ClientData]].model_validate(
+                every.json()
+            ).data} == {"alice", "robot"}
