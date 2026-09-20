@@ -19,10 +19,12 @@ nacho/api/
 │   ├── errors/           错误码 / 异常 / 处理器
 │   ├── middlewares/      编号 + 访问日志
 │   ├── dependencies.py   取请求编号
+│   ├── headers.py        自定义响应头常量（X-Session-Expires-In 等）
 │   └── encoding.py       base64 编解码
 ├── api/              ★ 入口层：只管「对外怎么说」，认识 FastAPI
 │   ├── auth/
-│   │   ├── router.py         POST /auth/login、GET /auth/me
+│   │   ├── router.py         POST /auth/login、POST /auth/refresh、GET /auth/me
+│   │   │                     GET/DELETE /auth/sessions（登录设备与吊销）
 │   │   ├── dependencies.py   get_auth_service / bearer_scheme
 │   │   ├── requests.py       LoginRequest（请求 schema）
 │   │   └── responses.py      LoginData（响应 schema）
@@ -34,7 +36,9 @@ nacho/api/
 │       └── responses.py      ClientData / TokenData / IssuedTokenData…
 └── services/        ★ 业务层：只算「业务怎么办」，不认识 FastAPI
     ├── user/        用户：models/protocols/security/store/validation
-    └── auth/        鉴权：models/service/protocols/security
+    ├── session/     会话：登录开出来的那一次会话（设备信息 + 令牌）、滑动续期、吊销
+    │                models/client/protocols/store_sql/store_memory/tokens/service
+    └── auth/        鉴权：models/service（令牌机制在 session 里）
 ```
 
 **依赖方向（单向、无环）**：
@@ -97,10 +101,21 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/auth/router.py` | **HTTP 入口**：`POST <prefix>/auth/login`（账号+密码换令牌）、`GET <prefix>/auth/me`（令牌换当前用户资料）。自身不含业务判断，只翻译请求 / 装配响应。 |
+| `api/auth/router.py` | **HTTP 入口**：`POST <prefix>/auth/login`（账号+密码换令牌）、`GET <prefix>/auth/me`（令牌换当前用户资料）、`GET/DELETE <prefix>/auth/sessions[/{token_hash}]`（登录设备列表 / 吊销一条）。自身不含业务判断，只翻译请求 / 装配响应。 |
 | `api/auth/dependencies.py` | 路由注入件：`get_auth_service`（从 `app.state` 取服务）、`bearer_scheme`/`BearerDep`/`AuthServiceDep`。 |
 | `api/auth/requests.py` | 请求体 `LoginRequest`，字段复用 `services.user.validation` 的 `Account` / `Password`。 |
-| `api/auth/responses.py` | 响应体 `LoginData`（令牌 + 有效期 + 用户资料），用户资料复用 `UserProfile`。 |
+| `api/auth/responses.py` | 响应体 `LoginData`（令牌 + 有效期 + 用户资料）、`SessionData` / `RevokeSessionData`（设备列表与吊销），用户资料复用 `UserProfile`。 |
+
+> **对外那个 id 叫 `token_hash`，不叫 `session_id`**：它就是**令牌摘要**（`sha256(令牌明文)`），
+> 同时也是 `auth_sessions` 表的**主键列名**。原本两处各起一个名字，看起来像两样东西，其实
+> 是同一个值；统一成 `token_hash` 之后，看到名字就知道拿的是什么、从哪来。
+> 明文令牌只存在于 Cookie / `LoginData.token` 里，**不进库、不进 URL**（访问日志会记 path）。
+
+> **登录会复用旧令牌**：请求体可选 `previous_token`（浏览器**不用传**——旧令牌在 HttpOnly
+> Cookie 里，JS 读不到，后端自己从 Cookie 取）。认得出、且属于同一个账号时，就延长它的有效期、
+> 重写缓存，**不新建会话**（`reused=true`，`token` 与上次相同，设备列表不会因此多出一条；本次
+> 勾没勾「记住设备」会同步进设备记录）。认不出来（不在 / 不是本人）就照常发一个新的——复用是
+> 尽力而为的优化，**失败不影响登录**。实现见 `services/session/service.py` 的 `reuse()`。
 
 ### 3.3 api/onebot/ —— OneBot 管理入口
 
@@ -127,8 +142,9 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | 文件 | 作用 |
 |---|---|
 | `services/__init__.py` | 业务层汇总导出。 |
-| `services/auth/__init__.py` | 鉴权业务汇总。 |
+| `services/auth/__init__.py` | 鉴权业务汇总（凭据换令牌；令牌机制在 `session/`）。 |
 | `services/user/__init__.py` | 用户模块汇总。 |
+| `services/session/__init__.py` | 会话模块汇总（登录会话、设备信息、令牌映射、吊销）。 |
 
 ### 4.2 services/user/ —— 用户域（不管 HTTP）
 

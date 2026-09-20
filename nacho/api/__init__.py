@@ -62,6 +62,7 @@ from .common.errors import (
 )
 from .common.middlewares import RequestLogMiddleware
 from .common.models import ApiResponse, ErrorDetail, ErrorPayload, ErrorResponse
+from .common.headers import SESSION_EXPIRES_HEADER
 from .logging import (
     ACCESS_LOGGER_NAME,
     API_LOGGER_NAME,
@@ -70,8 +71,14 @@ from .logging import (
     attach_api_logging,
 )
 from .api import auth_router, onebot_router
+from .api.auth.dependencies import SESSION_COOKIE
 from .api.auth.requests import LoginRequest
-from .api.auth.responses import LoginData
+from .api.auth.responses import (
+    LoginData,
+    RevokeAllData,
+    RevokeSessionData,
+    SessionData,
+)
 from .api.onebot import (
     ClientData,
     IssuedTokenData,
@@ -81,8 +88,16 @@ from .api.onebot import (
     SetTokenEnabledRequest,
     TokenData,
 )
-from .services.auth import AuthService, HmacTokenService, TokenClaims, TokenService, resolve_secret
-from .services.auth.models import Credentials, LoginResult
+from .services.auth import AuthService, Credentials, CurrentUser, LoginResult
+from .services.session import (
+    ClientInfo,
+    InMemorySessionStore,
+    SessionRecord,
+    SessionService,
+    SqlSessionStore,
+    TokenHashCollisionError,
+    describe_client,
+)
 from .services.user import (
     ACCOUNT_MAX_LENGTH,
     ACCOUNT_MIN_LENGTH,
@@ -153,13 +168,22 @@ __all__ = [
     # 鉴权模块
     "LoginRequest",
     "LoginData",
+    "SESSION_COOKIE",
+    "SessionData",
+    "RevokeSessionData",
+    "RevokeAllData",
     "AuthService",
     "Credentials",
+    "CurrentUser",
     "LoginResult",
-    "TokenClaims",
-    "TokenService",
-    "HmacTokenService",
-    "resolve_secret",
+    # 会话模块
+    "SessionService",
+    "SessionRecord",
+    "ClientInfo",
+    "SqlSessionStore",
+    "InMemorySessionStore",
+    "TokenHashCollisionError",
+    "describe_client",
     # 日志接入点
     "api_logger",
     "attach_api_logging",
@@ -167,4 +191,5 @@ __all__ = [
     "API_LOGGER_NAME",
     "ACCESS_LOGGER_NAME",
     "TRACE_ID_HEADER",
+    "SESSION_EXPIRES_HEADER",
 ]
