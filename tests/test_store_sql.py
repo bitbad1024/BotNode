@@ -184,7 +184,7 @@ async def test_create_app_with_db_serves_login(tmp_path: Path) -> None:
     """传了 db 就走落库存储：lifespan 建表 + 种账号，随后登录 / 取当前用户 / 停用账号被拒都正常。"""
     engine = open_engine(tmp_path)
     app: FastAPI = create_app(
-        ApiOptions(prefix="/api", secret="test-secret"), db=engine, hasher=_TEST_HASHER
+        ApiOptions(prefix="/api", token_ttl=1800.0), db=engine, hasher=_TEST_HASHER
     )
     try:
         # starlette 的 lifespan 要在 ASGITransport 之外手动跑（httpx 不会自己触发 startup）

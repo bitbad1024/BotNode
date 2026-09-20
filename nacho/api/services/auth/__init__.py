@@ -1,11 +1,13 @@
-"""鉴权业务：拿账号密码换一个令牌，拿令牌换回当前是谁。
+"""鉴权业务：拿账号密码换一组令牌，拿令牌换回"当前是谁"。
 
-    models.py       业务层的输入 / 输出：Credentials（凭据）、LoginResult（签发结果）
-    protocols.py    要向外要的能力：TokenService（含令牌里的东西 TokenClaims）
-    security.py     默认实现：HMAC 签名的不透明令牌 + 密钥怎么定
-    service.py      业务编排：AuthService（查人 -> 比密码 -> 查停用 -> 签令牌）
+    models.py       业务层的输入 / 输出：Credentials、LoginResult、CurrentUser
+    service.py      业务编排：AuthService（查人 -> 比密码 -> 查停用 -> 开会话）
 
-「用户从哪来」不在本模块：查人与验密码是 :mod:`nacho.api.services.user` 的事，本模块
+令牌**不是 JWT、也不能自证**：访问令牌是随机串，绑在缓存里（见
+:mod:`nacho.api.services.session`）；勾了「记住设备」再发一个长期令牌做自动登录。
+令牌与会话的机制都在 :mod:`nacho.api.services.session`，本模块只用它。
+
+「用户从哪来」也不在本模块：查人与验密码是 :mod:`nacho.api.services.user` 的事，本模块
 依赖它 —— 反过来不行（用户不认识令牌）。
 
 本模块不认识 FastAPI：失败时抛 :class:`~nacho.api.common.errors.ApiError`，状态码已经
@@ -14,17 +16,12 @@
 """
 from __future__ import annotations
 
-from .models import Credentials, LoginResult
-from .protocols import TokenClaims, TokenService
-from .security import HmacTokenService, resolve_secret
+from .models import Credentials, CurrentUser, LoginResult
 from .service import AuthService
 
 __all__ = [
     "AuthService",
     "Credentials",
+    "CurrentUser",
     "LoginResult",
-    "TokenClaims",
-    "TokenService",
-    "HmacTokenService",
-    "resolve_secret",
 ]

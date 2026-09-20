@@ -365,21 +365,31 @@ def _load_cache(section: dict[str, object]) -> CacheSettings:
 
 # --------------------------------------------------------------------------- 区域：[api]
 class ApiSettings(_Region):
-    """``[api]``：接口层对外怎么挂 —— 监听地址、路由前缀、令牌有效期、访问日志、签名密钥。
+    """``[api]``：接口层对外怎么挂 —— 监听地址、路由前缀、令牌有效期、访问日志。
 
     监听地址（``host`` / ``port``）是接口层 HTTP 服务随主程序由 uvicorn 起时绑定的；
-    其余四项只影响接口层自己：前缀决定登录接口挂在哪（``<prefix>/auth/login``），
-    ``token_ttl`` 是登录令牌的有效期，``access_log`` 决定要不要逐条记访问日志，
-    ``secret`` 是令牌的签名密钥 —— **留空**表示进程启动时现生成一个随机的，能用但
-    重启之后已签发的令牌全部失效，正式环境要写一份固定的。
+    其余几项只影响接口层自己：前缀决定登录接口挂在哪（``<prefix>/auth/login``），
+    ``token_ttl`` 是**访问令牌**的有效期，``remember_ttl`` 是勾了「记住设备」才发的
+    **长期令牌**有效期，``access_log`` 决定要不要逐条记访问日志，``trust_proxy``
+    决定要不要认 ``X-Forwarded-For`` 里的客户端 ip（没挂在可信代理后面就别开——
+    那个头客户端自己就能伪造）。
+
+    ``token_ttl`` / ``remember_ttl`` 填 ``0`` 表示**永不过期**。注意 ``token_ttl``
+    是**滑动**的：每次带令牌的请求都会把有效期往后延，所以它是"闲置多久算掉线"，
+    而不是"登录后最多能用多久"。
     """
 
     host: str = "127.0.0.1"  # HTTP 服务监听地址
     port: int = Field(default=8000, ge=1, le=65535, description="1-65535 的端口")
     prefix: str = "/api"  # 路由前缀（要 / 开头；结尾的 / 会被去掉）
-    token_ttl: float = Field(default=3600.0, gt=0, description="大于 0 秒数")
+    token_ttl: float = Field(
+        default=7200.0, ge=0, description="访问令牌滑动有效期（秒）；0 = 永不过期"
+    )
+    remember_ttl: float = Field(
+        default=2_592_000.0, ge=0, description="长期令牌有效期（秒）；0 = 永不过期"
+    )
     access_log: bool = True  # 逐条记访问日志（方法 / 路径 / 状态码 / 耗时）
-    secret: str = ""  # 令牌签名密钥；留空 = 现生成随机的（重启即失效）
+    trust_proxy: bool = False  # 信任 X-Forwarded-For 里的客户端 ip（要挂在可信代理后面才开）
 
     @field_validator("prefix")
     @classmethod

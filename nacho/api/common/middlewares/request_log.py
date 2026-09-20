@@ -28,6 +28,7 @@ from nacho.core.logger import BaseLogger
 
 from ...logging import ACCESS_LOGGER_NAME, TRACE_ID_HEADER, api_logger
 from ...options import ApiOptions
+from ..headers import SESSION_EXPIRES_HEADER, SESSION_EXPIRES_STATE
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
@@ -74,6 +75,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             raise
         duration_ms: float = round((time.perf_counter() - started) * 1000, 2)
         response.headers[TRACE_ID_HEADER] = trace_id
+        self._echo_session_expiry(request, response)
 
         if self._options.access_log:
             self._access.info(
@@ -86,6 +88,16 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
                 trace_id=trace_id,
             )
         return response
+
+    def _echo_session_expiry(self, request: Request, response: Response) -> None:
+        """把这次请求顺带续期后的剩余秒数回给客户端（鉴权依赖挂上去的）。
+
+        访问令牌是**滑动续期**的：每次带令牌的请求都会把有效期往后延，所以登录时算出来的
+        倒计时会越走越偏——让每个响应都把它带回去，前端照着拨准即可。
+        """
+        expires_in: object = getattr(request.state, SESSION_EXPIRES_STATE, None)
+        if expires_in is not None:
+            response.headers[SESSION_EXPIRES_HEADER] = str(expires_in)
 
     def _log_failure(
         self, request: Request, exc: Exception, trace_id: str, started: float

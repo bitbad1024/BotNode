@@ -45,7 +45,8 @@ from .logging import API_LOGGER_NAME, api_logger
 from .api import auth_router, onebot_router
 from .api.onebot.protocols import OneBotLike
 from .services.auth import AuthService
-from .services.auth.protocols import TokenService
+from .services.session import InMemorySessionStore, SessionService, SqlSessionStore
+from .services.session.protocols import SessionStore
 from .services.user.protocols import PasswordHasher, UserStore
 from .services.user.security import Pbkdf2PasswordHasher
 from .services.user.store import InMemoryUserStore
@@ -58,8 +59,8 @@ def create_app(
     *,
     user_store: UserStore | None = None,
     hasher: PasswordHasher | None = None,
-    tokens: TokenService | None = None,
     db: AsyncEngine | None = None,
+    session_store: SessionStore | None = None,
     onebot: OneBotLike | None = None,
     title: str = "nacho",
     version: str = __version__,
@@ -67,12 +68,14 @@ def create_app(
 ) -> FastAPI:
     """装配一个 FastAPI 应用（接口层的对外门面）。
 
-    :param options: 接口层选项（路由前缀、令牌有效期、访问日志开关、签名密钥）；
+    :param options: 接口层选项（路由前缀、访问令牌滑动有效期、长期令牌有效期、访问日志）；
     :param user_store: 用户存储，默认内存演示账号；传了就直接用；
     :param hasher: 密码哈希器，默认 PBKDF2；
-    :param tokens: 令牌签发器，默认 HMAC 令牌（密钥取 ``options.secret``，空则随机）；
+    :param session_store: 会话存储，默认按 ``db`` 决定（有库就落 ``auth_sessions``，
+        没库就用内存）——登录令牌是**有状态**的，会话信息得有地方放；
     :param db: 异步引擎（``AsyncEngine``）；传了就用落库版
-        :class:`~nacho.api.services.user.store_sql.SqlUserStore`（SQLModel 查 ``users`` 表），
+        :class:`~nacho.api.services.user.store_sql.SqlUserStore`（SQLModel 查 ``users`` 表）
+        与 :class:`~nacho.api.services.session.store_sql.SqlSessionStore`（``auth_sessions`` 表），
         没传（也没传 ``user_store``）就退回内存演示账号——**不接数据库也能直接跑起来**；
     :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``）；传了 ``<prefix>/onebot/*``
         那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，没传时这些接口回 503；
@@ -92,6 +95,21 @@ def create_app(
     else:
         store = InMemoryUserStore.demo(chosen_hasher)
 
+    # 选会话存储：显式传的优先 -> 给了 db 就落 auth_sessions 表 -> 否则内存（开箱即跑）
+    sessions_store: SessionStore
+    if session_store is not None:
+        sessions_store = session_store
+    elif db is not None:
+        sessions_store = SqlSessionStore(db)
+    else:
+        sessions_store = InMemorySessionStore()
+    session_service = SessionService(
+        sessions_store,
+        access_ttl=chosen.token_ttl,
+        remember_ttl=chosen.remember_ttl,
+        logger=log,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         """启动 / 停机各记一条；落库存储在这里建表 + 空表种演示账号。"""
@@ -99,13 +117,16 @@ def create_app(
             "接口层启动",
             title=app.title,
             prefix=chosen.prefix,
-            token_ttl=chosen.token_ttl,
+            session_ttl=chosen.token_ttl,
+            remember_ttl=chosen.remember_ttl,
             access_log=chosen.access_log,
         )
         # 落到库的存储：启动时先确保表在、空表种演示账号（幂等）；store 是闭包里的局部变量
         if isinstance(store, SqlUserStore):
             await store.ensure_schema()
             await store.seed_demo()
+        if isinstance(sessions_store, SqlSessionStore):
+            await sessions_store.ensure_schema()
         try:
             yield
         finally:
@@ -127,11 +148,11 @@ def create_app(
     app.state.auth_service = AuthService(
         store,
         hasher=chosen_hasher,
-        tokens=tokens,
-        ttl=chosen.token_ttl,
-        secret=chosen.secret,
+        sessions=session_service,
         logger=log,
     )
+    # 选项也挂上去：信任代理、长期 Cookie 的有效期这些路由要用
+    app.state.api_options = chosen
     # OneBot 服务端（可空）：没传时 <prefix>/onebot/* 回 503，见 onebot/dependencies.py
     app.state.onebot_server = onebot
     return app
