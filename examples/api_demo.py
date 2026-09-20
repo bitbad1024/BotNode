@@ -44,7 +44,6 @@ import httpx  # noqa: E402
 from config import Settings  # noqa: E402
 from nacho.api import (  # noqa: E402
     ApiOptions,
-    HmacTokenService,
     attach_api_logging,
     create_app,
 )
@@ -57,13 +56,13 @@ ADMIN: dict[str, str] = {"account": "admin", "password": "nacho-admin"}
 
 
 def demo_options() -> ApiOptions:
-    """读配置里的 ``[api]``，但把签名密钥钉死成一个固定值。
+    """读配置里的 ``[api]``，只把访问令牌的有效期钉短一点。
 
-    配置里 ``secret`` 留空表示「启动时现生成随机的」——那样第 4 段就没法复现一个过期
-    令牌了（签出来的对不上应用那把钥匙），示例才在这里钉一个。
+    令牌现在**不是签名**的（是随机串 + 服务端有状态），所以没有"密钥"这回事了；
+    之所以还要改一项，只是让示例里的有效期数字好认。
     """
     options: ApiOptions = ApiOptions.from_mapping(Settings.load().api.model_dump())
-    return replace(options, secret=options.secret or "demo-secret")
+    return replace(options, token_ttl=1800.0)
 
 
 def show(title: str, response: httpx.Response) -> None:
@@ -128,7 +127,7 @@ async def main() -> None:
         )
         show("路由不存在", await client.get(f"{prefix}/nope"))
 
-        # 4) 令牌：正常 / 被改过 / 过期
+        # 4) 令牌：正常 / 被改过 / 会话被吊销
         print("[4] 令牌怎么用：")
         show("带令牌取当前用户", await client.get(
             f"{prefix}/auth/me", headers={"Authorization": f"Bearer {token}"}
@@ -137,9 +136,20 @@ async def main() -> None:
         show("令牌被改过", await client.get(
             f"{prefix}/auth/me", headers={"Authorization": f"Bearer {token[:-2]}xy"}
         ))
-        expired: str = HmacTokenService(options.secret, ttl=-1.0).issue("u-0001")
-        show("令牌已过期", await client.get(
-            f"{prefix}/auth/me", headers={"Authorization": f"Bearer {expired}"}
+        # 令牌是有状态的：登录设备的列表就是这些会话，吊销一条，旧令牌立刻失效
+        show("我开着的登录", await client.get(
+            url=f"{prefix}/auth/sessions", headers={"Authorization": f"Bearer {token}"}
+        ))
+        row = await client.get(
+            f"{prefix}/auth/sessions", headers={"Authorization": f"Bearer {token}"}
+        )
+        token_hash = row.json()["data"][0]["token_hash"]  # 令牌摘要：这条登录的 id
+        show("吊销这条登录", await client.delete(
+            f"{prefix}/auth/sessions/{token_hash}",
+            headers={"Authorization": f"Bearer {token}"},
+        ))
+        show("再用旧令牌", await client.get(
+            f"{prefix}/auth/me", headers={"Authorization": f"Bearer {token}"}
         ))
 
         # 5) trace_id：请求头带什么，响应头 / 响应体 / 日志里就是什么
