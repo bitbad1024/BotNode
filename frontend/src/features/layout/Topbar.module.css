@@ -175,6 +175,25 @@ button.collapse-btn {
   margin: 2px 0;
 }
 
+.menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  background: none;
+  color: var(--text-1);
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  transition: background 0.16s ease;
+}
+.menu-item:hover {
+  background: var(--surface-2);
+}
+
 .logout-btn {
   width: 100%;
   display: flex;
@@ -191,6 +210,10 @@ button.collapse-btn {
 }
 .logout-btn:hover {
   background: var(--danger-bg);
+}
+.logout-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* 手机（<768）：汉堡显示、折叠按钮隐藏、只留头像 */
