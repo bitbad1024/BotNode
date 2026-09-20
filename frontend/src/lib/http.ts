@@ -5,15 +5,26 @@
  *   成功 { success:true,  data,            trace_id }
  *   失败 { success:false, error:{code,message,details}, trace_id }
  *
- * - 请求拦截器自动附带 Authorization: Bearer（从 localStorage 读会话）；
- * - 响应拦截器解包，业务失败统一抛 ApiRequestError；
- * - 组件里直接 const { data, traceId } = await get/post(...)。
+ * 认证是**双轨**的（后端 cookie 路径限定在 /api/auth）：
+ * - withCredentials 让浏览器自动收发 HttpOnly Cookie（nacho_session），/api/auth/* 靠它；
+ * - 同时从本地存储读会话令牌附带 Authorization: Bearer —— /api/onebot/* 不在 cookie
+ *   路径内，只能靠这个头。
+ *
+ * 另外两件全局事：
+ * - 每个认证成功的响应都带 X-Session-Expires-In（滑动续期后的剩余秒数），这里广播
+ *   「会话心跳」事件，authStore 收到后拨准倒计时；
+ * - 任何请求回 401 都广播「未授权」事件，authStore 收到清会话，路由守卫自然踢回登录页。
  */
 import axios, { AxiosError, type AxiosResponse } from 'axios'
 import { API_BASE_URL } from '../config/env'
 
-/** 会话在 localStorage 的键名（authStore 与拦截器共用）。 */
+/** 会话在浏览器存储里的键名（localStorage / sessionStorage 同名）。 */
 export const SESSION_KEY = 'nacho.console.session'
+
+/** 滑动续期心跳：detail 是剩余秒数（0 = 不过期）。 */
+export const SESSION_TICK_EVENT = 'nacho:session-tick'
+/** 任意请求 401：会话已失效。 */
+export const UNAUTHORIZED_EVENT = 'nacho:unauthorized'
 
 export interface ErrorDetail {
   field: string
@@ -51,30 +62,50 @@ interface ErrorEnvelope {
   details?: ErrorDetail[]
 }
 
-const instance = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 15000,
-})
-
-// 请求：附带令牌
-instance.interceptors.request.use((config) => {
+/** 读会话令牌：勾了「记住设备」在 localStorage，没勾在 sessionStorage（关浏览器即丢）。 */
+export function readStoredToken(): string {
   try {
-    const raw = localStorage.getItem(SESSION_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as { token?: string }
-      if (parsed.token) {
-        config.headers.Authorization = `Bearer ${parsed.token}`
+    for (const storage of [localStorage, sessionStorage]) {
+      const raw = storage.getItem(SESSION_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as { token?: string }
+        if (parsed.token) return parsed.token
       }
     }
   } catch {
-    /* 会话不可读时忽略，按匿名请求发出 */
+    /* 存储不可读时按匿名处理 */
+  }
+  return ''
+}
+
+const instance = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 15000,
+  // HttpOnly Cookie 靠它随 /api/auth/* 请求自动带上
+  withCredentials: true,
+})
+
+// 请求：附带 Bearer 令牌（/api/onebot/* 不在 cookie 路径内，必须带头）
+instance.interceptors.request.use((config) => {
+  const token = readStoredToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
 
-// 响应：解包统一外壳
+// 响应：成功时广播滑动续期；失败解包统一外壳，401 额外广播失效事件
 instance.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const remains = response.headers?.['x-session-expires-in']
+    if (remains !== undefined && remains !== null && remains !== '') {
+      const secs = Number(remains)
+      if (Number.isFinite(secs)) {
+        window.dispatchEvent(new CustomEvent(SESSION_TICK_EVENT, { detail: secs }))
+      }
+    }
+    return response
+  },
   (error: AxiosError) => {
     if (error.response) {
       const { status, data } = error.response
@@ -83,6 +114,11 @@ instance.interceptors.response.use(
         trace_id?: string
       }
       const envelope = body.error ?? {}
+      if (status === 401) {
+        // 登录接口自己的 401（账号密码错）也会走到这：authStore 收到只做幂等清会话，
+        // 登录页自己 catch 展示错误，互不干扰。
+        window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+      }
       throw new ApiRequestError(envelope.message || `请求失败（${status}）`, {
         status,
         code: envelope.code,
@@ -104,11 +140,22 @@ instance.interceptors.response.use(
 export interface ApiOk<T> {
   data: T
   traceId: string
+  /** 滑动续期后的会话剩余秒数（仅认证接口的响应带；0 = 不过期）。 */
+  expiresIn: number | null
 }
 
 async function request<T>(p: Promise<AxiosResponse>): Promise<ApiOk<T>> {
   const res = await p
-  return { data: res.data.data as T, traceId: res.data.trace_id ?? '-' }
+  const rawExpires = res.headers?.['x-session-expires-in']
+  const expiresIn =
+    rawExpires !== undefined && rawExpires !== null && rawExpires !== ''
+      ? Number(rawExpires)
+      : null
+  return {
+    data: res.data.data as T,
+    traceId: res.data.trace_id ?? '-',
+    expiresIn: Number.isFinite(expiresIn as number) ? expiresIn : null,
+  }
 }
 
 export const http = {
