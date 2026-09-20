@@ -1,0 +1,239 @@
+.page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 头部 */
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.sub {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-3);
+  max-width: 640px;
+}
+.headActions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* 按钮 */
+.primaryBtn {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+.primaryBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.dangerBtn {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+.dangerBtn:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 列表 */
+.listCard {
+  padding: 6px 18px;
+}
+.stateBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 56px 0;
+  color: var(--text-3);
+  font-size: 13.5px;
+}
+.stateIcon {
+  opacity: 0.5;
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child {
+  border-bottom: none;
+}
+.rowCurrent {
+  margin: 0 -10px;
+  padding-left: 14px;
+  padding-right: 14px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  border-bottom-color: transparent;
+}
+.rowCurrent + .row {
+  border-top: 1px solid var(--border);
+}
+.deviceIcon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.rowCurrent .deviceIcon {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+.rowMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rowTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.deviceName {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-1);
+}
+.currentChip,
+.kindChip {
+  font-size: 11px;
+  line-height: 1.7;
+  padding: 0 8px;
+}
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.metaItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.rowAction {
+  flex-shrink: 0;
+}
+
+.footNote {
+  margin: 14px 4px 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-3);
+}
+
+.spinIcon {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 确认弹窗 */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(8, 8, 12, 0.5);
+  backdrop-filter: blur(2px);
+  animation: overlayIn 0.16s ease;
+}
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+  }
+}
+.modal {
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  padding: 18px 20px 16px;
+  animation: modalIn 0.18s var(--ease-out);
+}
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.modalTitle {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.modalBody {
+  margin: 12px 0 18px;
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: var(--text-2);
+}
+.modalFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.busyInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.busyInner .spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
