@@ -31,15 +31,16 @@ from nacho.api import (  # noqa: E402
     AuthService,
     Credentials,
     ErrorCode,
-    HmacTokenService,
     InMemoryUserStore,
     InvalidCredentialsError,
     LoginData,
     LoginRequest,
+    SESSION_COOKIE,
+    ClientInfo,
+    InMemorySessionStore,
     Pbkdf2PasswordHasher,
-    TokenClaims,
-    TokenExpiredError,
-    TokenInvalidError,
+    SessionData,
+    SessionService,
     attach_api_logging,
     create_app,
     profile_of,
@@ -76,12 +77,13 @@ def client_for(app: FastAPI) -> httpx.AsyncClient:
 
 
 def app_with(**overrides: object) -> FastAPI:
-    """建一个应用：默认前缀 /api、令牌 1800 秒、固定签名密钥（测试要可重现）。
+    """建一个应用：默认前缀 /api、访问令牌 1800 秒（测试要可重现）。
 
     用户存储传 :func:`demo_store` 那一份共享的：否则每个用例重建应用都要把演示账号
-    重新哈希一遍，单点计时就先看得出这里贵。
+    重新哈希一遍，单点计时就先看得出这里贵。会话走内存实现（不接库），令牌索引则由
+    ``TokenIndex`` 自带的内存兜底顶上（测试里没人去 ``cache.start()``）。
     """
-    options = ApiOptions(prefix="/api", token_ttl=1800.0, secret="test-secret")
+    options = ApiOptions(prefix="/api", token_ttl=1800.0)
     return create_app(replace(options, **overrides), user_store=demo_store(), hasher=_TEST_HASHER)
 
 
@@ -237,24 +239,116 @@ class TestToken:
         assert response.status_code == 401
         assert response.json()["error"]["code"] == ErrorCode.UNAUTHORIZED
 
-    async def test_tampered_token_is_401_invalid(self) -> None:
+    async def test_tampered_token_is_401(self) -> None:
+        """令牌是随机串，不是签名：改一个字就换不出会话，直接不认。"""
         async with client_for(app_with()) as client:
             token: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            # 登录已经让客户端带上了会话 Cookie，不清掉的话请求靠 Cookie 就过了，
+            # 这条要测的是"头里那个坏令牌"，所以先把 Cookie 拿掉
+            client.cookies.clear()
             response = await client.get(
                 "/api/auth/me", headers={"Authorization": f"Bearer {token[:-2]}xy"}
             )
         assert response.status_code == 401
-        assert response.json()["error"]["code"] == ErrorCode.TOKEN_INVALID
+        assert response.json()["error"]["code"] == ErrorCode.UNAUTHORIZED
 
-    async def test_expired_token_is_401_expired(self) -> None:
-        """过期令牌：客户端拿 TOKEN_EXPIRED 决定去重新登录。"""
-        expired: str = HmacTokenService("test-secret", ttl=-1.0).issue("u-0001")
+    async def test_login_sets_httponly_cookie(self) -> None:
+        """令牌写进 HttpOnly Cookie：JS 读不到，XSS 也就偷不走。"""
         async with client_for(app_with()) as client:
-            response = await client.get(
-                "/api/auth/me", headers={"Authorization": f"Bearer {expired}"}
+            response = await client.post(LOGIN_PATH, json=ADMIN)
+            cookie_header: str = response.headers["set-cookie"]
+            token: str = response.json()["data"]["token"]
+
+        assert SESSION_COOKIE in cookie_header
+        assert "HttpOnly" in cookie_header
+        assert "SameSite=lax" in cookie_header.lower() or "samesite=lax" in cookie_header.lower()
+        assert "Max-Age" not in cookie_header  # 没勾「记住设备」= 会话 Cookie（关浏览器即丢）
+        assert token in cookie_header
+
+    async def test_remember_makes_the_cookie_persistent(self) -> None:
+        """勾了「记住设备」：Cookie 带上 Max-Age（持久），服务端有效期也变长。"""
+        async with client_for(app_with()) as client:
+            response = await client.post(LOGIN_PATH, json={**ADMIN, "remember": True})
+            cookie_header: str = response.headers["set-cookie"]
+            data = ApiResponse[LoginData].model_validate(response.json()).data
+
+        assert "Max-Age=" in cookie_header
+        assert data.expires_in == int(ApiOptions().remember_ttl)
+
+    async def test_login_reuses_the_cookie_token(self) -> None:
+        """同一台设备再登录一次（Cookie 自动带上）：**复用**旧令牌，不新建会话。
+
+        这正是浏览器的情形——令牌在 HttpOnly Cookie 里，JS 拿不到、塞不进请求体，所以那
+        条路只能靠后端自己从 Cookie 里取。好处是设备列表不会堆出一串重复记录，手里的
+        Cookie 也不会被新令牌顶掉。
+        """
+        async with client_for(app_with()) as client:
+            first = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN)).json()
+            ).data
+            second = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN)).json()
+            ).data
+            listed = ApiResponse[list[SessionData]].model_validate(
+                (await client.get("/api/auth/sessions")).json()
+            ).data
+
+        assert first.reused is False  # 第一次是正经开会话
+        assert second.reused is True
+        assert second.token == first.token  # 令牌原样发回，Cookie 不用换
+        assert second.token_hash == first.token_hash
+        assert len(listed) == 1  # 设备列表里没多出一条
+
+    async def test_login_with_previous_token_in_the_body(self) -> None:
+        """脚本客户端（手里没有 Cookie）：把旧令牌放请求体里，一样能复用。"""
+        async with client_for(app_with()) as client:
+            first = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN)).json()
+            ).data
+            client.cookies.clear()  # 模拟脚本：不自动带 Cookie，只把令牌放进请求体
+            second = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json={**ADMIN, "previous_token": first.token})).json()
+            ).data
+
+        assert second.reused is True
+        assert second.token == first.token
+        assert second.token_hash == first.token_hash
+
+    async def test_login_with_a_useless_previous_token_still_works(self) -> None:
+        """旧令牌认不出来 → 不复用，照常发一个新的（**复用失败不该挡住登录**）。"""
+        async with client_for(app_with()) as client:
+            data = ApiResponse[LoginData].model_validate(
+                (
+                    await client.post(
+                        LOGIN_PATH, json={**ADMIN, "previous_token": "nacho_乱编的"}
+                    )
+                ).json()
+            ).data
+            listed = ApiResponse[list[SessionData]].model_validate(
+                (await client.get("/api/auth/sessions")).json()
+            ).data
+
+        assert data.reused is False
+        assert data.token.startswith("nacho_")
+        assert len(listed) == 1  # 这条是这次新开的
+
+    async def test_revoked_session_token_is_401(self) -> None:
+        """令牌**有状态**：会话一吊销，手里那个旧令牌立刻就不好使了。"""
+        async with client_for(app_with()) as client:
+            login = ApiResponse[LoginData].model_validate(
+                (await client.post(LOGIN_PATH, json=ADMIN)).json()
             )
+            data = login.data
+            headers = {"Authorization": f"Bearer {data.token}"}
+            assert (await client.get("/api/auth/me", headers=headers)).status_code == 200
+
+            revoked = await client.delete(
+                f"/api/auth/sessions/{data.token_hash}", headers=headers
+            )
+            assert revoked.status_code == 200, revoked.text
+            response = await client.get("/api/auth/me", headers=headers)
         assert response.status_code == 401
-        assert response.json()["error"]["code"] == ErrorCode.TOKEN_EXPIRED
+        assert response.json()["error"]["code"] == ErrorCode.UNAUTHORIZED
 
 
 # ----------------------------------------------------------------------- 选项装配
@@ -292,7 +386,11 @@ class TestOptions:
 
 # ----------------------------------------------------------------------- 默认实现
 class TestSecurity:
-    """密码哈希与令牌这两份默认实现（都不引第三方库）。"""
+    """密码哈希这份默认实现（不引第三方库）。
+
+    令牌那部分原来是「HMAC 签名、可自证」的，现在是**有状态的不透明令牌**，测试在
+    :mod:`tests.test_session` 里（那里连缓存与滑动续期一起测）。
+    """
 
     def test_password_hash_roundtrip(self) -> None:
         hasher = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)
@@ -306,26 +404,6 @@ class TestSecurity:
         assert not hasher.verify("x", "not-a-hash")
         assert not hasher.verify("x", "other$1$c2FsdA==$ZGlnZXN0")  # 算法名不认
 
-    def test_token_roundtrip_and_expiry(self) -> None:
-        tokens = HmacTokenService("secret", ttl=60.0)
-        claims: TokenClaims = tokens.parse(tokens.issue("u-0001"))
-        assert claims.subject == "u-0001"
-        assert 0 < claims.expires_in <= 60
-        assert tokens.parse(tokens.issue("u-0002")).token_id  # 每次一个新编号
-
-    def test_expired_token_raises(self) -> None:
-        tokens = HmacTokenService("secret", ttl=-1.0)
-        with pytest.raises(TokenExpiredError) as excinfo:
-            tokens.parse(tokens.issue("u-0001"))
-        assert excinfo.value.code == ErrorCode.TOKEN_EXPIRED
-
-    def test_secret_mismatch_raises_invalid(self) -> None:
-        """换一把密钥验签：签名对不上，报 TOKEN_INVALID（不是过期）。"""
-        token = HmacTokenService("one", ttl=60.0).issue("u-0001")
-        with pytest.raises(TokenInvalidError) as excinfo:
-            HmacTokenService("two", ttl=60.0).parse(token)
-        assert excinfo.value.code == ErrorCode.TOKEN_INVALID
-
     async def test_profile_of_drops_password_hash(self) -> None:
         store = InMemoryUserStore.demo(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS))
         record = await store.get_by_account("admin")
@@ -336,9 +414,15 @@ class TestSecurity:
 
     async def test_service_raises_invalid_credentials_directly(self) -> None:
         """服务层不认识 HTTP：失败抛的是异常，状态码在异常里。"""
-        service = AuthService(InMemoryUserStore.demo(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)))
+        service = AuthService(
+            InMemoryUserStore.demo(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)),
+            sessions=SessionService(InMemorySessionStore()),
+        )
         with pytest.raises(InvalidCredentialsError):
-            await service.login(Credentials(account="admin", password="wrong-password"))
+            await service.login(
+                Credentials(account="admin", password="wrong-password"),
+                client=ClientInfo(),
+            )
 
 
 # --------------------------------------------------------------------- 日志接入点
@@ -372,7 +456,7 @@ class TestLogging:
         await asyncio.sleep(0.1)  # 同上：等文件出口被拉起来
         async with client_for(
             create_app(
-                replace(ApiOptions(prefix="/api", secret="s"), access_log=False),
+                replace(ApiOptions(prefix="/api"), access_log=False),
                 user_store=demo_store(),
                 hasher=_TEST_HASHER,
             )
