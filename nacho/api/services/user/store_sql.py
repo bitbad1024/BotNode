@@ -12,8 +12,8 @@
     disabled       BOOLEAN      NOT NULL DEFAULT FALSE
 
 ``roles`` 在库里是 JSON 字符串，进出都转成 ``tuple[str, ...]``；其余字段直接对应
-:class:`~nacho.api.services.user.models.UserRecord`。和 :class:`InMemoryUserStore` 一样，
-本类只负责「查」，没有增删改接口——真要管账号，照同一份协议另接即可。
+:class:`~nacho.api.services.user.models.UserRecord`。本类只负责「查」（外加建表 / 种演示账号），
+没有增删改接口——真要管账号，照同一份协议另接即可。
 
 引擎由外部注入（:class:`AsyncEngine`）：本模块不建引擎、不读配置，连接参数归入口层管；
 会话按「一次查询一个会话」开，用完即关。

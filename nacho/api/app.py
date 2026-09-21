@@ -9,9 +9,11 @@
 4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``），并把各模块
    的服务挂到 ``app.state`` 上给路由注入。
 
-依赖全是可选的：不传 ``user_store`` 就用内存演示账号，不传 ``hasher`` / ``tokens`` 就走
-默认实现；传了 ``db``（``AsyncEngine``）就改用落库版 :class:`~nacho.api.services.user.store_sql.SqlUserStore`
-（SQLModel 查 ``users`` 表，启动时建表），所以 **不接数据库也能直接跑起来**。
+依赖全是可选的：不传 ``user_store`` / ``session_store`` 就用落库版
+:class:`~nacho.api.services.user.store_sql.SqlUserStore`（查 ``users`` 表）与
+:class:`~nacho.api.services.session.store_sql.SqlSessionStore`（查 ``auth_sessions`` 表），
+不传 ``hasher`` 就走默认实现；没传 ``db`` 时给它们挂一块**内存 sqlite**（启动时建表 +
+空表种演示账号），所以 **不接数据库也能直接跑起来**。
 
 ``onebot`` 同样是可选的：主程序把 :class:`nacho.onebot.OneBotServer` 传进来，
 ``<prefix>/onebot/*`` 那组管理接口才有用；没传就回 503（「没接入」和「出错了」分开报）。
@@ -49,7 +51,6 @@ from .services.session import SessionService, SqlSessionStore
 from .services.session.protocols import SessionStore
 from .services.user.protocols import PasswordHasher, UserStore
 from .services.user.security import Pbkdf2PasswordHasher
-from .services.user.store import InMemoryUserStore
 from .services.user.store_sql import SqlUserStore
 from .options import ApiOptions
 
@@ -69,15 +70,14 @@ def create_app(
     """装配一个 FastAPI 应用（接口层的对外门面）。
 
     :param options: 接口层选项（路由前缀、访问令牌滑动有效期、长期令牌有效期、访问日志）；
-    :param user_store: 用户存储，默认内存演示账号；传了就直接用；
+    :param user_store: 用户存储，默认落库版（不接库时挂内存 sqlite，空表种演示账号）；传了就直接用；
     :param hasher: 密码哈希器，默认 PBKDF2；
-    :param session_store: 会话存储，默认按 ``db`` 决定（有库就落 ``auth_sessions`` 表，
-        没库就挂一块**内存 sqlite** 跑同一份落库实现）——登录令牌是**有状态**的，
-        会话信息得有地方放；
-    :param db: 异步引擎（``AsyncEngine``）；传了就用落库版
-        :class:`~nacho.api.services.user.store_sql.SqlUserStore`（SQLModel 查 ``users`` 表）
-        与 :class:`~nacho.api.services.session.store_sql.SqlSessionStore`（``auth_sessions`` 表），
-        没传（也没传 ``user_store``）就退回内存演示账号——**不接数据库也能直接跑起来**；
+    :param session_store: 会话存储，默认落库版（不接库时与用户存储共挂一块内存 sqlite）
+        ——登录令牌是**有状态**的，会话信息得有地方放；
+    :param db: 异步引擎（``AsyncEngine``）；传了就用它跑落库版
+        :class:`~nacho.api.services.user.store_sql.SqlUserStore`（查 ``users`` 表）与
+        :class:`~nacho.api.services.session.store_sql.SqlSessionStore`（查 ``auth_sessions`` 表），
+        没传就兜底挂一块**内存 sqlite**——**不接数据库也能直接跑起来**；
     :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``）；传了 ``<prefix>/onebot/*``
         那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，没传时这些接口回 503；
     :param title / version: OpenAPI 文档上的标题与版本；
@@ -87,26 +87,24 @@ def create_app(
     log: BaseLogger = logger if logger is not None else api_logger(API_LOGGER_NAME)
     chosen_hasher: PasswordHasher = hasher if hasher is not None else Pbkdf2PasswordHasher()
 
-    # 选用户存储：显式传的优先 -> 给了 db 就用落库版 -> 否则内存演示（保证开箱即跑）
-    store: UserStore
-    if user_store is not None:
-        store = user_store
-    elif db is not None:
-        store = SqlUserStore(db, hasher=chosen_hasher)
-    else:
-        store = InMemoryUserStore.demo(chosen_hasher)
-
-    # 选会话存储：显式传的优先 -> 给了 db 就落 auth_sessions 表 -> 否则挂一块内存 sqlite
-    # （同一份落库实现，不再单养一个内存版）。兜底那个引擎是自己建的，记下来交给 lifespan 关。
-    sessions_store: SessionStore
+    # 用户 / 会话都只保留落库实现（见各自 store_sql），所以都得有一块库：优先显式传的 ``db``，
+    # 没传就兜底挂一块**内存 sqlite**（用户与会话共用同一块，开箱即跑）。这块内存引擎是自己
+    # 建的，记下来交给 lifespan 停机时关；建表 / 种演示账号也都在 lifespan 里做。
     fallback_engine: AsyncEngine | None = None
-    if session_store is not None:
-        sessions_store = session_store
-    elif db is not None:
-        sessions_store = SqlSessionStore(db)
+    backing: AsyncEngine
+    if db is not None:
+        backing = db
     else:
         fallback_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        sessions_store = SqlSessionStore(fallback_engine)
+        backing = fallback_engine
+
+    # 选用户存储 / 会话存储：显式传的优先 -> 否则落库版挂到上面那块库上
+    store: UserStore = (
+        user_store if user_store is not None else SqlUserStore(backing, hasher=chosen_hasher)
+    )
+    sessions_store: SessionStore = (
+        session_store if session_store is not None else SqlSessionStore(backing)
+    )
     session_service = SessionService(
         sessions_store,
         access_ttl=chosen.token_ttl,

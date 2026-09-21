@@ -31,7 +31,6 @@ from nacho.api import (  # noqa: E402
     ApiOptions,
     ApiResponse,
     ClientData,
-    InMemoryUserStore,
     IssuedTokenData,
     KickData,
     LoginData,
@@ -137,10 +136,9 @@ def port_of(server: OneBotServer) -> int:
 
 
 def api_app(server: OneBotServer | None) -> FastAPI:
-    """接口层应用（内存演示账号），把 OneBot 服务挂上去给管理接口用。"""
+    """接口层应用（演示账号由 ``create_app`` 兜底种好），把 OneBot 服务挂上去给管理接口用。"""
     return create_app(
         ApiOptions(prefix="/api"),
-        user_store=InMemoryUserStore.demo(_TEST_HASHER),
         hasher=_TEST_HASHER,
         onebot=server,
     )
