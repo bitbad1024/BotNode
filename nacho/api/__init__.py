@@ -91,7 +91,6 @@ from .api.onebot import (
 from .services.auth import AuthService, Credentials, CurrentUser, LoginResult
 from .services.session import (
     ClientInfo,
-    InMemorySessionStore,
     SessionRecord,
     SessionService,
     SqlSessionStore,
@@ -181,7 +180,6 @@ __all__ = [
     "SessionRecord",
     "ClientInfo",
     "SqlSessionStore",
-    "InMemorySessionStore",
     "TokenHashCollisionError",
     "describe_client",
     # 日志接入点

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import AsyncIterator
@@ -21,6 +22,7 @@ pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip in
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
 from config import ConfigError, Settings  # noqa: E402
 from nacho.api import (  # noqa: E402
@@ -37,10 +39,10 @@ from nacho.api import (  # noqa: E402
     LoginRequest,
     SESSION_COOKIE,
     ClientInfo,
-    InMemorySessionStore,
     Pbkdf2PasswordHasher,
     SessionData,
     SessionService,
+    SqlSessionStore,
     attach_api_logging,
     create_app,
     profile_of,
@@ -73,9 +75,39 @@ def demo_store() -> InMemoryUserStore:
     return _CACHE["demo"]
 
 
-def client_for(app: FastAPI) -> httpx.AsyncClient:
-    """一个直连 ASGI 应用的异步客户端（不发真实网络请求）。"""
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+@asynccontextmanager
+async def client_for(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    """一个直连 ASGI 应用的异步客户端（不发真实网络请求）。
+
+    顺带把 app 的 lifespan 跑起来：建表在里面，而 httpx 的 ASGITransport 不会自己触发启动。
+    ``create_app`` 不接库时会话挂在一块内存 sqlite 上，正好靠它建表。
+    """
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
+
+
+#: 本文件用到的内存引擎：每个用例一份，用例结束由下面的 fixture 统一 dispose
+_MEMORY_ENGINES: list[AsyncEngine] = []
+
+
+async def memory_session_store() -> SqlSessionStore:
+    """挂在内存 sqlite 上的会话存储（表已建好）。"""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _MEMORY_ENGINES.append(engine)
+    store = SqlSessionStore(engine)
+    await store.ensure_schema()
+    return store
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_memory_engines() -> AsyncIterator[None]:
+    """用例结束把上面那些内存引擎关掉（否则连接会跟着事件循环一起悬着）。"""
+    yield
+    while _MEMORY_ENGINES:
+        await _MEMORY_ENGINES.pop().dispose()
 
 
 def app_with(**overrides: object) -> FastAPI:
@@ -516,7 +548,7 @@ class TestSecurity:
         """服务层不认识 HTTP：失败抛的是异常，状态码在异常里。"""
         service = AuthService(
             InMemoryUserStore.demo(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)),
-            sessions=SessionService(InMemorySessionStore()),
+            sessions=SessionService(await memory_session_store()),
         )
         with pytest.raises(InvalidCredentialsError):
             await service.login(

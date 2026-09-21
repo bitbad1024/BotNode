@@ -37,7 +37,7 @@ nacho/api/
 └── services/        ★ 业务层：只算「业务怎么办」，不认识 FastAPI
     ├── user/        用户：models/protocols/security/store/validation
     ├── session/     会话：登录开出来的那一次会话（设备信息 + 令牌）、滑动续期、吊销
-    │                models/client/protocols/store_sql/store_memory/tokens/service
+    │                models/client/protocols/store_sql/tokens/service
     └── auth/        鉴权：models/service（令牌机制在 session 里）
 ```
 

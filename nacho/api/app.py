@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from nacho import __version__
 from nacho.core.logger import BaseLogger
@@ -45,7 +45,7 @@ from .logging import API_LOGGER_NAME, api_logger
 from .api import auth_router, onebot_router
 from .api.onebot.protocols import OneBotLike
 from .services.auth import AuthService
-from .services.session import InMemorySessionStore, SessionService, SqlSessionStore
+from .services.session import SessionService, SqlSessionStore
 from .services.session.protocols import SessionStore
 from .services.user.protocols import PasswordHasher, UserStore
 from .services.user.security import Pbkdf2PasswordHasher
@@ -71,8 +71,9 @@ def create_app(
     :param options: 接口层选项（路由前缀、访问令牌滑动有效期、长期令牌有效期、访问日志）；
     :param user_store: 用户存储，默认内存演示账号；传了就直接用；
     :param hasher: 密码哈希器，默认 PBKDF2；
-    :param session_store: 会话存储，默认按 ``db`` 决定（有库就落 ``auth_sessions``，
-        没库就用内存）——登录令牌是**有状态**的，会话信息得有地方放；
+    :param session_store: 会话存储，默认按 ``db`` 决定（有库就落 ``auth_sessions`` 表，
+        没库就挂一块**内存 sqlite** 跑同一份落库实现）——登录令牌是**有状态**的，
+        会话信息得有地方放；
     :param db: 异步引擎（``AsyncEngine``）；传了就用落库版
         :class:`~nacho.api.services.user.store_sql.SqlUserStore`（SQLModel 查 ``users`` 表）
         与 :class:`~nacho.api.services.session.store_sql.SqlSessionStore`（``auth_sessions`` 表），
@@ -95,14 +96,17 @@ def create_app(
     else:
         store = InMemoryUserStore.demo(chosen_hasher)
 
-    # 选会话存储：显式传的优先 -> 给了 db 就落 auth_sessions 表 -> 否则内存（开箱即跑）
+    # 选会话存储：显式传的优先 -> 给了 db 就落 auth_sessions 表 -> 否则挂一块内存 sqlite
+    # （同一份落库实现，不再单养一个内存版）。兜底那个引擎是自己建的，记下来交给 lifespan 关。
     sessions_store: SessionStore
+    fallback_engine: AsyncEngine | None = None
     if session_store is not None:
         sessions_store = session_store
     elif db is not None:
         sessions_store = SqlSessionStore(db)
     else:
-        sessions_store = InMemorySessionStore()
+        fallback_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        sessions_store = SqlSessionStore(fallback_engine)
     session_service = SessionService(
         sessions_store,
         access_ttl=chosen.token_ttl,
@@ -132,6 +136,8 @@ def create_app(
         try:
             yield
         finally:
+            if fallback_engine is not None:
+                await fallback_engine.dispose()  # 兜底的内存引擎：自己建的就自己关
             log.info("接口层停止")
 
     app = FastAPI(

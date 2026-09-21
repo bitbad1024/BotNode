@@ -146,6 +146,20 @@ def api_app(server: OneBotServer | None) -> FastAPI:
     )
 
 
+@asynccontextmanager
+async def api_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
+    """直连 ASGI 的客户端，并跑一遍 app 的 lifespan（会话表在 lifespan 里建）。
+
+    ``create_app`` 不接库时会话挂在一块内存 sqlite 上、建表在 lifespan，而 httpx 的
+    ASGITransport 不会自己触发启动，所以这里替它跑一遍。
+    """
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
+
+
 async def login(client: httpx.AsyncClient, who: dict[str, str] | None = None) -> str:
     """登录拿令牌（管理接口都要带它）；``who`` 不传就是 admin。"""
     ok = await client.post("/api/auth/login", json=who or ADMIN)
@@ -378,9 +392,7 @@ async def test_management_requires_login() -> None:
     """管理接口都要登录：没带令牌一律 401（先鉴权，再看服务接没接）。"""
     async with opened_server(await memory_registry()) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             assert (await client.get("/api/onebot/clients")).status_code == 401
             assert (await client.get("/api/onebot/tokens")).status_code == 401
             assert (await client.delete("/api/onebot/clients/whatever")).status_code == 401
@@ -388,9 +400,7 @@ async def test_management_requires_login() -> None:
 
 async def test_management_reports_not_configured() -> None:
     """主程序没传 OneBot 服务：接口回 503 说「没接入」，而不是 500。"""
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api_app(None)), base_url="http://test"
-    ) as client:
+    async with api_client(api_app(None)) as client:
         token = await login(client)
         response = await client.get(
             "/api/onebot/clients", headers={"Authorization": f"Bearer {token}"}
@@ -403,9 +413,7 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
     registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             token = await login(client)
             headers = {"Authorization": f"Bearer {token}"}
 
@@ -476,9 +484,7 @@ async def test_management_toggles_token_enabled() -> None:
     registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             headers = {"Authorization": f"Bearer {await login(client)}"}
             issued = await registry.issue("alice")
 
@@ -511,9 +517,7 @@ async def test_management_kick_with_revoke() -> None:
 
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             headers = {"Authorization": f"Bearer {await login(client)}"}
             async with connect(ws_url(port_of(server), issued.token)) as ws:
                 await ws.send(json.dumps(PRIVATE_MESSAGE))
@@ -542,9 +546,7 @@ async def test_scope_admin_sees_every_account() -> None:
     registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             headers = {"Authorization": f"Bearer {await login(client)}"}
             await issue_via_api(client, headers, "alice")
             await issue_via_api(client, headers, "bob")
@@ -561,9 +563,7 @@ async def test_scope_normal_user_only_sees_own_tokens() -> None:
     registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             admin_headers = {"Authorization": f"Bearer {await login(client)}"}
             await issue_via_api(client, admin_headers, "alice")
             await issue_via_api(client, admin_headers, "robot")
@@ -585,9 +585,7 @@ async def test_scope_normal_user_cannot_issue_for_another_account() -> None:
     registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             admin_headers = {"Authorization": f"Bearer {await login(client)}"}
             robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
 
@@ -612,9 +610,7 @@ async def test_scope_normal_user_cannot_touch_another_accounts_token() -> None:
     registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with api_client(app) as client:
             admin_headers = {"Authorization": f"Bearer {await login(client)}"}
             alice = await issue_via_api(client, admin_headers, "alice")
             robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
@@ -648,9 +644,7 @@ async def test_scope_client_list_is_scoped() -> None:
         app = api_app(server)
         # 两个账号各连一条：连上就够，归属在握手时就定了，不必再发事件
         async with (
-            httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client,
+            api_client(app) as client,
             connect(ws_url(port_of(server), alice_token)),
             connect(ws_url(port_of(server), robot_token)),
         ):

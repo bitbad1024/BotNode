@@ -1,8 +1,7 @@
 """会话域自己会抛的错（**不认识 HTTP**）。
 
-只有一个：令牌摘要撞了。它属于**存储层**的错，两个实现都得抛同一个类型，因为
-:class:`~nacho.api.services.session.protocols.SessionStore` 是一份协议——同一件事在
-两个实现里表现不同，协议就没定住。
+只有一个：令牌摘要撞了。它属于**存储层**的错，协议要求实现都得抛同一个类型——同一件事
+各抛各的，调用方就没法统一处理了。
 
 撞的概率极低（256 位输出的生日界，见
 :func:`~nacho.api.services.session.tokens.hash_token`），这个类型的存在**不是为了处理它，
@@ -14,7 +13,7 @@ from __future__ import annotations
 class TokenHashCollisionError(Exception):
     """令牌摘要已经存在（这该是撞不上的）。
 
-    落库版撞的是 ``auth_sessions.token_hash`` 的主键，内存版自己比一眼字典。
+    撞的是 ``auth_sessions.token_hash`` 的主键。
 
     **绝不允许覆盖**：覆盖写等于把 A 那条登录的记录换成 B 的（设备列表里就变成了别人
     的设备），而令牌本身又不可逆、没有第二处能发现这件事。宁可这一次登录失败。
