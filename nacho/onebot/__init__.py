@@ -56,7 +56,6 @@ from .options import (
 )
 from .server import ClientEntry, EventHandler, OneBotConnection, OneBotServer
 from .tokens import (
-    InMemoryTokenRegistry,
     IssuedToken,
     SqlTokenRegistry,
     TokenRecord,
@@ -76,7 +75,6 @@ __all__ = [
     "TokenRecord",
     "IssuedToken",
     "SqlTokenRegistry",
-    "InMemoryTokenRegistry",
     "generate_token",
     "hash_token",
     # 选项默认值

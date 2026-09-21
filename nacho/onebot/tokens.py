@@ -4,10 +4,9 @@
 关系记在这里。服务端握手时查一次，把账号绑到那条连接上（见
 :meth:`nacho.onebot.server.OneBotServer.start`），之后每条事件都知道是哪个账号的。
 
-三种实现，按需挑一个传给 :class:`~nacho.onebot.server.OneBotServer`::
-
-    SqlTokenRegistry(engine)      落库：onebot_tokens 表，能运行时增删（推荐）
-    InMemoryTokenRegistry()       内存：不接库时可用，进程重启即失效
+实现只有一个：:class:`SqlTokenRegistry`（查 ``onebot_tokens`` 表），交给
+:class:`~nacho.onebot.server.OneBotServer` 即可。想要「内存版」不必再写一份——把它的
+引擎指到内存 sqlite 就行（测试正是这么用的），逻辑只有一处，不会两边跑偏。
 
 **不传注册表 = 不校验**（谁都能连，归属记成匿名），所以不接数据库照样能跑起来。
 
@@ -18,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -219,62 +218,3 @@ class SqlTokenRegistry:
             row.enabled = enabled
             await session.commit()
             return True
-
-
-# --------------------------------------------------------------------------- 内存实现
-class InMemoryTokenRegistry:
-    """令牌放内存：不接库时用（测试 / 演示），进程重启即失效。"""
-
-    def __init__(self) -> None:
-        self._rows: dict[str, tuple[TokenRecord, str]] = {}  # id -> (记录, 明文)
-
-    async def resolve(self, token: str) -> TokenRecord | None:
-        if not token:
-            return None
-        # 按**字节**比：compare_digest 不接受非 ASCII 的 str（会抛 TypeError），
-        # 而客户端带什么字符来是不受我们控制的，认不出该返回 None 而不是炸
-        given = token.encode("utf-8")
-        for record, plain in self._rows.values():
-            if secrets.compare_digest(plain.encode("utf-8"), given) and record.enabled:
-                return record
-        return None
-
-    async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        """同 :meth:`SqlTokenRegistry.issue`；内存版没有唯一索引兜底，所以自己看一眼摘要。"""
-        for _ in range(MAX_ISSUE_ATTEMPTS):
-            token = generate_token()
-            digest = hash_token(token)
-            if any(hash_token(plain) == digest for _, plain in self._rows.values()):
-                continue  # 撞了：换一个
-            record = TokenRecord(
-                id=f"t-{uuid4().hex[:16]}",
-                account=account,
-                remark=remark,
-                created_at=time.time(),
-            )
-            self._rows[record.id] = (record, token)
-            return IssuedToken(record=record, token=token)
-        raise RuntimeError(f"连续 {MAX_ISSUE_ATTEMPTS} 次生成的令牌都撞上已有记录")
-
-    async def list_records(self, *, account: str | None = None) -> tuple[TokenRecord, ...]:
-        """同 :meth:`SqlTokenRegistry.list_records`；内存版就是在字典上筛一遍。"""
-        records = [record for record, _ in self._rows.values()]
-        if account is None:
-            return tuple(records)
-        return tuple(record for record in records if record.account == account)
-
-    async def get_by_id(self, token_id: str) -> TokenRecord | None:
-        existing = self._rows.get(token_id)
-        return None if existing is None else existing[0]
-
-    async def remove_by_id(self, token_id: str) -> bool:
-        return self._rows.pop(token_id, None) is not None
-
-    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
-        existing = self._rows.get(token_id)
-        if existing is None:
-            return False
-        record, plain = existing
-        # TokenRecord 是 frozen：改字段得换一个新对象（dataclasses.replace 正合适）
-        self._rows[token_id] = (replace(record, enabled=enabled), plain)
-        return True

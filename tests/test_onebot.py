@@ -1,7 +1,8 @@
 """OneBot 反向 WS 的测试：令牌定归属、在线列表、踢人与吊销，以及管理用的 HTTP 接口。
 
 跑在 127.0.0.1 的空闲端口上（每个用例自己挑一个），WS 客户端用 ``websockets``；
-令牌注册表用内存版（快）+ sqlite 版（验证落库那一份也走得通）。需要 ``websockets``
+令牌注册表统一走 :class:`~nacho.onebot.SqlTokenRegistry`，每个用例挂在一块内存 sqlite
+上（见 :func:`memory_registry`），不再单养一份内存实现。需要 ``websockets``
 （``pip install "nacho[onebot]"``），没装就整文件跳过。
 """
 from __future__ import annotations
@@ -11,7 +12,6 @@ import json
 import socket
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Callable, cast
 
 import pytest
@@ -41,7 +41,6 @@ from nacho.api import (  # noqa: E402
     create_app,
 )
 from nacho.onebot import (  # noqa: E402
-    InMemoryTokenRegistry,
     OneBotOptions,
     OneBotServer,
     SqlTokenRegistry,
@@ -93,9 +92,33 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 3.0) -> boo
     return predicate()
 
 
+#: 本文件用到的内存引擎：每个用例一份，用例结束由下面的 fixture 统一 dispose
+_MEMORY_ENGINES: list[AsyncEngine] = []
+
+
+async def memory_registry() -> SqlTokenRegistry:
+    """一份挂在内存 sqlite 上的注册表（表已建好）。
+
+    不再单养一份「内存仓库」：内存场景 = :class:`SqlTokenRegistry` + 内存库，逻辑只有一份。
+    """
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _MEMORY_ENGINES.append(engine)
+    registry = SqlTokenRegistry(engine)
+    await registry.ensure_schema()
+    return registry
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_memory_engines() -> AsyncGenerator[None, None]:
+    """用例结束把上面那些内存引擎关掉（否则连接会跟着事件循环一起悬着）。"""
+    yield
+    while _MEMORY_ENGINES:
+        await _MEMORY_ENGINES.pop().dispose()
+
+
 @asynccontextmanager
 async def opened_server(
-    registry: InMemoryTokenRegistry | None = None,
+    registry: SqlTokenRegistry | None = None,
 ) -> AsyncGenerator[OneBotServer]:
     """起一个临时服务端（随机端口）；退出时停服并断开所有客户端。"""
     server = OneBotServer(
@@ -144,7 +167,8 @@ async def issue_via_api(
 # --------------------------------------------------------------------------- 令牌注册表
 async def test_registry_issue_resolve_and_revoke() -> None:
     """签发 -> 认领 -> 列出 -> 吊销：令牌不存在 / 吊销后都认不出来。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
+    await registry.ensure_schema()  # 幂等：再建一次不报错
     issued = await registry.issue("alice", remark="主号")
 
     found = await registry.resolve(issued.token)
@@ -158,88 +182,40 @@ async def test_registry_issue_resolve_and_revoke() -> None:
     assert await registry.remove_by_id(issued.record.id) is False  # 再删一次：没有了
 
 
-async def test_sql_registry_roundtrip(tmp_path: Path) -> None:
-    """落库那一份（``onebot_tokens`` 表）：建表 -> 签发 -> 认领 -> 吊销。"""
-    engine: AsyncEngine = create_async_engine(
-        f"sqlite+aiosqlite:///{(tmp_path / 'onebot.db').as_posix()}"
-    )
-    try:
-        registry = SqlTokenRegistry(engine)
-        await registry.ensure_schema()
-        await registry.ensure_schema()  # 幂等：再建一次不报错
-
-        issued = await registry.issue("bob")
-        found = await registry.resolve(issued.token)
-        assert found is not None and found.account == "bob"
-        assert await registry.resolve("nbo_不存在") is None
-        assert len(await registry.list_records()) == 1
-        assert await registry.remove_by_id(issued.record.id) is True
-    finally:
-        await engine.dispose()
-
-
-def sql_engine(tmp_path: Path) -> AsyncEngine:
-    """临时库上的异步引擎（签发重试那几个用例自己管 dispose）。"""
-    return create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'collide.db').as_posix()}")
-
-
 async def test_issue_retries_when_digest_collides(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """摘要撞上已有记录：换一个令牌再来（把生成器钉死，碰撞就能确定性地造出来）。"""
-    engine = sql_engine(tmp_path)
-    try:
-        registry = SqlTokenRegistry(engine)
-        await registry.ensure_schema()
-        first = await registry.issue("alice")
-
-        # 第一次还生成 first.token（必撞），第二次给一个新的：应当重试后成功
-        generated = iter([first.token, "nbo_fresh"])
-        monkeypatch.setattr(tokens_module, "generate_token", lambda: next(generated))
-
-        second = await registry.issue("alice")
-        assert second.token == "nbo_fresh"
-        assert await registry.resolve(first.token) is not None  # 原来那个还在
-        assert await registry.resolve("nbo_fresh") is not None
-    finally:
-        await engine.dispose()
-
-
-async def test_issue_gives_up_after_retries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """一直撞：试满上限就把错抛出来——绝不退回一个跟别人一样的令牌。"""
-    engine = sql_engine(tmp_path)
-    try:
-        registry = SqlTokenRegistry(engine)
-        await registry.ensure_schema()
-        first = await registry.issue("alice")
-        monkeypatch.setattr(tokens_module, "generate_token", lambda: first.token)
-
-        with pytest.raises(IntegrityError):
-            await registry.issue("alice")
-        assert len(await registry.list_records()) == 1  # 没留下半截记录
-    finally:
-        await engine.dispose()
-
-
-async def test_memory_issue_skips_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """内存版没有唯一索引兜底，自己看一眼摘要：撞了就换一个。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     first = await registry.issue("alice")
 
+    # 第一次还生成 first.token（必撞），第二次给一个新的：应当重试后成功
     generated = iter([first.token, "nbo_fresh"])
     monkeypatch.setattr(tokens_module, "generate_token", lambda: next(generated))
 
     second = await registry.issue("alice")
     assert second.token == "nbo_fresh"
-    assert await registry.resolve(first.token) is not None
+    assert await registry.resolve(first.token) is not None  # 原来那个还在
+    assert await registry.resolve("nbo_fresh") is not None
+
+
+async def test_issue_gives_up_after_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一直撞：试满上限就把错抛出来——绝不退回一个跟别人一样的令牌。"""
+    registry = await memory_registry()
+    first = await registry.issue("alice")
+    monkeypatch.setattr(tokens_module, "generate_token", lambda: first.token)
+
+    with pytest.raises(IntegrityError):
+        await registry.issue("alice")
+    assert len(await registry.list_records()) == 1  # 没留下半截记录
 
 
 # --------------------------------------------------------------------------- 握手：令牌定归属
 async def test_handshake_binds_account() -> None:
     """带对令牌连进来：归属账号绑在连接上，机器人号收到第一条事件后才学到。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     alice = await registry.issue("alice")
     bob = await registry.issue("bob")
 
@@ -265,7 +241,7 @@ async def test_handshake_binds_account() -> None:
 
 async def test_handshake_rejects_bad_token() -> None:
     """令牌不对 / 没带令牌：握手就 401，连不进来。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -294,7 +270,7 @@ async def test_without_registry_accepts_anonymous() -> None:
 # --------------------------------------------------------------------------- 在线列表 / 踢人 / 吊销
 async def test_kick_disconnects_client() -> None:
     """踢下线：客户端那条连接被断开，在线列表里也消失。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -312,7 +288,7 @@ async def test_kick_disconnects_client() -> None:
 
 async def test_kick_with_revoke_blocks_reconnect() -> None:
     """踢 + 吊销：断开之后重连也被拒（只踢不断令牌的话，客户端会自己重连回来）。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -329,7 +305,7 @@ async def test_kick_with_revoke_blocks_reconnect() -> None:
 
 async def test_kick_without_revoke_keeps_token() -> None:
     """只踢不吊销：令牌还在，拿同一个令牌还能连上（这就是要 revoke 的原因）。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -345,7 +321,7 @@ async def test_kick_without_revoke_keeps_token() -> None:
 
 async def test_revoke_by_id_disconnects_client() -> None:
     """按令牌 id 吊销：记录删掉，正用它连着的客户端也断开（从列表里消失）。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -364,7 +340,7 @@ async def test_revoke_by_id_disconnects_client() -> None:
 
 async def test_set_enabled_disables_and_disconnects() -> None:
     """停用：不许再连（握手 401），正连着的客户端一并断开；启用回来又能连。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -393,14 +369,14 @@ async def test_set_enabled_disables_and_disconnects() -> None:
 
 async def test_set_enabled_unknown_id() -> None:
     """id 不存在：改不动，返回 False。"""
-    async with opened_server(InMemoryTokenRegistry()) as server:
+    async with opened_server(await memory_registry()) as server:
         assert await server.set_token_enabled("t-不存在", True) is False
 
 
 # --------------------------------------------------------------------------- 管理用的 HTTP 接口
 async def test_management_requires_login() -> None:
     """管理接口都要登录：没带令牌一律 401（先鉴权，再看服务接没接）。"""
-    async with opened_server(InMemoryTokenRegistry()) as server:
+    async with opened_server(await memory_registry()) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -424,7 +400,7 @@ async def test_management_reports_not_configured() -> None:
 
 async def test_management_lists_clients_and_manages_tokens() -> None:
     """登录后：看在线列表 -> 签一个令牌 -> 列出来 -> 吊销掉。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
@@ -497,7 +473,7 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
 
 async def test_management_toggles_token_enabled() -> None:
     """PATCH /onebot/tokens/{id}：停用 -> 状态变了 -> 启用回来；id 不存在 404。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
@@ -530,7 +506,7 @@ async def test_management_toggles_token_enabled() -> None:
 
 async def test_management_kick_with_revoke() -> None:
     """``DELETE /clients/{id}?revoke=true``：断开 + 吊销，之后重连也被拒。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     issued = await registry.issue("alice")
 
     async with opened_server(registry) as server:
@@ -563,7 +539,7 @@ async def test_management_kick_with_revoke() -> None:
 # --------------------------------------------------------------------- 权限范围（授权）
 async def test_scope_admin_sees_every_account() -> None:
     """admin 的范围不限：所有账号的令牌都看得到、都能管。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
@@ -582,7 +558,7 @@ async def test_scope_admin_sees_every_account() -> None:
 
 async def test_scope_normal_user_only_sees_own_tokens() -> None:
     """普通用户（robot）只看得到自己账号下的令牌 —— 这就是原来漏掉的那道隔离。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
@@ -606,7 +582,7 @@ async def test_scope_normal_user_cannot_issue_for_another_account() -> None:
     这条原来能得手：``account`` 只是请求体里随便填的字符串，于是普通用户能给自己造一个
     admin 名下的接入身份 —— 那是提权，不是"看到"。
     """
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
@@ -633,7 +609,7 @@ async def test_scope_normal_user_cannot_issue_for_another_account() -> None:
 
 async def test_scope_normal_user_cannot_touch_another_accounts_token() -> None:
     """普通用户停用 / 吊销别人的令牌 → 404（按 id 找东西一律 404，不告诉它这条 id 存在）。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     async with opened_server(registry) as server:
         app = api_app(server)
         async with httpx.AsyncClient(
@@ -664,7 +640,7 @@ async def test_scope_normal_user_cannot_touch_another_accounts_token() -> None:
 
 async def test_scope_client_list_is_scoped() -> None:
     """客户端列表：普通用户不带 ``?account=`` 只看自己账号的；显式要别人的 → 403。"""
-    registry = InMemoryTokenRegistry()
+    registry = await memory_registry()
     alice_token = (await registry.issue("alice")).token
     robot_token = (await registry.issue("robot")).token
 
