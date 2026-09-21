@@ -19,7 +19,6 @@ import hashlib
 import secrets
 import time
 from dataclasses import dataclass, replace
-from typing import Protocol
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -83,45 +82,6 @@ class IssuedToken:
 
     record: TokenRecord
     token: str
-
-
-class TokenRegistry(Protocol):
-    """令牌注册表：把「连进来的令牌」翻成「哪条记录（含账号）」。
-
-    服务端只认这一个协议，令牌存哪（库 / 内存 / 别处）由实现决定。
-    """
-
-    async def resolve(self, token: str) -> TokenRecord | None:
-        """令牌对应的记录；令牌不存在 / 被吊销 / 停用就返回 ``None``（握手按 401 拒）。
-
-        返回**整条记录**而不只是账号：连接上要记 ``id``，之后「删掉这个令牌」才知道
-        该把哪些连接断开（见 :meth:`nacho.onebot.OneBotServer.revoke_by_id`）。
-        """
-        ...
-
-    async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        """给 ``account`` 签一个新令牌；摘要万一撞上已有记录会换一个重试（见
-        :func:`generate_token`），试满 :data:`MAX_ISSUE_ATTEMPTS` 就把错抛出去。
-        """
-        ...
-
-    async def items(self) -> tuple[TokenRecord, ...]:
-        """全部令牌（给管理接口列出来；**不含明文**）。"""
-        ...
-
-    async def remove_by_id(self, token_id: str) -> bool:
-        """按记录 id 吊销（管理接口列表里拿到的是 id）；真删掉了返回 ``True``。"""
-        ...
-
-    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
-        """启用 / 停用一条令牌；真改到了返回 ``True``（id 不存在返回 ``False``）。
-
-        停用 = **不许再连**（握手时认不出来，按 401 拒），但记录还在、可以随时启用回来
-        ——和 :meth:`remove_by_id` 的「吊销」（删记录，不可逆）是两回事。
-        已经在连着的客户端由服务端顺带断开，见
-        :meth:`nacho.onebot.OneBotServer.set_token_enabled`。
-        """
-        ...
 
 
 # --------------------------------------------------------------------------- 落库实现
@@ -225,10 +185,23 @@ class SqlTokenRegistry:
         assert collision is not None
         raise collision
 
-    async def items(self) -> tuple[TokenRecord, ...]:
+    async def list_records(self, *, account: str | None = None) -> tuple[TokenRecord, ...]:
+        """列出令牌（不含明文）；给 ``account`` 就只列那个账号下的。
+
+        过滤**下推到 SQL**：非管理员查自己账号时走 ``account`` 索引，别人的行根本不读。
+        管理员不带账号就是「列出全部」——那本来就躲不掉全表读，但一次查询拿完，不逐个补查。
+        """
+        statement = select(TokenTable)
+        if account is not None:
+            statement = statement.where(TokenTable.account == account)
         async with self._sessions() as session:
-            result = await session.exec(select(TokenTable))
+            result = await session.exec(statement)
             return tuple(_to_record(row) for row in result)
+
+    async def get_by_id(self, token_id: str) -> TokenRecord | None:
+        async with self._sessions() as session:
+            row = await session.get(TokenTable, token_id)
+        return None if row is None else _to_record(row)
 
     async def remove_by_id(self, token_id: str) -> bool:
         async with self._sessions() as session:
@@ -284,8 +257,16 @@ class InMemoryTokenRegistry:
             return IssuedToken(record=record, token=token)
         raise RuntimeError(f"连续 {MAX_ISSUE_ATTEMPTS} 次生成的令牌都撞上已有记录")
 
-    async def items(self) -> tuple[TokenRecord, ...]:
-        return tuple(record for record, _ in self._rows.values())
+    async def list_records(self, *, account: str | None = None) -> tuple[TokenRecord, ...]:
+        """同 :meth:`SqlTokenRegistry.list_records`；内存版就是在字典上筛一遍。"""
+        records = [record for record, _ in self._rows.values()]
+        if account is None:
+            return tuple(records)
+        return tuple(record for record in records if record.account == account)
+
+    async def get_by_id(self, token_id: str) -> TokenRecord | None:
+        existing = self._rows.get(token_id)
+        return None if existing is None else existing[0]
 
     async def remove_by_id(self, token_id: str) -> bool:
         return self._rows.pop(token_id, None) is not None

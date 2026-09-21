@@ -380,7 +380,7 @@ class ApiSettings(_Region):
     """
 
     host: str = "127.0.0.1"  # HTTP 服务监听地址
-    port: int = Field(default=8000, ge=1, le=65535, description="1-65535 的端口")
+    port: int = Field(default=18080, ge=1, le=65535, description="1-65535 的端口")
     prefix: str = "/api"  # 路由前缀（要 / 开头；结尾的 / 会被去掉）
     token_ttl: float = Field(
         default=7200.0, ge=0, description="访问令牌滑动有效期（秒）；0 = 永不过期"

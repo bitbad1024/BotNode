@@ -173,7 +173,7 @@ max_connections = 10
 [api]
 # HTTP 服务监听地址与端口（接口层随主程序由 uvicorn 起）
 host = "127.0.0.1"
-port = 8000
+port = 18080
 # 路由前缀：登录接口最终挂在 <prefix>/auth/login
 prefix = "/api"
 # 访问令牌的有效期（秒）——**滑动**：每次带令牌的请求都会往后延，

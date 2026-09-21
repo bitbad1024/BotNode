@@ -151,7 +151,7 @@ async def test_registry_issue_resolve_and_revoke() -> None:
     assert found is not None and found.account == "alice"
     assert found.id == issued.record.id and found.remark == "主号"
     assert await registry.resolve("nbo_不存在") is None
-    assert len(await registry.items()) == 1
+    assert len(await registry.list_records()) == 1
 
     assert await registry.remove_by_id(issued.record.id) is True
     assert await registry.resolve(issued.token) is None  # 吊销后认不出来
@@ -172,7 +172,7 @@ async def test_sql_registry_roundtrip(tmp_path: Path) -> None:
         found = await registry.resolve(issued.token)
         assert found is not None and found.account == "bob"
         assert await registry.resolve("nbo_不存在") is None
-        assert len(await registry.items()) == 1
+        assert len(await registry.list_records()) == 1
         assert await registry.remove_by_id(issued.record.id) is True
     finally:
         await engine.dispose()
@@ -218,7 +218,7 @@ async def test_issue_gives_up_after_retries(
 
         with pytest.raises(IntegrityError):
             await registry.issue("alice")
-        assert len(await registry.items()) == 1  # 没留下半截记录
+        assert len(await registry.list_records()) == 1  # 没留下半截记录
     finally:
         await engine.dispose()
 
@@ -384,7 +384,7 @@ async def test_set_enabled_disables_and_disconnects() -> None:
                 pass
 
         # 和吊销不同：记录还在，启用回来照样能用
-        assert len(await registry.items()) == 1
+        assert len(await registry.list_records()) == 1
         assert await server.set_token_enabled(issued.record.id, True) is True
         async with connect(ws_url(port, issued.token)):
             assert await wait_until(lambda: len(server.roster()) == 1)

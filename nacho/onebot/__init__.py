@@ -11,7 +11,7 @@
     tokens.py    令牌注册表：令牌 -> 账号（一个端口接多客户端，靠它认归属）
     logging.py   日志接入点：``onebot`` 这个名字（落 logs/onebot.log）
 
-**一个端口接很多客户端**：谁连进来由令牌决定归属（:class:`TokenRegistry`）—— 握手时把令牌
+**一个端口接很多客户端**：谁连进来由令牌决定归属（:class:`~nacho.api.api.onebot.protocols.TokenRegistry`）—— 握手时把令牌
 翻成账号、绑到连接上，在线的客户端能像路由器那样列出来（``server.roster()``）、也能踢掉
 （``server.kick(...)``）。不传注册表就是不校验，不接数据库照样能跑。
 
@@ -60,7 +60,6 @@ from .tokens import (
     IssuedToken,
     SqlTokenRegistry,
     TokenRecord,
-    TokenRegistry,
     generate_token,
     hash_token,
 )
@@ -74,7 +73,6 @@ __all__ = [
     # 在线列表
     "ClientEntry",
     # 令牌注册表
-    "TokenRegistry",
     "TokenRecord",
     "IssuedToken",
     "SqlTokenRegistry",

@@ -25,7 +25,7 @@
     attach_api_logging(Path("logs/api.log"))          # 先挂载日志，再建应用
     app = create_app(ApiOptions.from_mapping(settings.api.model_dump()))
 
-    # uvicorn nacho_api:app --port 8000
+    # uvicorn nacho_api:app --port 18080
 """
 from __future__ import annotations
 
