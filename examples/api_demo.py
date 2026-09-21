@@ -172,8 +172,8 @@ async def main() -> None:
 
     # 7) 起真服务（这里只给命令）
     print("[7] 对外服务用这条命令起：")
-    print("      uvicorn examples.api_demo:app --port 8000   # 或把 create_app 单独放一个模块")
-    print("      # POST http://127.0.0.1:8000/api/auth/login")
+    print("      uvicorn examples.api_demo:app --port 18080   # 或把 create_app 单独放一个模块")
+    print("      # POST http://127.0.0.1:18080/api/auth/login")
 
 
 #: ``uvicorn examples.api_demo:app`` 要用：模块级的应用实例（选项取 config.toml 的 [api]）。

@@ -33,7 +33,7 @@
     attach_api_logging(Path("logs/api.log"))     # 先挂日志、再建应用
     app = create_app(ApiOptions.from_mapping({"prefix": "/api", "token_ttl": 3600}))
 
-    # uvicorn 起服务：uvicorn nacho_api:app --port 8000
+    # uvicorn 起服务：uvicorn nacho_api:app --port 18080
     #   POST /api/auth/login   {"account": "admin", "password": "nacho-admin"}
     #   GET  /api/auth/me      Authorization: Bearer <上一步返回的 token>
 
