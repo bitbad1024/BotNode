@@ -21,11 +21,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import cast
 
 from sqlalchemy import Column, Text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from sqlmodel import Field, SQLModel, select
+from sqlmodel import Field, SQLModel, col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .demo import DEMO_USERS
@@ -143,3 +144,17 @@ class SqlUserStore:
             result = await session.exec(select(UserTable).where(UserTable.id == user_id))
             row = result.first()
             return _to_record(row) if row is not None else None
+
+    async def get_by_ids(self, user_ids: Iterable[str]) -> dict[str, UserRecord]:
+        """按一批 id 取用户（**一条** ``WHERE id IN (...)``）；不在库里的 id 就不在结果里。
+
+        列表页一次把昵称查齐，别每条一次查询（N+1）。
+        """
+        wanted = list(dict.fromkeys(user_ids))  # 去重（保序）：IN 里重复没意义
+        if not wanted:
+            return {}
+        async with self._sessions() as session:
+            result = await session.exec(
+                select(UserTable).where(col(UserTable.id).in_(wanted))
+            )
+            return {row.id: _to_record(row) for row in result}

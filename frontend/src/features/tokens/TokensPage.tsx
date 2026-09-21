@@ -1,7 +1,7 @@
 /**
  * 令牌管理：签发 / 吊销 OneBot 访问令牌，并查看在线客户端。
  *
- * 令牌决定「连进来的机器人属于哪个账号」。页面上要紧的两件事：
+ * 令牌决定「连进来的机器人属于谁」——归属就是当前登录用户，**不用填**；页面上要紧的两件事：
  *
  * - **明文只在签发那一次出现**：库里只存摘要，关掉提示就拿不回来了，所以签出来
  *   立刻整块显示 + 一键复制，并写明后果；
@@ -24,7 +24,6 @@ import {
 } from './tokensApi'
 import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
-import { useAuth } from '../auth/authStore'
 import { useToast } from '../../common/Toast'
 import {
   IconAlert,
@@ -59,7 +58,6 @@ function describe(err: unknown): string {
 
 export default function TokensPage() {
   const { pushToast } = useToast()
-  const { state } = useAuth()
 
   const [clients, setClients] = useState<OneBotClient[]>([])
   const [tokens, setTokens] = useState<OneBotToken[]>([])
@@ -72,13 +70,6 @@ export default function TokensPage() {
   const [remark, setRemark] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [issued, setIssued] = useState<IssuedToken | null>(null)
-
-  // 归属账号：后端按「范围」判权限（admin 不限、其余只限自己那个账号），所以非管理员这里
-  // 直接把值钉成自己的账号 —— 让他自由填只会填一次错一次，还得靠 403 才知道为什么。
-  // 管理员保持自由填。
-  const isAdmin = state.user?.roles.includes('admin') ?? false
-  const myAccount = state.user?.account ?? ''
-  const accountValue = isAdmin ? account : myAccount
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -115,15 +106,9 @@ export default function TokensPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    // 用 accountValue 而不是 account：非管理员的值是钉死的那个（见上面派生）
-    const name = accountValue.trim()
-    if (!name) {
-      pushToast('error', '请先填写归属账号')
-      return
-    }
     setSubmitting(true)
     try {
-      const { data } = await issueToken(name, remark.trim())
+      const { data } = await issueToken(account.trim(), remark.trim())
       setIssued(data)
       setAccount('')
       setRemark('')
@@ -151,9 +136,9 @@ export default function TokensPage() {
         <div>
           <h2 className={styles.title}>令牌管理</h2>
           <p className={styles.desc}>
-            令牌决定「连进来的机器人属于哪个账号」。明文只在签发时显示一次，之后查不回来。
-            停用只是不许再连（可随时启用回来）；吊销则是删掉记录、不可逆。两者都会把用它
-            连着的客户端一并断开。
+            令牌决定「连进来的机器人属于谁」——归属就是当前登录用户，不用填。明文只在签发时
+            显示一次，之后查不回来。停用只是不许再连（可随时启用回来）；吊销则是删掉记录、
+            不可逆。两者都会把用它连着的客户端一并断开。
           </p>
         </div>
         <div className={styles.actions}>
@@ -181,15 +166,14 @@ export default function TokensPage() {
         <form className={styles.form} onSubmit={submit}>
           <div className={styles.field}>
             <label className={styles.label} htmlFor="token-account">
-              归属账号
+              机器人账号（可选）
             </label>
             <input
               id="token-account"
               className={styles.input}
-              value={accountValue}
+              value={account}
               onChange={(e) => setAccount(e.target.value)}
-              readOnly={!isAdmin}
-              placeholder="这个令牌归哪个账号"
+              placeholder="接入 WS 的那个 OneBot 账号（只用来展示）"
               maxLength={64}
             />
           </div>
@@ -216,7 +200,7 @@ export default function TokensPage() {
           <div className={styles.issued}>
             <div className={styles.issuedHead}>
               <IconKey size={16} />
-              令牌已签发给「{issued.record.account}」——明文只显示这一次
+              令牌已签发给「{issued.record.nickname || issued.record.id}」——明文只显示这一次
             </div>
             <div className={styles.issuedRow}>
               <code className={styles.issuedText}>{issued.token}</code>
@@ -250,7 +234,7 @@ export default function TokensPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>账号</th>
+                <th>归属</th>
                 <th>机器人号</th>
                 <th>对端地址</th>
                 <th>连上时间</th>
@@ -260,11 +244,11 @@ export default function TokensPage() {
             <tbody>
               {clients.map((c) => {
                 const active =
-                  pending?.kind === 'kick' && pending.id === c.id ? pending : null
+                  pending?.kind === 'kick' && pending.id === c.client_id ? pending : null
                 return (
-                  <tr key={c.id}>
+                  <tr key={c.client_id}>
                     <td>
-                      <span className="chip">{c.account || '匿名'}</span>
+                      <span className="chip">{c.nickname || c.id || '匿名'}</span>
                     </td>
                     <td className={styles.mono}>{c.self_id ?? '—'}</td>
                     <td className={`${styles.mono} ${styles.muted}`}>{c.remote}</td>
@@ -280,7 +264,7 @@ export default function TokensPage() {
                             disabled={busy}
                             onClick={() =>
                               void run(
-                                () => kickClient(c.id, active.revoke),
+                                () => kickClient(c.client_id, active.revoke),
                                 active.revoke ? '已断开并吊销令牌' : '已断开连接',
                               )
                             }
@@ -297,7 +281,7 @@ export default function TokensPage() {
                             className="btn"
                             disabled={busy}
                             onClick={() =>
-                              setPending({ kind: 'kick', id: c.id, revoke: false })
+                              setPending({ kind: 'kick', id: c.client_id, revoke: false })
                             }
                           >
                             断开
@@ -306,7 +290,7 @@ export default function TokensPage() {
                             className={`btn ${styles.danger}`}
                             disabled={busy}
                             onClick={() =>
-                              setPending({ kind: 'kick', id: c.id, revoke: true })
+                              setPending({ kind: 'kick', id: c.client_id, revoke: true })
                             }
                           >
                             <IconTrash size={14} />
@@ -340,7 +324,8 @@ export default function TokensPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>账号</th>
+                <th>归属</th>
+                <th>机器人账号</th>
                 <th>备注</th>
                 <th>签发时间</th>
                 <th>状态</th>
@@ -353,8 +338,9 @@ export default function TokensPage() {
                 return (
                   <tr key={t.id}>
                     <td>
-                      <span className="chip">{t.account}</span>
+                      <span className="chip">{t.nickname || t.id}</span>
                     </td>
+                    <td className={styles.muted}>{t.account || '—'}</td>
                     <td className={t.remark ? undefined : styles.muted}>
                       {t.remark || '—'}
                     </td>

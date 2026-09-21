@@ -6,7 +6,8 @@
     框架 -> 客户端：动作（{"action": ..., "params": {...}, "echo": ...}）
 
 **一个端口接很多客户端**：谁连进来由**令牌**决定归属 —— 配了 :class:`~nacho.api.api.onebot.protocols.TokenRegistry` 时，
-握手阶段把令牌翻成账号（查不到就 401），账号绑在这条连接上（:attr:`OneBotConnection.account`）。
+握手阶段把令牌翻成「谁的」（``id``）与机器人账号（``account``），两者绑在这条连接上
+（:attr:`OneBotConnection.id` / :attr:`OneBotConnection.account`）。
 没配注册表就不校验（谁都能连，归属记成匿名），所以不接数据库照样能跑起来。
 
 在线的客户端像路由器的「已连接设备」那样列得出来（:meth:`OneBotServer.roster`），也能踢掉
@@ -73,9 +74,11 @@ class ClientEntry:
     注意这是**快照**：调用 :meth:`OneBotServer.roster` 那一刻的样子，不代表此刻还连着。
     """
 
-    #: 这条连接的编号（踢人时按它定位）
+    #: 这条连接自己的编号（踢人时按它定位）
+    client_id: str
+    #: 这条连接属于谁（由握手时的令牌定下来；语义本层不管）
     id: str
-    #: 属于哪个账号（由握手时的令牌定下来）
+    #: 接入 WS 的那个 OneBot 机器人账号（令牌里带的那个）
     account: str
     #: 机器人号；还没收到事件时是 ``None``
     self_id: int | None
@@ -88,10 +91,11 @@ class ClientEntry:
 class OneBotConnection:
     """一条已连上的 OneBot 连接：发动作、等回应。
 
-    连接上带三样身份信息，注意它们的**时点**不同：
+    连接上带几样身份信息，注意它们的**时点**不同：
 
-    * ``account`` —— **握手时就定下来了**（令牌翻出来的），比任何事件都早；
-    * ``token`` —— 客户端带的明文令牌（吊销时用得着），同样握手时就有；
+    * ``id`` —— **谁的**（握手时由令牌定下来，本层不解释语义），比任何事件都早；
+    * ``account`` —— 接入 WS 的那个 OneBot 机器人账号，同样握手时就有；
+    * ``token`` —— 客户端带的明文令牌（吊销时用得着），也是握手时就有；
     * ``self_id`` —— 收到第一条事件后才学到（``None`` 表示还没收到）。
     """
 
@@ -101,25 +105,25 @@ class OneBotConnection:
         *,
         options: OneBotOptions,
         logger: BaseLogger,
+        id: str = "",
         account: str = "",
         token: str = "",
-        token_id: str = "",
     ) -> None:
         self._ws: ServerConnection = ws
         self._options: OneBotOptions = options
         self._log: BaseLogger = logger
         #: echo -> 等回应的 future；发动作时装上，收到回应 / 断开时摘掉
         self._pending: dict[str, asyncio.Future[ActionResponse]] = {}
-        #: 这条连接的编号（在线列表列出来、踢人时按它定位）
-        self.id: str = uuid4().hex[:12]
+        #: 这条连接自己的编号（在线列表列出来、踢人时按它定位）
+        self.client_id: str = uuid4().hex[:12]
         #: 连上的时刻（Unix 秒）
         self.connected_at: float = time.time()
-        #: 属于哪个账号（没配令牌注册表时是空串 = 匿名）
+        #: 这条连接属于谁（没配令牌注册表时是空串 = 匿名）
+        self.id: str = id
+        #: 接入 WS 的那个 OneBot 机器人账号；没配注册表时是空串
         self.account: str = account
         #: 握手时带的明文令牌；没配注册表时是空串
         self.token: str = token
-        #: 该令牌在注册表里的记录 id（删令牌时靠它对上号）；没配注册表时是空串
-        self.token_id: str = token_id
         #: 最近一次事件里的机器人号；一条连接通常就一个 bot
         self.self_id: int | None = None
 
@@ -139,6 +143,7 @@ class OneBotConnection:
     def entry(self) -> ClientEntry:
         """在线列表里的一行（快照）。"""
         return ClientEntry(
+            client_id=self.client_id,
             id=self.id,
             account=self.account,
             self_id=self.self_id,
@@ -241,8 +246,10 @@ class OneBotServer:
             logger if logger is not None else onebot_logger(ONEBOT_LOGGER_NAME)
         )
         self._server: Server | None = None
-        self._connections: set[OneBotConnection] = set()
-        # 握手阶段查出的归属（connection -> (账号, 明文令牌, 令牌记录 id)），_handle 里取走。
+        # 连着的客户端，两张 hash 索引（取谁都不遍历）：按连接编号取单条、按归属（谁的）分组
+        self._by_client_id: dict[str, OneBotConnection] = {}
+        self._by_owner: dict[str, set[OneBotConnection]] = {}
+        # 握手阶段查出的归属（connection -> (谁的, 机器人账号, 明文令牌)），_handle 里取走。
         # 用弱键字典：万一连接没走到 _handle 就被丢掉，条目会随对象回收自动消失，不会攒着
         self._greeted: weakref.WeakKeyDictionary[ServerConnection, tuple[str, str, str]] = (
             weakref.WeakKeyDictionary()
@@ -261,18 +268,17 @@ class OneBotServer:
     @property
     def connections(self) -> tuple[OneBotConnection, ...]:
         """当前连着的客户端（快照）。"""
-        return tuple(self._connections)
+        return tuple(self._by_client_id.values())
 
     # ------------------------------------------------------------------ 在线列表
-    def roster(self, *, account: str | None = None) -> tuple[ClientEntry, ...]:
+    def roster(self, *, id: str | None = None) -> tuple[ClientEntry, ...]:
         """在线客户端列表（快照）：路由器「已连接设备」那一张表。
 
-        :param account: 只看某个账号下的客户端；``None`` 表示全部。
+        :param id: 只看某个归属（谁的）下的客户端；``None`` 表示全部。
         """
-        entries = [conn.entry() for conn in self._connections]
-        if account is None:
-            return tuple(entries)
-        return tuple(entry for entry in entries if entry.account == account)
+        # 按归属取走 hash 索引那一格，不扫全集
+        conns = self._by_client_id.values() if id is None else self._by_owner.get(id, set())
+        return tuple(conn.entry() for conn in conns)
 
     async def kick(self, client_id: str, *, revoke: bool = False) -> bool:
         """把一个客户端踢下线；没有这条连接返回 ``False``。
@@ -280,11 +286,11 @@ class OneBotServer:
         :param revoke: 连它的令牌一起吊销。OneBot 实现**都会自动重连**，
             只踢不断令牌的话过几秒它又会出现在列表里；要真删掉就用 ``revoke=True``。
         """
-        conn = next((item for item in self._connections if item.id == client_id), None)
+        conn = self._by_client_id.get(client_id)
         if conn is None:
             return False
-        if revoke and conn.token_id and self._tokens is not None:
-            await self._tokens.remove_by_id(conn.token_id)
+        if revoke and conn.id and self._tokens is not None:
+            await self._tokens.remove_by_id(conn.id)
         self._log.info(
             "onebot 客户端被踢下线", client=client_id, account=conn.account, revoked=revoke
         )
@@ -302,10 +308,9 @@ class OneBotServer:
         if self._tokens is None:
             return False
         removed = await self._tokens.remove_by_id(token_id)
-        # 先快照再关：关连接会改动 _connections，边遍历边删不安全
-        for conn in tuple(self._connections):
-            if conn.token_id and conn.token_id == token_id:
-                await conn.close(reason="token revoked")
+        # 先快照再关：关连接会改动索引，边遍历边删不安全
+        for conn in tuple(self._by_owner.get(token_id, set())):
+            await conn.close(reason="token revoked")
         return removed
 
     async def set_token_enabled(self, token_id: str, enabled: bool) -> bool:
@@ -318,9 +323,8 @@ class OneBotServer:
             return False
         changed = await self._tokens.set_enabled(token_id, enabled)
         if changed and not enabled:
-            for conn in tuple(self._connections):
-                if conn.token_id and conn.token_id == token_id:
-                    await conn.close(reason="token disabled")
+            for conn in tuple(self._by_owner.get(token_id, set())):
+                await conn.close(reason="token disabled")
         return changed
 
     # ------------------------------------------------------------------ 生命周期
@@ -357,7 +361,8 @@ class OneBotServer:
         if server is not None:
             server.close()  # 不再收新连接，并关掉现有连接（对端会收到 GOING_AWAY）
             await server.wait_closed()
-            self._connections.clear()
+            self._by_client_id.clear()
+            self._by_owner.clear()
             self._log.info("onebot 反向 WS 已停止")
 
     # ------------------------------------------------------------------ 握手
@@ -384,7 +389,7 @@ class OneBotServer:
         if record is None:
             self._log.warning("onebot 握手令牌无效，已拒绝", path=request.path)
             return connection.respond(HTTPStatus.UNAUTHORIZED, "access token mismatch\n")
-        self._greeted[connection] = (record.account, token, record.id)
+        self._greeted[connection] = (record.id, record.account, token)
         return None
 
     # ------------------------------------------------------------------ 连接与分发
@@ -396,17 +401,18 @@ class OneBotServer:
         ``await conn.call(...)`` 等动作回应时，收报文这条腿还是活的 —— 否则回应读不进来，
         双方就死锁了。
         """
-        # 握手阶段查出的归属（账号 / 令牌 / 令牌记录 id），见 _process_request；没配时是匿名
-        account, token, token_id = self._greeted.pop(ws, ("", "", ""))
+        # 握手阶段查出的归属（谁的 / 机器人账号 / 明文令牌），见 _process_request；没配时是匿名
+        owner_id, account, token = self._greeted.pop(ws, ("", "", ""))
         conn = OneBotConnection(
             ws,
             options=self._options,
             logger=self._log,
+            id=owner_id,
             account=account,
             token=token,
-            token_id=token_id,
         )
-        self._connections.add(conn)
+        self._by_client_id[conn.client_id] = conn
+        self._by_owner.setdefault(conn.id, set()).add(conn)
         inbox: asyncio.Queue[OneBotEvent] = asyncio.Queue()
         worker = asyncio.create_task(
             self._consume(conn, inbox), name=f"onebot-events:{conn.remote}"
@@ -416,7 +422,7 @@ class OneBotServer:
             remote=conn.remote,
             path=conn.path,
             account=conn.account,
-            total=len(self._connections),
+            total=len(self._by_client_id),
         )
         try:
             async for raw in ws:
@@ -429,13 +435,18 @@ class OneBotServer:
             worker.cancel()
             with suppress(asyncio.CancelledError):
                 await worker
-            self._connections.discard(conn)
+            self._by_client_id.pop(conn.client_id, None)
+            group = self._by_owner.get(conn.id)
+            if group is not None:
+                group.discard(conn)
+                if not group:  # 这个归属没连接了：空集合也摘掉，别攒着
+                    del self._by_owner[conn.id]
             conn.fail_pending(ConnectionError("连接已断开"))
             self._log.info(
                 "onebot 客户端断开",
                 remote=conn.remote,
                 account=conn.account,
-                total=len(self._connections),
+                total=len(self._by_client_id),
             )
 
     async def _consume(self, conn: OneBotConnection, inbox: asyncio.Queue[OneBotEvent]) -> None:

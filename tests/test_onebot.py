@@ -1,4 +1,4 @@
-"""OneBot 反向 WS 的测试：令牌定归属、在线列表、踢人与吊销，以及管理用的 HTTP 接口。
+"""OneBot 反向 WS 的测试：令牌定归属（谁的）、在线列表、踢人与吊销，以及管理用的 HTTP 接口。
 
 跑在 127.0.0.1 的空闲端口上（每个用例自己挑一个），WS 客户端用 ``websockets``；
 令牌注册表统一走 :class:`~nacho.onebot.SqlTokenRegistry`，每个用例挂在一块内存 sqlite
@@ -46,9 +46,9 @@ from nacho.onebot import (  # noqa: E402
 )
 from nacho.onebot import tokens as tokens_module  # noqa: E402
 
-#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
+#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）：id 就是 ``u-admin`` / ``u-robot``
 ADMIN = {"account": "admin", "password": "nacho-admin"}
-#: 普通用户（roles 里只有 user）：用来验「只能管自己账号下那部分」
+#: 普通用户（roles 里只有 user）：用来验「只能管自己名下那部分」
 ROBOT = {"account": "robot", "password": "nacho-robot"}
 #: 测试用的哈希迭代次数：默认 20 万次是生产该有的值，登录断言与迭代次数无关
 TEST_ITERATIONS: int = 1_000
@@ -166,9 +166,12 @@ async def login(client: httpx.AsyncClient, who: dict[str, str] | None = None) ->
 
 
 async def issue_via_api(
-    client: httpx.AsyncClient, headers: dict[str, str], account: str
+    client: httpx.AsyncClient, headers: dict[str, str], account: str = ""
 ) -> IssuedTokenData:
-    """走管理接口签一个令牌（顺带断言能签出来），返回签发结果。"""
+    """走管理接口签一个令牌（顺带断言能签出来），返回签发结果。
+
+    ``account`` 是「接入 WS 的机器人账号」，只用来展示；归属永远是当前登录用户。
+    """
     made = await client.post(
         "/api/onebot/tokens", headers=headers, json={"account": account, "remark": account}
     )
@@ -181,11 +184,11 @@ async def test_registry_issue_resolve_and_revoke() -> None:
     """签发 -> 认领 -> 列出 -> 吊销：令牌不存在 / 吊销后都认不出来。"""
     registry = await memory_registry()
     await registry.ensure_schema()  # 幂等：再建一次不报错
-    issued = await registry.issue("alice", remark="主号")
+    issued = await registry.issue("alice", account="机器人一号", remark="主号")
 
     found = await registry.resolve(issued.token)
-    assert found is not None and found.account == "alice"
-    assert found.id == issued.record.id and found.remark == "主号"
+    assert found is not None and found.id == "alice"  # 归属就是签进去的那个 id
+    assert found.account == "机器人一号" and found.remark == "主号"
     assert await registry.resolve("nbo_不存在") is None
     assert len(await registry.list_records()) == 1
 
@@ -194,20 +197,34 @@ async def test_registry_issue_resolve_and_revoke() -> None:
     assert await registry.remove_by_id(issued.record.id) is False  # 再删一次：没有了
 
 
+async def test_registry_reissue_replaces_the_key() -> None:
+    """一个归属一条：同一个 id 再签 = 换一把钥匙，旧令牌立刻失效。"""
+    registry = await memory_registry()
+    first = await registry.issue("alice", account="旧的", remark="旧备注")
+
+    second = await registry.issue("alice", account="新的")
+
+    assert await registry.resolve(first.token) is None  # 旧钥匙作废
+    assert (await registry.resolve(second.token)) is not None
+    rows = await registry.list_records()
+    assert len(rows) == 1  # 还是那一条，只是换了钥匙
+    assert rows[0].account == "新的" and rows[0].remark == ""
+
+
 async def test_issue_retries_when_digest_collides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """摘要撞上已有记录：换一个令牌再来（把生成器钉死，碰撞就能确定性地造出来）。"""
+    """摘要撞上**别人**的记录：换一个令牌再来（把生成器钉死，碰撞就能确定性地造出来）。"""
     registry = await memory_registry()
     first = await registry.issue("alice")
 
-    # 第一次还生成 first.token（必撞），第二次给一个新的：应当重试后成功
+    # 给 bob 签时先吐出 alice 那把钥匙（必撞），第二次给一个新的：应当重试后成功
     generated = iter([first.token, "nbo_fresh"])
     monkeypatch.setattr(tokens_module, "generate_token", lambda: next(generated))
 
-    second = await registry.issue("alice")
+    second = await registry.issue("bob")
     assert second.token == "nbo_fresh"
-    assert await registry.resolve(first.token) is not None  # 原来那个还在
+    assert await registry.resolve(first.token) is not None  # alice 那条没被碰
     assert await registry.resolve("nbo_fresh") is not None
 
 
@@ -220,13 +237,14 @@ async def test_issue_gives_up_after_retries(
     monkeypatch.setattr(tokens_module, "generate_token", lambda: first.token)
 
     with pytest.raises(IntegrityError):
-        await registry.issue("alice")
-    assert len(await registry.list_records()) == 1  # 没留下半截记录
+        await registry.issue("bob")  # 每次都生成 alice 那把钥匙 → 一直撞
+    rows = await registry.list_records()
+    assert [row.id for row in rows] == ["alice"]  # 没留下 bob 的半条记录
 
 
 # --------------------------------------------------------------------------- 握手：令牌定归属
-async def test_handshake_binds_account() -> None:
-    """带对令牌连进来：归属账号绑在连接上，机器人号收到第一条事件后才学到。"""
+async def test_handshake_binds_owner() -> None:
+    """带对令牌连进来：归属绑在连接上，机器人号收到第一条事件后才学到。"""
     registry = await memory_registry()
     alice = await registry.issue("alice")
     bob = await registry.issue("bob")
@@ -237,18 +255,18 @@ async def test_handshake_binds_account() -> None:
             await ws.send(json.dumps(PRIVATE_MESSAGE))
             assert await wait_until(lambda: len(server.roster()) == 2)
 
-            assert {item.account for item in server.roster()} == {"alice", "bob"}
+            assert {item.id for item in server.roster()} == {"alice", "bob"}
             # 列表是快照，要重新取才能看到刚学到的机器人号
             assert await wait_until(
                 lambda: any(
-                    item.account == "alice" and item.self_id == 10001 for item in server.roster()
+                    item.id == "alice" and item.self_id == 10001 for item in server.roster()
                 )
             )
-            bob_entry = next(item for item in server.roster() if item.account == "bob")
+            bob_entry = next(item for item in server.roster() if item.id == "bob")
             assert bob_entry.self_id is None  # 没发过事件，还不知道是哪个机器人
 
-            # 只看某个账号下的
-            assert [item.account for item in server.roster(account="alice")] == ["alice"]
+            # 只看某个归属下的
+            assert [item.id for item in server.roster(id="alice")] == ["alice"]
 
 
 async def test_handshake_rejects_bad_token() -> None:
@@ -276,7 +294,7 @@ async def test_without_registry_accepts_anonymous() -> None:
     async with opened_server(None) as server:
         async with connect(ws_url(port_of(server))):
             assert await wait_until(lambda: len(server.roster()) == 1)
-            assert server.roster()[0].account == ""
+            assert server.roster()[0].id == ""
 
 
 # --------------------------------------------------------------------------- 在线列表 / 踢人 / 吊销
@@ -291,7 +309,7 @@ async def test_kick_disconnects_client() -> None:
             assert await wait_until(lambda: len(server.roster()) == 1)
 
             assert await server.kick("不存在的连接") is False  # 没有这条连接
-            assert await server.kick(server.roster()[0].id) is True
+            assert await server.kick(server.roster()[0].client_id) is True
 
             with pytest.raises(ConnectionClosed):
                 await ws.recv()
@@ -307,7 +325,7 @@ async def test_kick_with_revoke_blocks_reconnect() -> None:
         port = port_of(server)
         async with connect(ws_url(port, issued.token)):
             assert await wait_until(lambda: len(server.roster()) == 1)
-            assert await server.kick(server.roster()[0].id, revoke=True) is True
+            assert await server.kick(server.roster()[0].client_id, revoke=True) is True
             assert await wait_until(lambda: server.roster() == ())
 
         with pytest.raises(InvalidStatus):  # 令牌已吊销：重连 401
@@ -324,7 +342,7 @@ async def test_kick_without_revoke_keeps_token() -> None:
         port = port_of(server)
         async with connect(ws_url(port, issued.token)):
             assert await wait_until(lambda: len(server.roster()) == 1)
-            assert await server.kick(server.roster()[0].id) is True
+            assert await server.kick(server.roster()[0].client_id) is True
             assert await wait_until(lambda: server.roster() == ())
 
         async with connect(ws_url(port, issued.token)):  # 重连成功
@@ -332,7 +350,7 @@ async def test_kick_without_revoke_keeps_token() -> None:
 
 
 async def test_revoke_by_id_disconnects_client() -> None:
-    """按令牌 id 吊销：记录删掉，正用它连着的客户端也断开（从列表里消失）。"""
+    """按归属 id 吊销：记录删掉，正用它连着的客户端也断开（从列表里消失）。"""
     registry = await memory_registry()
     issued = await registry.issue("alice")
 
@@ -376,13 +394,13 @@ async def test_set_enabled_disables_and_disconnects() -> None:
         assert await server.set_token_enabled(issued.record.id, True) is True
         async with connect(ws_url(port, issued.token)):
             assert await wait_until(lambda: len(server.roster()) == 1)
-            assert server.roster()[0].account == "alice"
+            assert server.roster()[0].id == "alice"
 
 
 async def test_set_enabled_unknown_id() -> None:
     """id 不存在：改不动，返回 False。"""
     async with opened_server(await memory_registry()) as server:
-        assert await server.set_token_enabled("t-不存在", True) is False
+        assert await server.set_token_enabled("不存在", True) is False
 
 
 # --------------------------------------------------------------------------- 管理用的 HTTP 接口
@@ -420,26 +438,28 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
             assert listed.status_code == 200, listed.text
             assert ApiResponse[list[ClientData]].model_validate(listed.json()).data == []
 
-            # 2. 签一个令牌
+            # 2. 签一个令牌：归属不用填（就是当前登录用户），account 是机器人账号
             issued = await client.post(
                 "/api/onebot/tokens",
                 headers=headers,
-                json={"account": "alice", "remark": "主号"},
+                json={"account": "机器人一号", "remark": "主号"},
             )
             assert issued.status_code == 200, issued.text
             # 用项目自己的响应壳解析：类型化的 data，顺带断言了响应协议形状
             issued_data = ApiResponse[IssuedTokenData].model_validate(issued.json()).data
-            assert issued_data.record.account == "alice"
+            assert issued_data.record.id == "u-admin"  # 归属 = 当前登录用户的 id
+            assert issued_data.record.nickname == "管理员"  # 昵称按 id 去用户表查
+            assert issued_data.record.account == "机器人一号"
             assert issued_data.token.startswith("nbo_")  # 明文只在这一次露出来
 
             # 3. 令牌列表里有它（且**不含明文**：响应模型里根本没有 token 字段）
             tokens = await client.get("/api/onebot/tokens", headers=headers)
             assert tokens.status_code == 200, tokens.text
             records = ApiResponse[list[TokenData]].model_validate(tokens.json()).data
-            assert [item.account for item in records] == ["alice"]
+            assert [item.id for item in records] == ["u-admin"]
             assert "token" not in TokenData.model_fields
 
-            # 4. 拿这个令牌连进来，在线列表里能看到它属于 alice
+            # 4. 拿这个令牌连进来，在线列表里能看到它属于 u-admin
             async with connect(ws_url(port_of(server), issued_data.token)) as ws:
                 await ws.send(json.dumps(PRIVATE_MESSAGE))
                 assert await wait_until(lambda: len(server.roster()) == 1)
@@ -448,16 +468,18 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
                 )
 
                 clients = await client.get(
-                    "/api/onebot/clients", headers=headers, params={"account": "alice"}
+                    "/api/onebot/clients", headers=headers, params={"id": "u-admin"}
                 )
                 assert clients.status_code == 200, clients.text
                 rows = ApiResponse[list[ClientData]].model_validate(clients.json()).data
-                assert len(rows) == 1 and rows[0].account == "alice"
+                assert len(rows) == 1 and rows[0].id == "u-admin"
+                assert rows[0].nickname == "管理员"  # 归属昵称：和令牌列表一个口径
+                assert rows[0].account == "机器人一号"  # 令牌里带的机器人账号
                 assert rows[0].self_id == 10001
 
                 # 5. 踢下线（不吊销）
                 kicked = await client.delete(
-                    f"/api/onebot/clients/{rows[0].id}", headers=headers
+                    f"/api/onebot/clients/{rows[0].client_id}", headers=headers
                 )
                 assert kicked.status_code == 200, kicked.text
                 assert ApiResponse[KickData].model_validate(kicked.json()).data.revoked is False
@@ -484,7 +506,7 @@ async def test_management_toggles_token_enabled() -> None:
         app = api_app(server)
         async with api_client(app) as client:
             headers = {"Authorization": f"Bearer {await login(client)}"}
-            issued = await registry.issue("alice")
+            issued = await registry.issue("u-admin")
 
             off = await client.patch(
                 f"/api/onebot/tokens/{issued.record.id}",
@@ -503,15 +525,15 @@ async def test_management_toggles_token_enabled() -> None:
             assert ApiResponse[TokenData].model_validate(on.json()).data.enabled is True
 
             missing = await client.patch(
-                "/api/onebot/tokens/t-不存在", headers=headers, json={"enabled": True}
+                "/api/onebot/tokens/不存在", headers=headers, json={"enabled": True}
             )
             assert missing.status_code == 404
 
 
 async def test_management_kick_with_revoke() -> None:
-    """``DELETE /clients/{id}?revoke=true``：断开 + 吊销，之后重连也被拒。"""
+    """``DELETE /clients/{client_id}?revoke=true``：断开 + 吊销，之后重连也被拒。"""
     registry = await memory_registry()
-    issued = await registry.issue("alice")
+    issued = await registry.issue("u-admin")
 
     async with opened_server(registry) as server:
         app = api_app(server)
@@ -520,7 +542,7 @@ async def test_management_kick_with_revoke() -> None:
             async with connect(ws_url(port_of(server), issued.token)) as ws:
                 await ws.send(json.dumps(PRIVATE_MESSAGE))
                 assert await wait_until(lambda: len(server.roster()) == 1)
-                client_id = server.roster()[0].id
+                client_id = server.roster()[0].client_id
 
                 kicked = await client.delete(
                     f"/api/onebot/clients/{client_id}",
@@ -539,111 +561,102 @@ async def test_management_kick_with_revoke() -> None:
 
 
 # --------------------------------------------------------------------- 权限范围（授权）
-async def test_scope_admin_sees_every_account() -> None:
-    """admin 的范围不限：所有账号的令牌都看得到、都能管。"""
-    registry = await memory_registry()
-    async with opened_server(registry) as server:
-        app = api_app(server)
-        async with api_client(app) as client:
-            headers = {"Authorization": f"Bearer {await login(client)}"}
-            await issue_via_api(client, headers, "alice")
-            await issue_via_api(client, headers, "bob")
-
-            listed = await client.get("/api/onebot/tokens", headers=headers)
-            assert listed.status_code == 200, listed.text
-            rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
-
-    assert {row.account for row in rows} == {"alice", "bob"}
-
-
-async def test_scope_normal_user_only_sees_own_tokens() -> None:
-    """普通用户（robot）只看得到自己账号下的令牌 —— 这就是原来漏掉的那道隔离。"""
-    registry = await memory_registry()
-    async with opened_server(registry) as server:
+async def test_scope_admin_sees_every_owner() -> None:
+    """admin 的范围不限：所有人的令牌都看得到。"""
+    async with opened_server(await memory_registry()) as server:
         app = api_app(server)
         async with api_client(app) as client:
             admin_headers = {"Authorization": f"Bearer {await login(client)}"}
-            await issue_via_api(client, admin_headers, "alice")
-            await issue_via_api(client, admin_headers, "robot")
-
             robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+            await issue_via_api(client, admin_headers, "管理员的机器人")
+            await issue_via_api(client, robot_headers, "巡检机器人")
+
+            listed = await client.get("/api/onebot/tokens", headers=admin_headers)
+            assert listed.status_code == 200, listed.text
+            rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
+
+    # 归属就是各自的 user id；account 是各自填的机器人账号
+    assert {row.id for row in rows} == {"u-admin", "u-robot"}
+    assert {row.account for row in rows} == {"管理员的机器人", "巡检机器人"}
+
+
+async def test_scope_normal_user_only_sees_own_token() -> None:
+    """普通用户（robot）只看得到自己那条 —— 归属就是各自的 id。"""
+    async with opened_server(await memory_registry()) as server:
+        app = api_app(server)
+        async with api_client(app) as client:
+            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
+            robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+            await issue_via_api(client, admin_headers, "管理员的机器人")
+            await issue_via_api(client, robot_headers, "巡检机器人")
+
             listed = await client.get("/api/onebot/tokens", headers=robot_headers)
             assert listed.status_code == 200, listed.text
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
-        assert [row.account for row in rows] == ["robot"]  # alice 那条看不到
+        assert [row.id for row in rows] == ["u-robot"]  # 管理员那条看不到
+        assert [row.nickname for row in rows] == ["巡检机器人"]  # 昵称按 id 查出来的
 
 
-async def test_scope_normal_user_cannot_issue_for_another_account() -> None:
-    """普通用户给别人的账号签令牌 → 403，而且**真的没签出来**。
+async def test_issue_always_belongs_to_the_caller() -> None:
+    """签发**填不了归属**：``account`` 只是机器人账号，归属永远是当前登录用户。
 
-    这条原来能得手：``account`` 只是请求体里随便填的字符串，于是普通用户能给自己造一个
-    admin 名下的接入身份 —— 那是提权，不是"看到"。
+    这条原来是个提权口子：那个字段是请求体里随便填的字符串，普通用户能给自己造一个
+    admin 名下的接入身份。
     """
-    registry = await memory_registry()
-    async with opened_server(registry) as server:
+    async with opened_server(await memory_registry()) as server:
         app = api_app(server)
         async with api_client(app) as client:
-            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
             robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
+            issued = await issue_via_api(client, robot_headers, "随便叫什么都行")
+            assert issued.record.id == "u-robot"  # 归属还是自己
+            assert issued.record.account == "随便叫什么都行"  # 那个字段只是展示用的机器人账号
 
-            denied = await client.post(
-                "/api/onebot/tokens",
-                headers=robot_headers,
-                json={"account": "admin", "remark": "冒名"},
-            )
-            assert denied.status_code == 403, denied.text
-
-            # 自己账号那条照样能签 —— 不是"普通用户不许签令牌"，是"只能签自己的"
-            assert (await issue_via_api(client, robot_headers, "robot")).record.account == "robot"
-
+            admin_headers = {"Authorization": f"Bearer {await login(client)}"}
             listed = await client.get("/api/onebot/tokens", headers=admin_headers)
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
-        assert [row.account for row in rows] == ["robot"]  # 冒名那条没进库
+        assert [(row.id, row.account) for row in rows] == [("u-robot", "随便叫什么都行")]
 
 
-async def test_scope_normal_user_cannot_touch_another_accounts_token() -> None:
+async def test_scope_normal_user_cannot_touch_another_owners_token() -> None:
     """普通用户停用 / 吊销别人的令牌 → 404（按 id 找东西一律 404，不告诉它这条 id 存在）。"""
-    registry = await memory_registry()
-    async with opened_server(registry) as server:
+    async with opened_server(await memory_registry()) as server:
         app = api_app(server)
         async with api_client(app) as client:
             admin_headers = {"Authorization": f"Bearer {await login(client)}"}
-            alice = await issue_via_api(client, admin_headers, "alice")
+            admin_issued = await issue_via_api(client, admin_headers, "管理员的机器人")
             robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
 
+            target = admin_issued.record.id  # = u-admin
             off = await client.patch(
-                f"/api/onebot/tokens/{alice.record.id}",
+                f"/api/onebot/tokens/{target}",
                 headers=robot_headers,
                 json={"enabled": False},
             )
             assert off.status_code == 404, off.text
-            gone = await client.delete(
-                f"/api/onebot/tokens/{alice.record.id}", headers=robot_headers
-            )
+            gone = await client.delete(f"/api/onebot/tokens/{target}", headers=robot_headers)
             assert gone.status_code == 404, gone.text
 
             listed = await client.get("/api/onebot/tokens", headers=admin_headers)
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
-        # **真没动过**：还在、还是启用、令牌也还能认
-        assert [(row.account, row.enabled) for row in rows] == [("alice", True)]
-        assert await registry.resolve(alice.token) is not None
+        # **真没动过**：还在、还是启用
+        assert [(row.id, row.enabled) for row in rows] == [("u-admin", True)]
 
 
 async def test_scope_client_list_is_scoped() -> None:
-    """客户端列表：普通用户不带 ``?account=`` 只看自己账号的；显式要别人的 → 403。"""
+    """客户端列表：普通用户不带 ``?id=`` 只看自己那条；显式要别人的 → 403。"""
     registry = await memory_registry()
-    alice_token = (await registry.issue("alice")).token
-    robot_token = (await registry.issue("robot")).token
+    admin_token = (await registry.issue("u-admin")).token
+    robot_token = (await registry.issue("u-robot")).token
 
     async with opened_server(registry) as server:
         app = api_app(server)
-        # 两个账号各连一条：连上就够，归属在握手时就定了，不必再发事件
+        # 两个归属各连一条：连上就够，归属在握手时就定了，不必再发事件
         async with (
             api_client(app) as client,
-            connect(ws_url(port_of(server), alice_token)),
+            connect(ws_url(port_of(server), admin_token)),
             connect(ws_url(port_of(server), robot_token)),
         ):
             assert await wait_until(lambda: len(server.roster()) == 2)
@@ -653,14 +666,15 @@ async def test_scope_client_list_is_scoped() -> None:
             mine = await client.get("/api/onebot/clients", headers=robot_headers)
             assert mine.status_code == 200, mine.text
             rows = ApiResponse[list[ClientData]].model_validate(mine.json()).data
-            assert [row.account for row in rows] == ["robot"]  # 不写参数就按自己的范围收窄
+            assert [row.id for row in rows] == ["u-robot"]  # 不写参数就按自己的范围收窄
 
             denied = await client.get(
-                "/api/onebot/clients", headers=robot_headers, params={"account": "alice"}
+                "/api/onebot/clients", headers=robot_headers, params={"id": "u-admin"}
             )
             assert denied.status_code == 403, denied.text
 
             every = await client.get("/api/onebot/clients", headers=admin_headers)
-            assert {row.account for row in ApiResponse[list[ClientData]].model_validate(
-                every.json()
-            ).data} == {"alice", "robot"}
+            assert {
+                row.id
+                for row in ApiResponse[list[ClientData]].model_validate(every.json()).data
+            } == {"u-admin", "u-robot"}

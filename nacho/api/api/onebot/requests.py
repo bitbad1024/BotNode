@@ -7,17 +7,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class IssueTokenRequest(BaseModel):
-    """签发一个令牌：给哪个账号、备注是什么。"""
+    """签发一个令牌：给哪个机器人、备注是什么。
+
+    归属（``id``）不在这里：**就是当前登录用户**，服务端自己填，调用方填不了。
+    """
 
     account: str = Field(
-        min_length=1,
+        default="",
         max_length=64,
-        description="这个令牌属于哪个账号（客户端用这个令牌连进来，就归到该账号下）",
+        description="接入 WS 的那个 OneBot 机器人账号（自由填，只用来展示）",
     )
     remark: str = Field(default="", max_length=255, description="备注（给人看：给哪个机器人的）")
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        json_schema_extra={"example": {"account": "alice", "remark": "主号"}},
+        json_schema_extra={"example": {"account": "机器人一号", "remark": "主号"}},
         frozen=True,
     )
 

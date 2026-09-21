@@ -159,6 +159,8 @@ def create_app(
     )
     # 选项也挂上去：信任代理、长期 Cookie 的有效期这些路由要用
     app.state.api_options = chosen
+    # 用户存储也挂上去：OneBot 令牌列表要拿归属的 id 来查昵称
+    app.state.user_store = store
     # OneBot 服务端（可空）：没传时 <prefix>/onebot/* 回 503，见 onebot/dependencies.py
     app.state.onebot_server = onebot
     return app

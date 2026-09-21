@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
 from .models import UserRecord
@@ -31,6 +32,13 @@ class UserStore(Protocol):
 
     async def get_by_id(self, user_id: str) -> UserRecord | None:
         """按用户 id 取用户（令牌里带的是 id）；没有返回 ``None``。"""
+        ...
+
+    async def get_by_ids(self, user_ids: Iterable[str]) -> dict[str, UserRecord]:
+        """按一批 id 取用户，返回 ``id -> 记录``；不在库里的那些 id 就不出现在结果里。
+
+        列表页（比如 OneBot 令牌列表要显示归属昵称）用它**一次查齐**，别一条一条查（N+1）。
+        """
         ...
 
 

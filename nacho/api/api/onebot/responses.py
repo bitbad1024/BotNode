@@ -15,10 +15,14 @@ class ClientData(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    #: 连接编号：``DELETE /onebot/clients/{id}`` 用这个踢人
-    id: str
-    #: 属于哪个账号（握手时由令牌定下来）
-    account: str = Field(description="归属账号")
+    #: 这条连接自己的编号：``DELETE /onebot/clients/{client_id}`` 用这个踢人
+    client_id: str
+    #: 这条连接属于谁（握手时由令牌定下来）
+    id: str = Field(description="归属标识（谁的）")
+    #: 归属那个 ``id`` 在用户表里的昵称（查不到就空串；本层不解释 id 的语义）
+    nickname: str = Field(default="", description="归属的昵称（按 id 去用户表查）")
+    #: 接入 WS 的那个 OneBot 机器人账号
+    account: str = Field(default="", description="OneBot 机器人账号")
     #: 机器人号；还没收到事件时是 ``null``
     self_id: int | None = None
     #: 对端地址
@@ -32,12 +36,15 @@ class TokenData(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    #: 记录 id：``DELETE /onebot/tokens/{id}`` 用这个吊销
+    #: 归属标识（谁的），也是记录主键：``DELETE /onebot/tokens/{id}`` 用这个吊销
     id: str
-    account: str = Field(description="这个令牌属于哪个账号")
+    #: 接入 WS 的那个 OneBot 机器人账号
+    account: str = Field(default="", description="OneBot 机器人账号")
     enabled: bool = True
     remark: str = ""
     created_at: float = 0.0
+    #: 归属那个 ``id`` 在用户表里的昵称（查不到就空串；本层不解释 id 的语义）
+    nickname: str = Field(default="", description="归属的昵称（按 id 去用户表查）")
 
 
 class IssuedTokenData(BaseModel):
@@ -56,7 +63,8 @@ class KickData(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     client_id: str
-    account: str
+    #: 这条连接属于谁
+    id: str
     #: 令牌是不是也一起吊销了（没有吊销的话，客户端会自动重连）
     revoked: bool
 
