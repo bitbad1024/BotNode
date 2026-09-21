@@ -9,9 +9,9 @@
 
 这些都要登录：``Authorization: Bearer <token>``，令牌是 ``POST /auth/login`` 给的那个。
 
-**登录了还不算完，还得看范围**：带 ``admin`` 角色的人不限（能管所有账号），其余人只能管
-**自己账号**（``user.account``）名下那部分。范围就一个概念，定义在
-:func:`~nacho.api.api.onebot.dependencies.scope_of`。
+**登录了还不算完，还得看身份**：带 ``admin`` 角色的人不限（能管所有账号），其余人只能管
+**自己账号**（``user.account``）名下那部分。判管理员用 :func:`is_admin`，能不能碰某账号由
+:func:`may_touch` / :func:`ensure_can_touch` 把关。
 
 **删一个客户端要走两条腿**：OneBot 实现断线都会自动重连，所以「从列表里删掉」= 断开这条
 连接 **并且** 吊销它的令牌 —— 只做一半的话，过几秒它又会回到列表里。``DELETE /clients/{id}``
@@ -32,8 +32,8 @@ from .dependencies import (
     CurrentUserDep,
     OneBotDep,
     ensure_can_touch,
+    is_admin,
     may_touch,
-    scope_of,
 )
 from .protocols import ClientLike, OneBotLike, TokenLike
 from .requests import IssueTokenRequest, SetTokenEnabledRequest
@@ -121,12 +121,11 @@ async def list_clients(
     自己的范围就说清楚）。
     """
     trace_id: str = trace_id_of(request)
-    allowed = scope_of(user)
-    if allowed is not None:
-        if account is None:
-            account = allowed  # 不写就按自己的范围收窄，别把别人的漏出去
-        else:
-            ensure_can_touch(user, account)
+    if account is None:
+        if not is_admin(user):
+            account = user.user.account  # 不写就只看自己账号，别把别人的漏出去
+    else:
+        ensure_can_touch(user, account)
     data = [_client_of(item) for item in server.roster(account=account)]
     return ApiResponse[list[ClientData]](data=data, trace_id=trace_id)
 
@@ -191,11 +190,10 @@ async def list_tokens(
             "没配令牌注册表：当前 OneBot 不校验，也没有令牌可管",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    allowed: str | None = scope_of(user)
     data = [
         _token_of(item)
         for item in await registry.items()
-        if allowed is None or item.account == allowed
+        if is_admin(user) or item.account == user.user.account
     ]
     return ApiResponse[list[TokenData]](data=data, trace_id=trace_id)
 

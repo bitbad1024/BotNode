@@ -7,10 +7,11 @@
 OneBot 管理接口用的就是登录令牌，没有第二套凭据。跨业务的那份（取请求编号）在
 :mod:`nacho.api.common.dependencies`。
 
-**光认人不够，还得定范围**：OneBot 管理是**全局**的事——踢任意账号的客户端、给任意账号
-签令牌，所以「登录了就能干」等于把所有人的机器人交给每一个登录用户。这里把权限收成一个
-概念：:func:`scope_of` —— 带 :data:`ADMIN_ROLE` 的人**不限范围**，其余人**只限自己那个
-账号**（``user.user.account``）。于是「谁能碰哪个账号」只有一处定义，六个接口都按它来。
+**光认人不够，还得看身份**：OneBot 管理是**全局**的事——踢任意账号的客户端、给任意账号
+签令牌，所以「登录了就能干」等于把所有人的机器人交给每一个登录用户。带 ``admin`` 角色的人
+**不限**（能管所有账号），其余人**只限自己那个账号**（``user.user.account``）。判管理员用
+:func:`is_admin`，「能不能碰某账号」由 :func:`may_touch` / :func:`ensure_can_touch` 把关，
+六个接口都按它来。
 
 两种越界的出口是**故意不同**的：
 
@@ -68,28 +69,20 @@ def get_onebot(request: Request) -> OneBotLike:
 OneBotDep = Annotated[OneBotLike, Depends(get_onebot)]
 
 
-# --------------------------------------------------------------------------- 范围（授权）
+# --------------------------------------------------------------------------- 授权
 #: 管理员角色名。约定与演示账号一致（admin 账号带 ``("admin", "user")``，见
 #: :mod:`nacho.api.services.user.demo`）。
-#:
-#: 它只在这里用一次：定「谁的范围不限」。哪天别的模块也要判管理员，就该把它挪到共同的
-#: 位置去，别再抄一份字符串。
 ADMIN_ROLE: str = "admin"
 
 
-def scope_of(user: CurrentUser) -> str | None:
-    """这个人能碰的账号范围：管理员是 ``None``（**不限**），其余人只限**自己那一个**。
-
-    ``user.user.account`` 就是登录账号（``admin`` / ``robot``），而 OneBot 令牌与在线客户端
-    的 ``account`` 说的也是「归哪个账号」——两边是同一套命名，这也是这套权限成立的前提。
-    """
-    return None if ADMIN_ROLE in user.user.roles else user.user.account
+def is_admin(user: CurrentUser) -> bool:
+    """这人是不是管理员：能管所有账号。"""
+    return ADMIN_ROLE in user.user.roles
 
 
 def may_touch(user: CurrentUser, account: str) -> bool:
-    """``account`` 名下的令牌 / 客户端，这个人能不能碰。"""
-    allowed = scope_of(user)
-    return allowed is None or allowed == account
+    """``account`` 名下的令牌 / 客户端，这人能不能碰：管理员随便碰，其余人只限自己账号。"""
+    return is_admin(user) or account == user.user.account
 
 
 def ensure_can_touch(user: CurrentUser, account: str) -> None:
@@ -111,6 +104,6 @@ __all__ = [
     "OneBotDep",
     "ensure_can_touch",
     "get_onebot",
+    "is_admin",
     "may_touch",
-    "scope_of",
 ]
