@@ -164,8 +164,9 @@ class SqlTokenRegistry:
         :raises sqlalchemy.exc.IntegrityError: 试满还撞（概率可忽略）：响亮地失败，
             绝不退回一个跟别人一样的令牌。
         """
-        collision: IntegrityError | None = None
-        for _ in range(MAX_ISSUE_ATTEMPTS):
+        attempt = 0
+        while True:
+            attempt += 1
             token = generate_token()
             row = TokenTable(
                 id=f"t-{uuid4().hex[:16]}",
@@ -177,13 +178,11 @@ class SqlTokenRegistry:
                 async with self._sessions() as session:
                     session.add(row)
                     await session.commit()
-            except IntegrityError as exc:
-                collision = exc  # 撞了：退出时会话会回滚，换个令牌再来
-                continue
+            except IntegrityError:
+                if attempt >= MAX_ISSUE_ATTEMPTS:
+                    raise  # 试满还撞：原样抛出（保住原始 traceback 与约束信息）
+                continue  # 撞了：会话已随 with 退出回滚，换个令牌再来
             return IssuedToken(record=_to_record(row), token=token)
-        # 循环体要么 return，要么记下 collision；走到这里说明试满了
-        assert collision is not None
-        raise collision
 
     async def list_records(self, *, account: str | None = None) -> tuple[TokenRecord, ...]:
         """列出令牌（不含明文）；给 ``account`` 就只列那个账号下的。
