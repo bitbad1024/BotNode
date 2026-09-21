@@ -89,19 +89,43 @@ class IssuedLike(Protocol):
         ...
 
 
-class TokenRegistryLike(Protocol):
-    """令牌注册表里接口层用得到的三件事（列 / 签 / 吊销）。"""
+class TokenRegistry(Protocol):
+    """令牌注册表：把「连进来的令牌」翻成「哪条记录（含账号）」。
 
-    async def items(self) -> tuple[TokenLike, ...]:
-        """全部令牌（不含明文）。"""
+    服务端只认这一个协议，令牌存哪（库 / 内存 / 别处）由实现决定。
+
+    这一份协议被接口层与 :mod:`nacho.onebot` **共用**：方法签名只用结构化类型
+    :class:`TokenLike` / :class:`IssuedLike`，所以协议文件不 import ``nacho.onebot``——
+    接口层用得上，而 ``nacho.onebot`` 也不强制依赖 ``nacho.api``（运行时仅以
+    :pep:`563` 惰性注解 + ``TYPE_CHECKING`` 引用本协议）。
+    """
+
+    async def resolve(self, token: str) -> TokenLike | None:
+        """令牌对应的记录；令牌不存在 / 被吊销 / 停用就返回 ``None``（握手按 401 拒）。
+
+        返回**整条记录**而不只是账号：连接上要记 ``id``，之后「删掉这个令牌」才知道
+        该把哪些连接断开（见 :meth:`OneBotLike.revoke_by_id`）。
+        """
         ...
 
     async def issue(self, account: str, *, remark: str = "") -> IssuedLike:
         """给 ``account`` 签一个新令牌。"""
         ...
 
+    async def list_records(self, *, account: str | None = None) -> tuple[TokenLike, ...]:
+        """列出令牌（不含明文）；给 ``account`` 就只列那个账号下的（过滤下推到实现里）。"""
+        ...
+
+    async def get_by_id(self, token_id: str) -> TokenLike | None:
+        """按记录 id 取一条令牌；找不到返回 ``None``（不含明文）。"""
+        ...
+
     async def remove_by_id(self, token_id: str) -> bool:
         """按记录 id 吊销；真删掉了返回 ``True``。"""
+        ...
+
+    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
+        """启用 / 停用一条令牌；真改到了返回 ``True``（id 不存在返回 ``False``）。"""
         ...
 
 
@@ -125,6 +149,6 @@ class OneBotLike(Protocol):
         ...
 
     @property
-    def tokens(self) -> TokenRegistryLike | None:
+    def tokens(self) -> TokenRegistry | None:
         """令牌注册表；``None`` 表示没配（不校验，也没有令牌可管）。"""
         ...

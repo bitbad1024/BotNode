@@ -321,7 +321,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         )
         _api_task = asyncio.create_task(_api_server.serve(), name="api")
 
-        if not await token_registry.items():  # 一枚令牌都没有：客户端连上来会被 401 拒
+        if not await token_registry.list_records():  # 一枚令牌都没有：客户端连上来会被 401 拒
             hint = f"{settings.api.prefix}/onebot/tokens"
             core.warning(f"还没有任何 OneBot 令牌，客户端连不上；签一个：POST {hint}")
 

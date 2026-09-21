@@ -5,7 +5,7 @@
     客户端 -> 框架：事件（带 post_type）；或某个动作的回应（带 status / retcode / echo）
     框架 -> 客户端：动作（{"action": ..., "params": {...}, "echo": ...}）
 
-**一个端口接很多客户端**：谁连进来由**令牌**决定归属 —— 配了 :class:`TokenRegistry` 时，
+**一个端口接很多客户端**：谁连进来由**令牌**决定归属 —— 配了 :class:`~nacho.api.api.onebot.protocols.TokenRegistry` 时，
 握手阶段把令牌翻成账号（查不到就 401），账号绑在这条连接上（:attr:`OneBotConnection.account`）。
 没配注册表就不校验（谁都能连，归属记成匿名），所以不接数据库照样能跑起来。
 
@@ -35,7 +35,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TypeAlias, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 from urllib.parse import unquote
 from uuid import uuid4
 
@@ -56,7 +56,11 @@ from .models import (
     parse_event,
 )
 from .options import OneBotOptions
-from .tokens import TokenRegistry
+
+if TYPE_CHECKING:
+    # 协议是接口层（nacho.api）与 onebot 共用的一份；运行时绝不 import nacho.api，
+    # 否则 onebot 会被迫带上 api 的重型依赖（fastapi 等）。注解靠 PEP 563 惰性化。
+    from nacho.api.api.onebot.protocols import TokenRegistry
 
 #: 事件处理器：收到一条事件时的回调。抛出的异常只会被记下来，不影响后续事件。
 EventHandler: TypeAlias = Callable[["OneBotConnection", OneBotEvent], Awaitable[None]]

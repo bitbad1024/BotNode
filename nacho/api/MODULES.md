@@ -30,7 +30,7 @@ nacho/api/
 │   │   └── responses.py      LoginData（响应 schema）
 │   └── onebot/       OneBot 管理（服务本身在 nacho.onebot，按协议取用，不 import）
 │       ├── router.py         在线列表 / 踢人 / 令牌签发与吊销
-│       ├── protocols.py      OneBotLike / TokenRegistryLike（结构化协议）
+│       ├── protocols.py      OneBotLike / TokenRegistry（结构化协议）
 │       ├── dependencies.py   get_onebot / CurrentUserDep
 │       ├── requests.py       IssueTokenRequest
 │       └── responses.py      ClientData / TokenData / IssuedTokenData…
@@ -136,7 +136,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | 文件 | 作用 |
 |---|---|
 | `api/onebot/router.py` | **HTTP 入口**：`GET <prefix>/onebot/clients`（在线列表，可 `?account=` 过滤）、`DELETE <prefix>/onebot/clients/{id}`（踢下线，`?revoke=true` 连令牌一起吊销）、`GET/POST <prefix>/onebot/tokens`（列表 / 签发）、`PATCH <prefix>/onebot/tokens/{id}`（启用 / 停用，停用会断开客户端）、`DELETE <prefix>/onebot/tokens/{id}`（吊销并断开）。全部要求登录，并由 `ensure_can_touch()` / `may_touch()` 按身份收范围。 |
-| `api/onebot/protocols.py` | 结构化协议：`OneBotLike` / `TokenRegistryLike` / `ClientLike` / `TokenLike`（数据成员写成**只读属性**，对面是冻结数据类）。靠它做到两边互不 import。 |
+| `api/onebot/protocols.py` | 结构化协议：`OneBotLike` / `TokenRegistry` / `ClientLike` / `TokenLike`（数据成员写成**只读属性**，对面是冻结数据类）。靠它做到两边互不 import。 |
 | `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）；以及授权：`ADMIN_ROLE` / `is_admin` / `may_touch` / `ensure_can_touch`。 |
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |

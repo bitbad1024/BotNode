@@ -77,10 +77,10 @@ async def _fetch_token(server: OneBotLike, token_id: str) -> TokenData:
         raise ApiError(
             ErrorCode.HTTP_ERROR, "没配令牌注册表", status_code=status.HTTP_404_NOT_FOUND
         )
-    for item in await registry.items():
-        if item.id == token_id:
-            return _token_of(item)
-    raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
+    record = await registry.get_by_id(token_id)
+    if record is None:
+        raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
+    return _token_of(record)
 
 
 async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id: str) -> None:
@@ -95,10 +95,9 @@ async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id
             "没配令牌注册表：当前 OneBot 不校验，也没有令牌可管",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    for item in await registry.items():
-        if item.id == token_id and may_touch(user, item.account):
-            return
-    raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
+    record = await registry.get_by_id(token_id)
+    if record is None or not may_touch(user, record.account):
+        raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
 
 
 @router.get(
@@ -190,11 +189,9 @@ async def list_tokens(
             "没配令牌注册表：当前 OneBot 不校验，也没有令牌可管",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    data = [
-        _token_of(item)
-        for item in await registry.items()
-        if is_admin(user) or item.account == user.user.account
-    ]
+    # 范围过滤下推到注册表：非管理员只查自己账号那批，别人的行根本不读
+    records = await registry.list_records(account=None if is_admin(user) else user.user.account)
+    data = [_token_of(record) for record in records]
     return ApiResponse[list[TokenData]](data=data, trace_id=trace_id)
 
 
