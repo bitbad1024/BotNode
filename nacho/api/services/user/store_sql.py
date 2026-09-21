@@ -104,12 +104,15 @@ class SqlUserStore:
         async with self._engine.begin() as conn:
             await conn.run_sync(UserTable.metadata.create_all)
 
-    async def seed_demo(self) -> None:
-        """表是空的时候种入演示账号（admin / robot / guest）；已有数据就不动。"""
+    async def seed_demo(self) -> int:
+        """表是空的时候种入演示账号（admin / robot / guest），返回**种了几条**。
+
+        已有数据就一条都不动（返回 0）——幂等：谁调都不会把现有账号改成演示账号。
+        """
         async with self._sessions() as session:
             existing = await session.exec(select(UserTable.id).limit(1))
             if existing.first() is not None:
-                return
+                return 0
             for account, password, nickname, roles, disabled in DEMO_USERS:
                 session.add(
                     UserTable(
@@ -122,6 +125,7 @@ class SqlUserStore:
                     )
                 )
             await session.commit()
+            return len(DEMO_USERS)
 
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:

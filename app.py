@@ -61,12 +61,14 @@ from nacho.api import (
 )
 from nacho.core.cache import CacheOptions, cache
 from nacho.core.logger import (
+    BaseLogger,
     BaseLogProcessor,
     DatabaseLogProcessor,
     LocalFileLogProcessor,
     LogCore,
     LogLevel,
     configure,
+    get_logger,
     manager,
 )
 from nacho.core.scheduler import (
@@ -161,13 +163,20 @@ async def setup(settings: Settings) -> LogCore:
         processors=processors,
     )
     _ = await core.start()
+    # 挂了哪些出口说一声：日志本身进了哪里、有没有落库，翻日志时不用回来看配置
+    core.info(
+        "日志出口已就绪",
+        console=log.console,
+        file=str(file_log.path) if file_log.enabled else None,
+        database=db_log.table if db_log.enabled else None,
+    )
     # 缓存：默认（memory）就是本地内存，配了 redis 而连不上时按 fallback_to_memory 处理
     cache.configure(CacheOptions.from_mapping(settings.cache.model_dump()))
     await cache.start()
     return core
 
 
-def _build_db(db_settings: DatabaseSettings) -> AsyncEngine:
+def _build_db(db_settings: DatabaseSettings, log: BaseLogger) -> AsyncEngine:
     """按配置建**应用共用**的异步引擎（令牌 / 用户 / 会话三份落库存储都挂它上面）。
 
     复用 ``[database]`` 公共节的连接信息；异步驱动与数据库层那份同步驱动不同：sqlite 走
@@ -175,18 +184,21 @@ def _build_db(db_settings: DatabaseSettings) -> AsyncEngine:
     两套驱动各管一段，互不干扰）。
     """
     if db_settings.driver == "mariadb":
+        target = f"{db_settings.host}:{db_settings.port}/{db_settings.database}"
         url = (
             f"mysql+aiomysql://{quote_plus(db_settings.user)}:{quote_plus(db_settings.password)}"
-            f"@{db_settings.host}:{db_settings.port}/{db_settings.database}"
+            f"@{target}"
         )
     else:
         db_settings.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
-        url = f"sqlite+aiosqlite:///{db_settings.path.as_posix()}"
+        target = db_settings.path.as_posix()
+        url = f"sqlite+aiosqlite:///{target}"
+    log.info("数据库引擎就绪", driver=db_settings.driver, target=target)  # 口令不进日志
     return create_async_engine(url)
 
 
 async def _prepare_stores(
-    db: AsyncEngine,
+    db: AsyncEngine, log: BaseLogger
 ) -> tuple[SqlTokenRegistry, SqlUserStore, SqlSessionStore]:
     """建表 + 种演示账号（幂等）：三份落库存储都挂同一个 ``db``。
 
@@ -198,9 +210,14 @@ async def _prepare_stores(
     await tokens.ensure_schema()
     users = SqlUserStore(db)  # hasher 默认 PBKDF2，只有 seed_demo 用
     await users.ensure_schema()
-    await users.seed_demo()  # 空表才种演示账号，已有数据不动
+    seeded = await users.seed_demo()  # 空表才种演示账号，已有数据不动
     sessions = SqlSessionStore(db)
     await sessions.ensure_schema()
+    log.info(
+        "数据表就绪",
+        tables=["onebot_tokens", "users", "auth_sessions"],
+        demo_accounts=seeded,  # 0 = 表里本来就有账号，一条没动
+    )
     return tokens, users, sessions
 
 
@@ -273,8 +290,9 @@ async def _main(argv: Sequence[str] | None = None) -> None:
     # 2) 初始化：日志 / 缓存 -> 一个数据库引擎 -> 三份落库存储（建表 + 种演示账号）
     try:
         core = await setup(settings)
-        db = _build_db(settings.database)  # RuntimeError = 数据库连不上
-        token_registry, user_store, session_store = await _prepare_stores(db)
+        db_log = get_logger("db")  # 出口先挂、实例后取（实例创建即冻结落回配置）
+        db = _build_db(settings.database, db_log)  # RuntimeError = 数据库连不上
+        token_registry, user_store, session_store = await _prepare_stores(db, db_log)
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
