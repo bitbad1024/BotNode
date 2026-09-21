@@ -15,10 +15,10 @@
     get_logger("app")                  # 业务模块取自己的实例（与核心共享队列）
     await manager.stop()               # 停机自动冲刷余量
 
-Ctrl+C 走优雅停机：业务协程被取消 -> 等调度器在飞的任务收尾 -> 冲刷日志 -> 关库连接，
+Ctrl+C 走优雅停机：主协程被取消 -> 等调度器在飞的任务收尾 -> 冲刷日志 -> 关库连接，
 安静退出不吐 traceback（收尾期间再按一次 Ctrl+C 才是强杀）。
 
-接口层（``nacho.api``）随主程序由 uvicorn 起成 HTTP 服务，和业务循环同进程、同事件循环跑；
+接口层（``nacho.api``）随主程序由 uvicorn 起成 HTTP 服务，和 OneBot 同进程、同事件循环跑；
 停机时由 :func:`_shutdown` 一并停（先让 uvicorn 优雅退出，再关业务）。监听地址在 ``[api]``
 配置的 ``host`` / ``port``。
 
@@ -67,7 +67,6 @@ from nacho.core.logger import (
     LogCore,
     LogLevel,
     configure,
-    get_logger,
     manager,
 )
 from nacho.core.scheduler import (
@@ -92,8 +91,8 @@ _db_adapters: list[SqliteAdapter | MariadbAdapter] = []
 #: 接口层 HTTP 服务（随主程序由 uvicorn 起）；引用放模块级，供 _shutdown 停机时取用
 _api_server: uvicorn.Server | None = None
 _api_task: asyncio.Task[None] | None = None
-#: 接口层用的异步引擎（SQLModel 查 users 表）；停机时要 dispose
-_api_engine: AsyncEngine | None = None
+#: 应用共用的数据库引擎（令牌 / 用户 / 会话都挂它上面）；停机时要 dispose
+_db_engine: AsyncEngine | None = None
 #: OneBot 反向 WS 服务（同进程随主程序起）；停机时由 _shutdown 一并停
 _onebot_server: OneBotServer | None = None
 
@@ -168,23 +167,44 @@ async def setup(settings: Settings) -> LogCore:
     return core
 
 
+def _build_db(db_settings: DatabaseSettings) -> AsyncEngine:
+    """按配置建**应用共用**的异步引擎（令牌 / 用户 / 会话三份落库存储都挂它上面）。
+
+    复用 ``[database]`` 公共节的连接信息；异步驱动与数据库层那份同步驱动不同：sqlite 走
+    ``aiosqlite``，mariadb 走 ``aiomysql``（数据库层日志落库用的是 sqlite3 / PyMySQL，
+    两套驱动各管一段，互不干扰）。
+    """
+    if db_settings.driver == "mariadb":
+        url = (
+            f"mysql+aiomysql://{quote_plus(db_settings.user)}:{quote_plus(db_settings.password)}"
+            f"@{db_settings.host}:{db_settings.port}/{db_settings.database}"
+        )
+    else:
+        db_settings.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
+        url = f"sqlite+aiosqlite:///{db_settings.path.as_posix()}"
+    return create_async_engine(url)
+
+
+async def _prepare_stores(
+    db: AsyncEngine,
+) -> tuple[SqlTokenRegistry, SqlUserStore, SqlSessionStore]:
+    """建表 + 种演示账号（幂等）：三份落库存储都挂同一个 ``db``。
+
+    放在**启动阶段**而不是等 lifespan：接口服务是 ``create_task`` 起的，启动阶段抛的异常没人
+    await、会被静默吞掉，于是「没建成」只在第一个请求时才炸成 1146（表不存在），离真正的原因
+    很远。放这里：失败就是启动失败，当场看得见。（lifespan 里那次留着兜底，幂等。）
+    """
+    tokens = SqlTokenRegistry(db)
+    await tokens.ensure_schema()
+    users = SqlUserStore(db)  # hasher 默认 PBKDF2，只有 seed_demo 用
+    await users.ensure_schema()
+    await users.seed_demo()  # 空表才种演示账号，已有数据不动
+    sessions = SqlSessionStore(db)
+    await sessions.ensure_schema()
+    return tokens, users, sessions
+
+
 # --------------------------------------------------------------------------- 业务
-async def run() -> None:
-    """业务入口：初始化完成之后真正干活的地方（实现接这里）。"""
-    log = get_logger("app")
-    log.debug("这条 DEBUG 默认被级别挡住")
-    log.info("业务开始", version=__version__)
-    #log.warning("业务占位：把实现接进 run() 即可")
-    #await scheduler.start()
-    #scheduler.add("*/1 * * * * *", lambda:print("每秒一次"),  name="巡检")
-    #scheduler.add("*/5 * * * * *", lambda:print("每五秒一次"), name="巡检")
-    #step = 0
-    while True:
-    #    log.info(f"{step}写入")
-    #    step += 1
-        await asyncio.sleep(1)
-
-
 async def on_event(conn: OneBotConnection, event: OneBotEvent) -> None:
     """OneBot 事件钩子：业务接这里。
 
@@ -220,29 +240,11 @@ async def _shutdown() -> None:
     await manager.stop()  # 停机自动冲刷余量
     for adapter in _db_adapters:  # 余量落库之后再关连接
         adapter.close()
-    if _api_engine is not None:  # 接口层的引擎（连接池）单独收
-        await _api_engine.dispose()
+    if _db_engine is not None:  # 数据库引擎（连接池）单独收
+        await _db_engine.dispose()
 
 
 # --------------------------------------------------------------------------- 入口
-def _build_user_engine(db: DatabaseSettings) -> AsyncEngine:
-    """按配置建接口层的异步引擎（接口层用 SQLModel 查 ``users`` 表，不手写 SQL）。
-
-    复用 ``[database]`` 公共节的连接信息；异步驱动与数据库层那份同步驱动不同：
-    sqlite 走 ``aiosqlite``，mariadb 走 ``aiomysql``（数据库层日志落库用的是
-    sqlite3 / PyMySQL，两套驱动各管一段，互不干扰）。
-    """
-    if db.driver == "mariadb":
-        url = (
-            f"mysql+aiomysql://{quote_plus(db.user)}:{quote_plus(db.password)}"
-            f"@{db.host}:{db.port}/{db.database}"
-        )
-    else:
-        db.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
-        url = f"sqlite+aiosqlite:///{db.path.as_posix()}"
-    return create_async_engine(url)
-
-
 def _parse_args(argv: Sequence[str] | None) -> str:
     """解析命令行参数，返回配置文件路径。"""
     parser = argparse.ArgumentParser(description="nacho 应用入口")
@@ -256,32 +258,29 @@ def _parse_args(argv: Sequence[str] | None) -> str:
 
 
 async def _main(argv: Sequence[str] | None = None) -> None:
+    """入口：装配 -> 起服务 -> 等停机。
+
+    真正的服务（接口层 HTTP、OneBot 反向 WS）都在后台任务里跑，本函数只把**顺序**摆正：
+    初始化哪一步失败都当场退出（``SystemExit(2)``），不留半截状态。
+    """
+    # 1) 配置：读不到就报错退出（-c 指定的文件，或默认的 ./config.toml）
     try:
         settings = Settings.load(_parse_args(argv))
     except ConfigError as exc:
         print(f"[配置错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
+    # 2) 初始化：日志 / 缓存 -> 一个数据库引擎 -> 三份落库存储（建表 + 种演示账号）
     try:
         core = await setup(settings)
-        user_engine = _build_user_engine(settings.database)  # RuntimeError = 数据库连不上
-        # 令牌注册表：和 users 表同一个库；「连进来的客户端属于哪个账号」由它定
-        token_registry = SqlTokenRegistry(user_engine)
-        await token_registry.ensure_schema()
-        # 接口层那两张表（users / auth_sessions）**也在这里先建**，不等 lifespan：
-        # 接口服务是 ``create_task`` 起的，启动阶段抛的异常没人 await、会被静默吞掉，
-        # 于是「没建成」只在第一个请求时才炸成 1146（表不存在），离真正的原因很远。
-        # 建在启动阶段：失败就是启动失败，当场看得见。（lifespan 里那次留着做兜底，幂等。）
-        user_store = SqlUserStore(user_engine)  # hasher 默认 PBKDF2，只有 seed_demo 用
-        await user_store.ensure_schema()
-        await user_store.seed_demo()  # 空表才种演示账号，已有数据不动
-        session_store = SqlSessionStore(user_engine)
-        await session_store.ensure_schema()
+        db = _build_db(settings.database)  # RuntimeError = 数据库连不上
+        token_registry, user_store, session_store = await _prepare_stores(db)
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
-    global _api_server, _api_task, _api_engine, _onebot_server
+    # 3) 起服务：两个都在后台任务里跑，主协程最后停在 OneBot 上等停机
+    global _api_server, _api_task, _db_engine, _onebot_server
     try:
         core.info(
             "应用启动完成",
@@ -291,8 +290,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
 
-        # OneBot 反向 WS：同进程同事件循环，共用日志核心（只是换个文件落盘），随主程序一起起。
-        # 服务要**先建好**再交给接口层：<prefix>/onebot/* 那组管理接口（在线列表 / 踢人 / 令牌）用它
+        # OneBot 反向 WS：先建好对象，下面的接口层要用它（<prefix>/onebot/* 那组管理接口）
         attach_onebot_logging(BASE_DIR / "logs" / "onebot.log")
         _onebot_server = OneBotServer(
             OneBotOptions.from_mapping(settings.onebot.model_dump()),
@@ -300,19 +298,17 @@ async def _main(argv: Sequence[str] | None = None) -> None:
             tokens=token_registry,  # 令牌 -> 账号；一个端口接多个客户端，靠它认归属
         )
 
-        # 接口层：先挂日志（落 logs/api.log），再建应用（注入真实数据库引擎与 OneBot 服务）
+        # 接口层：挂日志 -> 建应用（注入同一个 db 上的两份存储 + OneBot）-> 起 uvicorn
         attach_api_logging(BASE_DIR / "logs" / "api.log")
-        _api_engine = user_engine
-        api_app = create_app(
-            ApiOptions.from_mapping(settings.api.model_dump()),
-            # 直接用上面建好表、种好账号的那两份存储（不再传 db 让它另起一份）
-            user_store=user_store,
-            session_store=session_store,
-            onebot=_onebot_server,
-        )
+        _db_engine = db
         _api_server = _NoSignalServer(
             uvicorn.Config(
-                api_app,
+                create_app(
+                    ApiOptions.from_mapping(settings.api.model_dump()),
+                    user_store=user_store,
+                    session_store=session_store,
+                    onebot=_onebot_server,
+                ),
                 host=settings.api.host,
                 port=settings.api.port,
                 log_config=None,  # 不接管日志系统（接口层走 nacho.core.logger）
@@ -321,9 +317,11 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         )
         _api_task = asyncio.create_task(_api_server.serve(), name="api")
 
+        # 等停机：OneBot 起监听并一直跑，主协程就停在这一行（端口被占等当场报错退出）。
+        # 服务都在后台任务里，不需要再手搓一个"业务循环"；Ctrl+C 取消本协程同样走到下面收尾。
         try:
-            await _onebot_server.start()
-        except OSError as exc:  # 端口被占等：报清楚，别带着半截状态往下跑
+            await _onebot_server.serve_forever()
+        except OSError as exc:
             core.error(
                 "OneBot 反向 WS 监听失败（端口被占？）",
                 host=settings.onebot.host,
@@ -331,8 +329,6 @@ async def _main(argv: Sequence[str] | None = None) -> None:
                 error=str(exc),
             )
             raise SystemExit(2) from exc
-
-        await run()
     except (KeyboardInterrupt, asyncio.CancelledError):  # Ctrl+C / 被外部取消：不算故障
         core.info("收到中断信号，开始停机")
     finally:
