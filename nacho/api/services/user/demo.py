@@ -1,13 +1,11 @@
-"""演示账号：只有这一份，两个存储实现共用。
+"""演示账号：只有这一份，由 :meth:`SqlUserStore.seed_demo` 落库。
 
-单独拎出来是为了**单一事实来源**——内存版 :class:`~nacho.api.services.user.store.InMemoryUserStore`
-与落库版 :class:`~nacho.api.services.user.store_sql.SqlUserStore` 都从这里取，改一个账号
-只改一处，不会两边漂移。
+单独拎出来是为了**单一事实来源**，改一个账号只改一处，不会漂移。
 
-形状是 ``(账号, 明文密码, 昵称, 角色, 是否停用)``；密码在这里是明文，由各自的哈希器
-现算成哈希再落存储，**明文不进存储层**。
+形状是 ``(账号, 明文密码, 昵称, 角色, 是否停用)``；密码在这里是明文，由哈希器现算成哈希
+再落存储，**明文不进存储层**。
 
-:meth:`InMemoryUserStore.demo` 造三个固定账号：
+:meth:`~nacho.api.services.user.store_sql.SqlUserStore.seed_demo` 造三个固定账号：
 ``admin / nacho-admin``（管理员）、``robot / nacho-robot``、``guest / nacho-guest``（已停用）。
 """
 from __future__ import annotations

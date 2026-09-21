@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -21,6 +22,7 @@ pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip in
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
 from config import ConfigError, Settings  # noqa: E402
 from nacho.api import (  # noqa: E402
@@ -31,23 +33,24 @@ from nacho.api import (  # noqa: E402
     AuthService,
     Credentials,
     ErrorCode,
-    InMemoryUserStore,
     InvalidCredentialsError,
     LoginData,
     LoginRequest,
     SESSION_COOKIE,
     ClientInfo,
-    InMemorySessionStore,
+    PasswordHasher,
     Pbkdf2PasswordHasher,
     SessionData,
     SessionService,
+    SqlSessionStore,
+    SqlUserStore,
     attach_api_logging,
     create_app,
     profile_of,
 )
 from nacho.core.logger import LogCore, configure, manager  # noqa: E402
 
-#: 演示账号（见 InMemoryUserStore.demo）
+#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
 ADMIN = {"account": "admin", "password": "nacho-admin"}
 #: 第二个账号：测「不是本人的令牌不复用」要用两个人
 ROBOT = {"account": "robot", "password": "nacho-robot"}
@@ -59,34 +62,65 @@ LOGIN_PATH = "/api/auth/login"
 TEST_ITERATIONS: int = 1_000
 
 _TEST_HASHER = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)
-_CACHE: dict[str, InMemoryUserStore] = {}
 
 
-def demo_store() -> InMemoryUserStore:
-    """全模块共用一份演示存储，第一次用时才造。
+@asynccontextmanager
+async def client_for(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
+    """一个直连 ASGI 应用的异步客户端（不发真实网络请求）。
 
-    ``InMemoryUserStore.demo`` 要按三个账号各哈希一遍（20 万次迭代下约 210ms），
-    而它只有查询接口、没有增删改，登录也不会改动记录，所以共用一份不会被前一个用例污染。
+    顺带把 app 的 lifespan 跑起来：建表在里面，而 httpx 的 ASGITransport 不会自己触发启动。
+    ``create_app`` 不接库时会话挂在一块内存 sqlite 上，正好靠它建表。
     """
-    if "demo" not in _CACHE:
-        _CACHE["demo"] = InMemoryUserStore.demo(_TEST_HASHER)
-    return _CACHE["demo"]
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
 
 
-def client_for(app: FastAPI) -> httpx.AsyncClient:
-    """一个直连 ASGI 应用的异步客户端（不发真实网络请求）。"""
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+#: 本文件用到的内存引擎：每个用例一份，用例结束由下面的 fixture 统一 dispose
+_MEMORY_ENGINES: list[AsyncEngine] = []
+
+
+async def _memory_engine() -> AsyncEngine:
+    """一块内存 sqlite 引擎（记下来给 fixture 关）。"""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _MEMORY_ENGINES.append(engine)
+    return engine
+
+
+async def memory_user_store(hasher: PasswordHasher) -> SqlUserStore:
+    """挂在内存 sqlite 上的用户存储（表已建好 + 演示账号已种）。"""
+    store = SqlUserStore(await _memory_engine(), hasher=hasher)
+    await store.ensure_schema()
+    await store.seed_demo()
+    return store
+
+
+async def memory_session_store() -> SqlSessionStore:
+    """挂在内存 sqlite 上的会话存储（表已建好）。"""
+    store = SqlSessionStore(await _memory_engine())
+    await store.ensure_schema()
+    return store
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_memory_engines() -> AsyncIterator[None]:
+    """用例结束把上面那些内存引擎关掉（否则连接会跟着事件循环一起悬着）。"""
+    yield
+    while _MEMORY_ENGINES:
+        await _MEMORY_ENGINES.pop().dispose()
 
 
 def app_with(**overrides: object) -> FastAPI:
     """建一个应用：默认前缀 /api、访问令牌 1800 秒（测试要可重现）。
 
-    用户存储传 :func:`demo_store` 那一份共享的：否则每个用例重建应用都要把演示账号
-    重新哈希一遍，单点计时就先看得出这里贵。会话走内存实现（不接库），令牌索引则由
-    ``TokenIndex`` 自带的内存兜底顶上（测试里没人去 ``cache.start()``）。
+    不传用户 / 会话存储：``create_app`` 兜底挂一块内存 sqlite 并种好演示账号（建表在
+    lifespan，``client_for`` 会替应用跑一遍）。令牌索引由 ``TokenIndex`` 自带的内存兜底
+    顶上（测试里没人去 ``cache.start()``）。
     """
     options = ApiOptions(prefix="/api", token_ttl=1800.0)
-    return create_app(replace(options, **overrides), user_store=demo_store(), hasher=_TEST_HASHER)
+    return create_app(replace(options, **overrides), hasher=_TEST_HASHER)
 
 
 async def drain(core: LogCore) -> None:
@@ -133,7 +167,7 @@ class TestLogin:
         assert body["data"]["token_type"] == "bearer"
         assert body["data"]["expires_in"] == 1800
         assert body["data"]["user"] == {
-            "id": "u-0001",
+            "id": "u-admin",
             "account": "admin",
             "nickname": "管理员",
             "roles": ["admin", "user"],
@@ -505,7 +539,7 @@ class TestSecurity:
         assert not hasher.verify("x", "other$1$c2FsdA==$ZGlnZXN0")  # 算法名不认
 
     async def test_profile_of_drops_password_hash(self) -> None:
-        store = InMemoryUserStore.demo(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS))
+        store = await memory_user_store(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS))
         record = await store.get_by_account("admin")
         assert record is not None
         profile = profile_of(record).model_dump()
@@ -515,8 +549,8 @@ class TestSecurity:
     async def test_service_raises_invalid_credentials_directly(self) -> None:
         """服务层不认识 HTTP：失败抛的是异常，状态码在异常里。"""
         service = AuthService(
-            InMemoryUserStore.demo(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)),
-            sessions=SessionService(InMemorySessionStore()),
+            await memory_user_store(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)),
+            sessions=SessionService(await memory_session_store()),
         )
         with pytest.raises(InvalidCredentialsError):
             await service.login(
@@ -557,7 +591,6 @@ class TestLogging:
         async with client_for(
             create_app(
                 replace(ApiOptions(prefix="/api"), access_log=False),
-                user_store=demo_store(),
                 hasher=_TEST_HASHER,
             )
         ) as client:

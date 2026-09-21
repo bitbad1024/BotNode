@@ -12,8 +12,8 @@
     disabled       BOOLEAN      NOT NULL DEFAULT FALSE
 
 ``roles`` 在库里是 JSON 字符串，进出都转成 ``tuple[str, ...]``；其余字段直接对应
-:class:`~nacho.api.services.user.models.UserRecord`。和 :class:`InMemoryUserStore` 一样，
-本类只负责「查」，没有增删改接口——真要管账号，照同一份协议另接即可。
+:class:`~nacho.api.services.user.models.UserRecord`。本类只负责「查」（外加建表 / 种演示账号），
+没有增删改接口——真要管账号，照同一份协议另接即可。
 
 引擎由外部注入（:class:`AsyncEngine`）：本模块不建引擎、不读配置，连接参数归入口层管；
 会话按「一次查询一个会话」开，用完即关。
@@ -21,11 +21,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import cast
 
 from sqlalchemy import Column, Text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from sqlmodel import Field, SQLModel, select
+from sqlmodel import Field, SQLModel, col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .demo import DEMO_USERS
@@ -104,12 +105,15 @@ class SqlUserStore:
         async with self._engine.begin() as conn:
             await conn.run_sync(UserTable.metadata.create_all)
 
-    async def seed_demo(self) -> None:
-        """表是空的时候种入演示账号（admin / robot / guest）；已有数据就不动。"""
+    async def seed_demo(self) -> int:
+        """表是空的时候种入演示账号（admin / robot / guest），返回**种了几条**。
+
+        已有数据就一条都不动（返回 0）——幂等：谁调都不会把现有账号改成演示账号。
+        """
         async with self._sessions() as session:
             existing = await session.exec(select(UserTable.id).limit(1))
             if existing.first() is not None:
-                return
+                return 0
             for account, password, nickname, roles, disabled in DEMO_USERS:
                 session.add(
                     UserTable(
@@ -122,6 +126,7 @@ class SqlUserStore:
                     )
                 )
             await session.commit()
+            return len(DEMO_USERS)
 
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:
@@ -139,3 +144,17 @@ class SqlUserStore:
             result = await session.exec(select(UserTable).where(UserTable.id == user_id))
             row = result.first()
             return _to_record(row) if row is not None else None
+
+    async def get_by_ids(self, user_ids: Iterable[str]) -> dict[str, UserRecord]:
+        """按一批 id 取用户（**一条** ``WHERE id IN (...)``）；不在库里的 id 就不在结果里。
+
+        列表页一次把昵称查齐，别每条一次查询（N+1）。
+        """
+        wanted = list(dict.fromkeys(user_ids))  # 去重（保序）：IN 里重复没意义
+        if not wanted:
+            return {}
+        async with self._sessions() as session:
+            result = await session.exec(
+                select(UserTable).where(col(UserTable.id).in_(wanted))
+            )
+            return {row.id: _to_record(row) for row in result}

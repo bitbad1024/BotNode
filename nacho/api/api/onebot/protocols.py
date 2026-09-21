@@ -21,13 +21,18 @@ class ClientLike(Protocol):
     """在线列表里的一行（对应 :class:`nacho.onebot.ClientEntry`）。"""
 
     @property
+    def client_id(self) -> str:
+        """这条连接自己的编号（踢人时按它定位）。"""
+        ...
+
+    @property
     def id(self) -> str:
-        """连接编号（踢人时按它定位）。"""
+        """这条连接属于谁（握手时由令牌定下来；语义本层不管）。"""
         ...
 
     @property
     def account(self) -> str:
-        """归属账号（握手时由令牌定下来）。"""
+        """接入 WS 的那个 OneBot 机器人账号。"""
         ...
 
     @property
@@ -51,12 +56,12 @@ class TokenLike(Protocol):
 
     @property
     def id(self) -> str:
-        """记录 id（吊销时按它定位）。"""
+        """**归属标识（谁的）**，也是记录主键（吊销时按它定位；语义本层不管）。"""
         ...
 
     @property
     def account(self) -> str:
-        """这个令牌属于哪个账号。"""
+        """接入 WS 的那个 OneBot 机器人账号（用户自由填，只用来展示）。"""
         ...
 
     @property
@@ -108,12 +113,12 @@ class TokenRegistry(Protocol):
         """
         ...
 
-    async def issue(self, account: str, *, remark: str = "") -> IssuedLike:
-        """给 ``account`` 签一个新令牌。"""
+    async def issue(self, owner_id: str, *, account: str = "", remark: str = "") -> IssuedLike:
+        """给 ``owner_id``（谁的）签一个令牌；**一个归属一条**，再签就是换一把钥匙。"""
         ...
 
-    async def list_records(self, *, account: str | None = None) -> tuple[TokenLike, ...]:
-        """列出令牌（不含明文）；给 ``account`` 就只列那个账号下的（过滤下推到实现里）。"""
+    async def list_records(self, *, owner_id: str | None = None) -> tuple[TokenLike, ...]:
+        """列出令牌（不含明文）；给 ``owner_id`` 就只列那一个归属的（过滤下推到实现里）。"""
         ...
 
     async def get_by_id(self, token_id: str) -> TokenLike | None:
@@ -132,8 +137,8 @@ class TokenRegistry(Protocol):
 class OneBotLike(Protocol):
     """接口层要用的 OneBot 服务端（对应 :class:`nacho.onebot.OneBotServer`）。"""
 
-    def roster(self, *, account: str | None = None) -> tuple[ClientLike, ...]:
-        """在线客户端列表（快照）；给 ``account`` 就只看那一个账号下的。"""
+    def roster(self, *, id: str | None = None) -> tuple[ClientLike, ...]:
+        """在线客户端列表（快照）；给 ``id`` 就只看那一个归属（谁的）下的。"""
         ...
 
     async def kick(self, client_id: str, *, revoke: bool = False) -> bool:

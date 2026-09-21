@@ -124,6 +124,24 @@ async def test_get_by_id(tmp_path: Path) -> None:
         assert same is not None and same.account == "admin"
 
 
+async def test_get_by_ids(tmp_path: Path) -> None:
+    """一批 id **一次**查齐（列表页的昵称查询靠它，别一条一次）：重复的、不存在的都不出现。"""
+    async with opened_store(tmp_path) as (store, _):
+        await store.ensure_schema()
+        await store.seed_demo()
+
+        admin = await store.get_by_account("admin")
+        robot = await store.get_by_account("robot")
+        assert admin is not None and robot is not None
+
+        got = await store.get_by_ids([admin.id, robot.id, "u-nobody", admin.id])
+
+        assert set(got) == {admin.id, robot.id}
+        assert got[admin.id].nickname == "管理员"
+        assert got[robot.id].nickname == "巡检机器人"
+        assert await store.get_by_ids([]) == {}  # 空的一批：不查库
+
+
 async def test_disabled_account_and_missing(tmp_path: Path) -> None:
     async with opened_store(tmp_path) as (store, _):
         await store.ensure_schema()

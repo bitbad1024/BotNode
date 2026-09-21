@@ -4,7 +4,6 @@
     client.py       从 ip、自报设备名、User-Agent 推出设备信息（纯函数）
     protocols.py    SessionStore：会话存储要什么能力
     store_sql.py    落库实现（auth_sessions 表，**主键就是令牌摘要**）
-    store_memory.py 内存实现（不接库时用）
     tokens.py       令牌生成 + 「令牌摘要 -> 用户 id」的缓存映射
     service.py      编排：开 / 认 / 滑动续期 / 设备列表 / 双删吊销
 
@@ -27,7 +26,6 @@ from .models import (
 )
 from .protocols import SessionStore
 from .service import SessionService
-from .store_memory import InMemorySessionStore
 from .store_sql import SessionTable, SqlSessionStore
 from .tokens import TOKEN_PREFIX, TokenIndex, generate_token, hash_token
 
@@ -49,7 +47,6 @@ __all__ = [
     "SessionStore",
     "SqlSessionStore",
     "SessionTable",
-    "InMemorySessionStore",
     "TokenHashCollisionError",
     # 令牌
     "TokenIndex",

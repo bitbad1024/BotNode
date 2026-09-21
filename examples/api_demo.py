@@ -26,13 +26,15 @@
 6. **看日志落了什么**：flush 之后读 ``logs/api.log``（每行一个 JSON）；
 7. **起真服务**：uvicorn 命令（这里不真的起，起了就阻塞住）。
 
-演示账号（见 ``nacho.api.InMemoryUserStore.demo``）：
+演示账号（见 ``nacho.api.services.user.demo.DEMO_USERS``）：
 ``admin / nacho-admin``（管理员）、``robot / nacho-robot``、``guest / nacho-guest``（已停用）。
 """
 from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -40,10 +42,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
 
 from config import Settings  # noqa: E402
 from nacho.api import (  # noqa: E402
     ApiOptions,
+    ApiResponse,
+    LoginData,
     attach_api_logging,
     create_app,
 )
@@ -75,6 +80,20 @@ def show(title: str, response: httpx.Response) -> None:
     print(f"      {body}")
 
 
+@asynccontextmanager
+async def demo_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
+    """直连 ASGI 的客户端，并跑一遍 app 的 lifespan。
+
+    ``create_app`` 不接库时会话 / 用户都挂在一块内存 sqlite 上，建表在 lifespan ——
+    而 httpx 的 ASGITransport 不会自己触发启动，这里替它跑一遍。
+    """
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://demo"
+        ) as client:
+            yield client
+
+
 async def main() -> None:
     settings: Settings = Settings.load()
     options: ApiOptions = demo_options()
@@ -86,18 +105,16 @@ async def main() -> None:
     attach_api_logging(LOG_PATH)
     print(f"[0] 日志接入：接口层日志落 {LOG_PATH}")
 
-    # 1) 装配：不传 user_store 就用内存演示账号；令牌有效期来自 [api].token_ttl
+    # 1) 装配：不传 user_store 就兜底挂一块内存 sqlite 并种演示账号；令牌有效期来自 [api].token_ttl
     app = create_app(options)
     print(f"[1] 应用就绪：{prefix}/auth/login，令牌有效期 {options.token_ttl:.0f} 秒")
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://demo"
-    ) as client:
+    async with demo_client(app) as client:
         # 2) 登录成功
         print("[2] 登录成功：")
         ok = await client.post(f"{prefix}/auth/login", json=ADMIN)
         show("POST /auth/login", ok)
-        token: str = ok.json()["data"]["token"]
+        token: str = ApiResponse[LoginData].model_validate(ok.json()).data.token
 
         # 3) 各种失败：401 / 403 / 422 都是同一个出口形状
         print("[3] 失败与校验：")

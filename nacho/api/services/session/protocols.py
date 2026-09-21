@@ -3,9 +3,8 @@
 存的是一次登录一行：**主键就是令牌摘要**（所以不需要另起一套编号），外加设备信息。
 参数一律叫 ``token_hash``，就是那个摘要本身。
 
-默认实现有两个：:class:`~nacho.api.services.session.store_sql.SqlSessionStore`（落库，
-正式环境用）与 :class:`~nacho.api.services.session.store_memory.InMemorySessionStore`
-（不接库时用，测试 / 演示）。
+实现只有一个：:class:`~nacho.api.services.session.store_sql.SqlSessionStore`（落库）。想要
+「内存版」不必再写一份——把它的引擎指到内存 sqlite 就行（测试与不接库的兜底都这么用）。
 """
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ class SessionStore(Protocol):
         """开一条会话（登录时一行）。
 
         :param token_hash: **令牌摘要**，由调用方算好（服务端只认摘要，不认明文）。
-        :raises TokenHashCollisionError: 这个摘要已经有记录了。**两个实现都必须抛它，
+        :raises TokenHashCollisionError: 这个摘要已经有记录了。**实现必须抛它，
             绝不能覆盖**——覆盖写等于把别人那条登录顶掉（见
             :class:`~nacho.api.services.session.errors.TokenHashCollisionError`）。
         """

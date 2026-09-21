@@ -1,13 +1,17 @@
-"""令牌注册表：一个 WS 端口接很多客户端，靠令牌认出「这条连接属于哪个账号」。
+"""令牌注册表：一个 WS 端口接很多客户端，靠令牌认出「这条连接属于谁」。
 
-一个端口、多个账号，就像路由器接一堆设备：谁连进来由**令牌**决定，令牌 -> 账号的对应
-关系记在这里。服务端握手时查一次，把账号绑到那条连接上（见
+一个端口、多个账号，就像路由器接一堆设备：谁连进来由**令牌**决定，令牌 -> 归属 的对应
+关系记在这里。服务端握手时查一次，把归属绑到那条连接上（见
 :meth:`nacho.onebot.server.OneBotServer.start`），之后每条事件都知道是哪个账号的。
 
-三种实现，按需挑一个传给 :class:`~nacho.onebot.server.OneBotServer`::
+归属就是记录里的 ``id``：本层**不解释它的语义**——它可能是个用户 id，也可能是别的层发出来的
+东西，由**要用它的那一层**自己去解释（接口层就是拿它去用户表查昵称显示到前端）。
+``account`` 是另一回事：它是**接入 WS 的那个 OneBot 机器人账号**，签发时由用户自由填写，
+只用来展示。真正标识一条记录的是 ``id``。
 
-    SqlTokenRegistry(engine)      落库：onebot_tokens 表，能运行时增删（推荐）
-    InMemoryTokenRegistry()       内存：不接库时可用，进程重启即失效
+实现只有一个：:class:`SqlTokenRegistry`（查 ``onebot_tokens`` 表），交给
+:class:`~nacho.onebot.server.OneBotServer` 即可。想要「内存版」不必再写一份——把它的
+引擎指到内存 sqlite 就行（测试正是这么用的），逻辑只有一处，不会两边跑偏。
 
 **不传注册表 = 不校验**（谁都能连，归属记成匿名），所以不接数据库照样能跑起来。
 
@@ -18,8 +22,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import time
-from dataclasses import dataclass, replace
-from uuid import uuid4
+from dataclasses import dataclass
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
@@ -61,9 +64,9 @@ def hash_token(token: str) -> str:
 class TokenRecord:
     """一条令牌记录（**不含明文**，可以放心地列给管理接口看）。"""
 
-    #: 记录 id；管理接口按它吊销
+    #: **归属标识（谁的）**，也是这条记录的主键；本层不解释它的语义，管理接口按它定位
     id: str
-    #: 这个令牌属于哪个账号（一条连接归谁，就是这么定的）
+    #: 接入 WS 的那个 OneBot 机器人账号（用户自由填，只用来展示）
     account: str
     #: 停用：记录还在，但不许再连
     enabled: bool = True
@@ -88,12 +91,12 @@ class IssuedToken:
 class TokenTable(SQLModel, table=True):
     """``onebot_tokens`` 表：只存令牌摘要，明文不落库。
 
-        id           VARCHAR(64) PRIMARY KEY
-        token_hash   VARCHAR(64) UNIQUE   # sha256(明文)
-        account      VARCHAR(64) INDEX
+        id           VARCHAR(64) PRIMARY KEY   # 谁的（本层不解释语义；一个归属一条）
+        token_hash   VARCHAR(64) UNIQUE        # sha256(明文)
+        account      VARCHAR(64)               # 接入 WS 的 OneBot 机器人账号
         enabled      BOOLEAN
         remark       VARCHAR(255)
-        created_at   FLOAT                # Unix 秒
+        created_at   FLOAT                     # Unix 秒
     """
 
     # SQLModel 默认按类名生成表名（这里会成 tokentable），显式钉成 onebot_tokens。
@@ -103,7 +106,7 @@ class TokenTable(SQLModel, table=True):
 
     id: str = Field(primary_key=True, max_length=64)
     token_hash: str = Field(unique=True, index=True, max_length=64)
-    account: str = Field(index=True, max_length=64)
+    account: str = Field(default="", max_length=64)
     enabled: bool = Field(default=True)
     remark: str = Field(default="", max_length=255)
     created_at: float = Field(default_factory=time.time)
@@ -154,51 +157,54 @@ class SqlTokenRegistry:
             return None
         return _to_record(row)
 
-    async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        """给一个账号签新令牌。
+    async def issue(self, owner_id: str, *, account: str = "", remark: str = "") -> IssuedToken:
+        """给 ``owner_id``（谁的）签一个令牌。
 
-        撞上已有记录（``token_hash`` 或 ``id`` 的唯一约束）就换一个再试，最多
-        :data:`MAX_ISSUE_ATTEMPTS` 次——概率极低，但真撞了要能自己恢复，而不是
-        让客户端拿到一个「已经在用」的令牌。
+        **一个归属一条**：``id`` 是主键，所以同一个 ``owner_id`` 再签等于**换一把钥匙**——
+        整条覆盖（旧令牌的摘要随之失效、旧连接下次握手就认不出来了），并顺手更新
+        ``account`` / ``remark``、重新启用。
+
+        摘要撞上别人的记录（``token_hash`` 唯一）就换一个再试，最多 :data:`MAX_ISSUE_ATTEMPTS`
+        次——概率极低，但真撞了要能自己恢复，而不是让客户端拿到一个「已经在用」的令牌。
 
         :raises sqlalchemy.exc.IntegrityError: 试满还撞（概率可忽略）：响亮地失败，
             绝不退回一个跟别人一样的令牌。
         """
-        collision: IntegrityError | None = None
-        for _ in range(MAX_ISSUE_ATTEMPTS):
+        attempt = 0
+        while True:
+            attempt += 1
             token = generate_token()
             row = TokenTable(
-                id=f"t-{uuid4().hex[:16]}",
+                id=owner_id,
                 token_hash=hash_token(token),
                 account=account,
                 remark=remark,
             )
             try:
                 async with self._sessions() as session:
-                    session.add(row)
+                    # merge：有这条就整条覆盖（换钥匙），没有就插入
+                    await session.merge(row)
                     await session.commit()
-            except IntegrityError as exc:
-                collision = exc  # 撞了：退出时会话会回滚，换个令牌再来
-                continue
+            except IntegrityError:
+                if attempt >= MAX_ISSUE_ATTEMPTS:
+                    raise  # 试满还撞：原样抛出（保住原始 traceback 与约束信息）
+                continue  # 撞了：会话已随 with 退出回滚，换个令牌再来
             return IssuedToken(record=_to_record(row), token=token)
-        # 循环体要么 return，要么记下 collision；走到这里说明试满了
-        assert collision is not None
-        raise collision
 
-    async def list_records(self, *, account: str | None = None) -> tuple[TokenRecord, ...]:
-        """列出令牌（不含明文）；给 ``account`` 就只列那个账号下的。
+    async def list_records(self, *, owner_id: str | None = None) -> tuple[TokenRecord, ...]:
+        """列出令牌（不含明文）；给 ``owner_id`` 就只列那一个归属的（走主键，别人的行不读）。
 
-        过滤**下推到 SQL**：非管理员查自己账号时走 ``account`` 索引，别人的行根本不读。
-        管理员不带账号就是「列出全部」——那本来就躲不掉全表读，但一次查询拿完，不逐个补查。
+        管理员不带就是「列出全部」——那本来就躲不掉全表读，但一次查询拿完，不逐个补查。
         """
         statement = select(TokenTable)
-        if account is not None:
-            statement = statement.where(TokenTable.account == account)
+        if owner_id is not None:
+            statement = statement.where(TokenTable.id == owner_id)
         async with self._sessions() as session:
             result = await session.exec(statement)
             return tuple(_to_record(row) for row in result)
 
     async def get_by_id(self, token_id: str) -> TokenRecord | None:
+        """按记录 id（就是「谁的」那个标识）取一条；没有返回 ``None``。"""
         async with self._sessions() as session:
             row = await session.get(TokenTable, token_id)
         return None if row is None else _to_record(row)
@@ -220,62 +226,3 @@ class SqlTokenRegistry:
             row.enabled = enabled
             await session.commit()
             return True
-
-
-# --------------------------------------------------------------------------- 内存实现
-class InMemoryTokenRegistry:
-    """令牌放内存：不接库时用（测试 / 演示），进程重启即失效。"""
-
-    def __init__(self) -> None:
-        self._rows: dict[str, tuple[TokenRecord, str]] = {}  # id -> (记录, 明文)
-
-    async def resolve(self, token: str) -> TokenRecord | None:
-        if not token:
-            return None
-        # 按**字节**比：compare_digest 不接受非 ASCII 的 str（会抛 TypeError），
-        # 而客户端带什么字符来是不受我们控制的，认不出该返回 None 而不是炸
-        given = token.encode("utf-8")
-        for record, plain in self._rows.values():
-            if secrets.compare_digest(plain.encode("utf-8"), given) and record.enabled:
-                return record
-        return None
-
-    async def issue(self, account: str, *, remark: str = "") -> IssuedToken:
-        """同 :meth:`SqlTokenRegistry.issue`；内存版没有唯一索引兜底，所以自己看一眼摘要。"""
-        for _ in range(MAX_ISSUE_ATTEMPTS):
-            token = generate_token()
-            digest = hash_token(token)
-            if any(hash_token(plain) == digest for _, plain in self._rows.values()):
-                continue  # 撞了：换一个
-            record = TokenRecord(
-                id=f"t-{uuid4().hex[:16]}",
-                account=account,
-                remark=remark,
-                created_at=time.time(),
-            )
-            self._rows[record.id] = (record, token)
-            return IssuedToken(record=record, token=token)
-        raise RuntimeError(f"连续 {MAX_ISSUE_ATTEMPTS} 次生成的令牌都撞上已有记录")
-
-    async def list_records(self, *, account: str | None = None) -> tuple[TokenRecord, ...]:
-        """同 :meth:`SqlTokenRegistry.list_records`；内存版就是在字典上筛一遍。"""
-        records = [record for record, _ in self._rows.values()]
-        if account is None:
-            return tuple(records)
-        return tuple(record for record in records if record.account == account)
-
-    async def get_by_id(self, token_id: str) -> TokenRecord | None:
-        existing = self._rows.get(token_id)
-        return None if existing is None else existing[0]
-
-    async def remove_by_id(self, token_id: str) -> bool:
-        return self._rows.pop(token_id, None) is not None
-
-    async def set_enabled(self, token_id: str, enabled: bool) -> bool:
-        existing = self._rows.get(token_id)
-        if existing is None:
-            return False
-        record, plain = existing
-        # TokenRecord 是 frozen：改字段得换一个新对象（dataclasses.replace 正合适）
-        self._rows[token_id] = (replace(record, enabled=enabled), plain)
-        return True

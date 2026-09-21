@@ -37,7 +37,7 @@ nacho/api/
 └── services/        ★ 业务层：只算「业务怎么办」，不认识 FastAPI
     ├── user/        用户：models/protocols/security/store/validation
     ├── session/     会话：登录开出来的那一次会话（设备信息 + 令牌）、滑动续期、吊销
-    │                models/client/protocols/store_sql/store_memory/tokens/service
+    │                models/client/protocols/store_sql/tokens/service
     └── auth/        鉴权：models/service（令牌机制在 session 里）
 ```
 
@@ -164,9 +164,8 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `services/user/validation.py` | 账号 / 密码规则：`Account` / `Password`（pydantic `AfterValidator`，`SecretStr` 包密码）。登录、将来注册 / 改资料共用。 |
 | `services/user/protocols.py` | 能力协议（只声明不实现）：`UserStore`（按账号 / 按 id 查人，异步）、`PasswordHasher`（hash / verify）。 |
 | `services/user/security.py` | 默认实现 `Pbkdf2PasswordHasher`：PBKDF2-SHA256，串自带算法 / 迭代 / 盐 / 摘要，定长比对。 |
-| `services/user/store.py` | 默认实现 `InMemoryUserStore`：内存字典（O(1) 双索引）；`demo()` 造三个固定账号（`admin` / `robot` / `guest` 已停用）。 |
-| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`seed_demo` 空表种演示账号。 |
-| `services/user/demo.py` | 演示账号 `DEMO_USERS` 的单一来源：内存版与落库版共用，改账号只改一处。 |
+| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`seed_demo` 空表种演示账号（`admin` / `robot` / `guest` 已停用）。 |
+| `services/user/demo.py` | 演示账号 `DEMO_USERS` 的单一来源（`seed_demo` 用），改账号只改一处。 |
 
 ### 4.3 services/auth/ —— 鉴权业务
 

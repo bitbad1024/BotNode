@@ -91,7 +91,6 @@ from .api.onebot import (
 from .services.auth import AuthService, Credentials, CurrentUser, LoginResult
 from .services.session import (
     ClientInfo,
-    InMemorySessionStore,
     SessionRecord,
     SessionService,
     SqlSessionStore,
@@ -104,7 +103,6 @@ from .services.user import (
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
     Account,
-    InMemoryUserStore,
     Password,
     PasswordHasher,
     Pbkdf2PasswordHasher,
@@ -156,7 +154,6 @@ __all__ = [
     "profile_of",
     "UserStore",
     "PasswordHasher",
-    "InMemoryUserStore",
     "SqlUserStore",
     "Pbkdf2PasswordHasher",
     "Account",
@@ -181,7 +178,6 @@ __all__ = [
     "SessionRecord",
     "ClientInfo",
     "SqlSessionStore",
-    "InMemorySessionStore",
     "TokenHashCollisionError",
     "describe_client",
     # 日志接入点

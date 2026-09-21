@@ -2,7 +2,7 @@
 
 令牌是**有状态**的、且只有一种：明文给客户端，摘要既当表主键（列名 ``token_hash``）又当缓存键。
 「会话还活着」这件事只记在缓存里，所以这里用一份真的内存缓存（``Cache`` 门面）来测；
-落库那份（``auth_sessions``）用临时 sqlite 单独测。
+会话存储只有落库一份（``auth_sessions``），这里挂在内存 sqlite 上（见 :func:`memory_session_store`）。
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E40
 
 from nacho.api import (  # noqa: E402
     ClientInfo,
-    InMemorySessionStore,
     SessionService,
     SqlSessionStore,
     TokenHashCollisionError,
@@ -67,16 +66,16 @@ def client() -> ClientInfo:
     return describe_client(ip="10.0.0.9", user_agent=UA_CHROME_MAC)
 
 
-def make_service(
+async def make_service(
     cache: Cache,
     *,
-    store: InMemorySessionStore | SqlSessionStore | None = None,
+    store: SqlSessionStore | None = None,
     access_ttl: float = ACCESS_TTL,
     remember_ttl: float = REMEMBER_TTL,
 ) -> SessionService:
-    """建一个会话服务：内存存储 + 真缓存。"""
+    """建一个会话服务：默认挂一块内存 sqlite 的会话存储 + 真缓存。"""
     return SessionService(
-        store if store is not None else InMemorySessionStore(),
+        store if store is not None else await memory_session_store(),
         index=TokenIndex(cache),
         access_ttl=access_ttl,
         remember_ttl=remember_ttl,
@@ -86,6 +85,27 @@ def make_service(
 def cache_key(token: str) -> str:
     """令牌对应的缓存键（测试里要看 TTL）。"""
     return "auth:token:" + hash_token(token)
+
+
+#: 本文件用到的内存引擎：每个用例一份，用例结束由下面的 fixture 统一 dispose
+_MEMORY_ENGINES: list[AsyncEngine] = []
+
+
+async def memory_session_store() -> SqlSessionStore:
+    """挂在内存 sqlite 上的会话存储（表已建好）：复用落库实现，不再单养一份内存版。"""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _MEMORY_ENGINES.append(engine)
+    store = SqlSessionStore(engine)
+    await store.ensure_schema()
+    return store
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_memory_engines() -> AsyncIterator[None]:
+    """用例结束把上面那些内存引擎关掉（否则连接会跟着事件循环一起悬着）。"""
+    yield
+    while _MEMORY_ENGINES:
+        await _MEMORY_ENGINES.pop().dispose()
 
 
 # --------------------------------------------------------------------------- 设备信息
@@ -125,8 +145,8 @@ class TestOpenAndAuthenticate:
     async def test_open_returns_token_and_records_device(
         self, cache: Cache, client: ClientInfo
     ) -> None:
-        store = InMemorySessionStore()
-        service = make_service(cache, store=store)
+        store = await memory_session_store()
+        service = await make_service(cache, store=store)
         issued = await service.open("u-0001", client=client)
 
         assert issued.token.startswith(TOKEN_PREFIX)
@@ -144,7 +164,7 @@ class TestOpenAndAuthenticate:
 
     async def test_remember_uses_the_long_ttl(self, cache: Cache, client: ClientInfo) -> None:
         """勾「记住设备」只是把滑动有效期换成长的那档，没有第二种令牌。"""
-        service = make_service(cache)
+        service = await make_service(cache)
         issued = await service.open("u-0001", client=client, remember=True)
         assert issued.expires_in == int(REMEMBER_TTL)
         assert issued.session.remembered is True
@@ -152,12 +172,12 @@ class TestOpenAndAuthenticate:
         assert ttl is not None and ttl > ACCESS_TTL
 
     async def test_unknown_token_is_rejected(self, cache: Cache) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         with pytest.raises(UnauthorizedError):
             await service.authenticate("nacho_随便编的")
 
     async def test_empty_token_is_rejected(self, cache: Cache) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         with pytest.raises(UnauthorizedError):
             await service.authenticate("")
 
@@ -165,8 +185,8 @@ class TestOpenAndAuthenticate:
         self, cache: Cache, client: ClientInfo
     ) -> None:
         """库里那行是**设备记录**、不是凭据：缓存里没有这个键 = 会话不在了（闲置过期或吊销）。"""
-        store = InMemorySessionStore()
-        service = make_service(cache, store=store)
+        store = await memory_session_store()
+        service = await make_service(cache, store=store)
         issued = await service.open("u-0001", client=client)
 
         await cache.delete(cache_key(issued.token))  # 把它当"闲置到期被清掉"
@@ -183,8 +203,8 @@ class TestReuse:
     async def test_reuse_extends_ttl_and_keeps_the_token(
         self, cache: Cache, client: ClientInfo
     ) -> None:
-        store = InMemorySessionStore()
-        service = make_service(cache, store=store)
+        store = await memory_session_store()
+        service = await make_service(cache, store=store)
         issued = await service.open("u-0001", client=client)
         await cache.expire(cache_key(issued.token), 10.0)  # 人为拨到快过期
 
@@ -202,8 +222,8 @@ class TestReuse:
         self, cache: Cache, client: ClientInfo
     ) -> None:
         """这次勾了「记住设备」→ 之后续期按长的那档（缓存的值里存的也是它）。"""
-        store = InMemorySessionStore()
-        service = make_service(cache, store=store)
+        store = await memory_session_store()
+        service = await make_service(cache, store=store)
         issued = await service.open("u-0001", client=client)  # 短档
         assert issued.session.remembered is False
 
@@ -221,12 +241,12 @@ class TestReuse:
         self, cache: Cache, client: ClientInfo
     ) -> None:
         """拿别人的令牌来复用：不认——**不能因为"知道现在是谁在登录"就把别人的令牌续了**。"""
-        service = make_service(cache)
+        service = await make_service(cache)
         issued = await service.open("u-0001", client=client)
         assert await service.reuse(issued.token, user_id="u-0002") is None
 
     async def test_reuse_refuses_unknown_or_empty_token(self, cache: Cache) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         assert await service.reuse("nacho_没有这条", user_id="u-0001") is None
         assert await service.reuse("", user_id="u-0001") is None
 
@@ -234,8 +254,8 @@ class TestReuse:
         self, cache: Cache, client: ClientInfo
     ) -> None:
         """缓存还认得出、库里那行没了（正常到不了）→ 不复用，宁可另发一个。"""
-        store = InMemorySessionStore()
-        service = make_service(cache, store=store)
+        store = await memory_session_store()
+        service = await make_service(cache, store=store)
         issued = await service.open("u-0001", client=client)
         await store.remove(issued.session.token_hash)
         assert await service.reuse(issued.token, user_id="u-0001") is None
@@ -246,7 +266,7 @@ class TestSlidingExpiry:
     """有通讯就一直延期：每次认令牌都把缓存里的有效期往后拨。"""
 
     async def test_authenticate_extends_ttl(self, cache: Cache, client: ClientInfo) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         issued = await service.open("u-0001", client=client)
         key = cache_key(issued.token)
 
@@ -262,7 +282,7 @@ class TestSlidingExpiry:
         self, cache: Cache, client: ClientInfo
     ) -> None:
         """续期用的是这条会话**自己**那档有效期（长的那档不会被短档覆盖掉）。"""
-        service = make_service(cache)
+        service = await make_service(cache)
         issued = await service.open("u-0001", client=client, remember=True)
         await cache.expire(cache_key(issued.token), 10.0)
 
@@ -274,7 +294,7 @@ class TestSlidingExpiry:
         facade = Cache()
         await facade.start()
         try:
-            service = make_service(facade, access_ttl=0.0)
+            service = await make_service(facade, access_ttl=0.0)
             issued = await service.open("u-0001", client=client)
             assert issued.expires_in == 0
             assert (await facade.ttl(cache_key(issued.token))) == float("inf")
@@ -290,7 +310,7 @@ class TestRevoke:
     """双删吊销：先删缓存（令牌立刻失效），再删库里那行。"""
 
     async def test_list_shows_my_sessions(self, cache: Cache, client: ClientInfo) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         phone = describe_client(user_agent=UA_SAFARI_IPHONE, device_name="我的 iPhone")
         await service.open("u-0001", client=client)
         await service.open("u-0001", client=phone)
@@ -302,8 +322,8 @@ class TestRevoke:
         assert all(row.user_id == "u-0001" for row in rows)
 
     async def test_revoke_kills_token_and_row(self, cache: Cache, client: ClientInfo) -> None:
-        store = InMemorySessionStore()
-        service = make_service(cache, store=store)
+        store = await memory_session_store()
+        service = await make_service(cache, store=store)
         issued = await service.open("u-0001", client=client)
         assert (await service.authenticate(issued.token)).user_id == "u-0001"
 
@@ -320,19 +340,19 @@ class TestRevoke:
         self, cache: Cache, client: ClientInfo
     ) -> None:
         """拿别人的令牌摘要来吊销，按"没有这条"处理（不回"没权限"，免得能试探出存在性）。"""
-        service = make_service(cache)
+        service = await make_service(cache)
         issued = await service.open("u-0001", client=client)
         assert await service.revoke(issued.session.token_hash, user_id="u-0002") is False
         assert (await service.authenticate(issued.token)).user_id == "u-0001"
 
     async def test_revoke_missing_session_is_false(self, cache: Cache) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         assert await service.revoke(hash_token("nacho_没有这条"), user_id="u-0001") is False
 
     async def test_revoke_all_logs_everything_out(
         self, cache: Cache, client: ClientInfo
     ) -> None:
-        service = make_service(cache)
+        service = await make_service(cache)
         phone = describe_client(user_agent=UA_SAFARI_IPHONE)
         first = await service.open("u-0001", client=client)
         second = await service.open("u-0001", client=phone)
@@ -421,7 +441,7 @@ class TestSqlSessionStore:
         try:
             store = SqlSessionStore(engine)
             await store.ensure_schema()
-            service = make_service(cache, store=store)
+            service = await make_service(cache, store=store)
 
             issued = await service.open("u-0001", client=client)
             assert (await service.authenticate(issued.token)).user_id == "u-0001"
@@ -439,26 +459,13 @@ class TestTokenHashCollision:
 
     这该是撞不上的（256 位输出的生日界，见 :func:`hash_token`），所以这里不去"造"一个真
     碰撞——把同一个摘要交给两次 ``create``，效果等同真撞了。要验的就一件事：
-    **原来那条记录分毫未动**（字典赋值本来会把它悄悄换掉）。
+    **原来那条记录分毫未动**（否则会把它悄悄顶掉）。
     """
-
-    async def test_memory_store_refuses_to_overwrite(self, client: ClientInfo) -> None:
-        store = InMemorySessionStore()
-        token_hash = hash_token("nacho_x")
-        first = await store.create(token_hash, "u-0001", client=client, remembered=False)
-
-        with pytest.raises(TokenHashCollisionError):
-            await store.create(token_hash, "u-0002", client=client, remembered=True)
-
-        # 归属、设备、勾没勾「记住设备」——全都还是原来那份
-        assert (await store.get(token_hash)) == first
-        assert first.user_id == "u-0001"
-        assert (await store.list_for_user("u-0002")) == ()
 
     async def test_sql_store_refuses_to_overwrite(
         self, tmp_path: Path, client: ClientInfo
     ) -> None:
-        """落库版撞的是主键，翻成跟内存版**同一个**错（协议对两个实现的要求一致）。"""
+        """撞主键时翻成域内的 :class:`TokenHashCollisionError`（绝不覆盖已有的那行）。"""
         engine: AsyncEngine = create_async_engine(
             f"sqlite+aiosqlite:///{(tmp_path / 'sessions.db').as_posix()}"
         )
