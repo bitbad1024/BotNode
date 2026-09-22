@@ -162,6 +162,22 @@ class TestMinimalStartup:
         assert "nacho.robot" in text
         assert "battery" in text
 
+    async def test_console_renders_owner_only_when_given(self) -> None:
+        """有所有者的日志在实例名后带上 ``(谁的)``；公共日志（空串）不加那对括号。"""
+        stream = io.StringIO()
+        logger = LogCore("nacho.api", console_stream=stream, dispatch_timeout=0.01)
+        await logger.start()
+        try:
+            logger.info("请求完成", owner_id="u-admin")
+            logger.info("框架启动")
+            assert await wait_until(lambda: "框架启动" in stream.getvalue()) is True
+        finally:
+            await logger.stop()
+
+        text = stream.getvalue()
+        assert "nacho.api(u-admin) 请求完成" in text
+        assert "nacho.api 框架启动" in text  # 没归属就不挂括号
+
     async def test_console_filters_below_its_level(self) -> None:
         stream = io.StringIO()
         logger = LogCore(

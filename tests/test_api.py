@@ -601,6 +601,24 @@ class TestLogging:
         assert "登录成功" in messages
         assert "请求完成" not in messages
 
+    async def test_access_log_carries_owner(self, tmp_path: Path, core: LogCore) -> None:
+        """访问日志带**所有者**：认得出登录用户的记在他名下，没归属的是空串（公共）。
+
+        归属由鉴权依赖认出用户后挂到 ``request.state``，中间件读它填 ``owner_id``；登录接口
+        本身不走鉴权，所以它那一行没有归属。
+        """
+        log_path: Path = tmp_path / "api.log"
+        attach_api_logging(log_path)
+        await asyncio.sleep(0.1)  # 同上：等文件出口被拉起来
+
+        async with client_for(app_with()) as client:
+            await client.post(LOGIN_PATH, json=ADMIN)  # 这一步还没有身份 -> 公共
+            await client.get("/api/auth/me")  # 靠登录时发的 Cookie 认证 -> u-admin
+
+        await drain(core)
+        access = [row for row in records_of(log_path) if str(row["message"]) == "请求完成"]
+        assert [row["owner_id"] for row in access] == ["", "u-admin"]
+
     async def test_trace_id_ties_request_and_logs_together(self, tmp_path: Path, core: LogCore) -> None:
         """请求自带 X-Trace-Id 时沿用：日志里的编号与响应头、响应体一致。"""
         log_path: Path = tmp_path / "api.log"

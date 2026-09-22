@@ -47,6 +47,7 @@ def record(
     logger_name: str = "nacho",
     moment: float | None = None,
     extra: dict[str, object] | None = None,
+    owner_id: str = "",
 ) -> LogRecord:
     return LogRecord(
         message=message,
@@ -54,6 +55,7 @@ def record(
         logger_name=logger_name,
         timestamp=time.time() if moment is None else moment,
         extra={} if extra is None else extra,
+        owner_id=owner_id,
     )
 
 
@@ -173,6 +175,35 @@ async def test_processor_start_builds_table() -> None:
         assert [r.message for r in await processor.search()] == ["建表之后才写得进来"]
     finally:
         await processor.stop()
+
+
+# --------------------------------------------------------------------------- 所有者
+async def test_owner_round_trip_and_filter() -> None:
+    """所有者进出数据库不丢，且能按它检索：``None`` 不限、空串只看公共、给值只看那个人。"""
+    store = await memory_store()
+    await store.add(
+        [
+            record("公共的一条"),
+            record("管理员的一条", owner_id="u-admin"),
+            record("机器人的一条", owner_id="u-robot"),
+        ]
+    )
+
+    assert len(await store.search()) == 3  # 不给就是不限所有者
+    assert [r.message for r in await store.search(owner_id="")] == ["公共的一条"]
+    assert [r.message for r in await store.search(owner_id="u-admin")] == ["管理员的一条"]
+    found = await store.search(owner_id="u-robot")
+    assert [(r.message, r.owner_id) for r in found] == [("机器人的一条", "u-robot")]
+
+
+async def test_processor_keeps_owner() -> None:
+    """处理机只是搬运工：它不碰所有者，原样交给 store，检索也一样转发。"""
+    store = await memory_store()
+    processor = DatabaseLogProcessor(store, buffer_size=5, flush_interval=0)
+    await processor.write([record("登录成功", owner_id="u-admin"), record("框架启动")])
+
+    assert [r.message for r in await processor.search(owner_id="u-admin")] == ["登录成功"]
+    assert [r.message for r in await processor.search(owner_id="")] == ["框架启动"]
 
 
 async def test_processor_search_accepts_loose_timestamps() -> None:
