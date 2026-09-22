@@ -11,14 +11,16 @@
 
 典型用法（分阶段启动 + 增量挂载）::
 
-    from nacho.core.logger import LogCore, LocalFileLogProcessor
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from nacho.core.logger import DatabaseLogProcessor, LogCore, LocalFileLogProcessor
+    from nacho.db import SqlLogStore
 
     logger = LogCore()                          # 最小化启动：只有控制台
     await logger.start()
 
-    db = Database(...)
-    await db.connect()
-    logger.attach(DatabaseLogProcessor(db))     # 运行期挂载，自动启动
+    db = create_async_engine("sqlite+aiosqlite:///logs/nacho.db")
+    logger.attach(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
     logger.attach(LocalFileLogProcessor("logs/nacho.log"))
 
     logger.info("机器人已启动", robot_id="r-001")
