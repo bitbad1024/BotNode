@@ -15,6 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ...common.dependencies import trace_id_of
 from ...common.errors import UnauthorizedError
 from ...common.headers import SESSION_EXPIRES_STATE
+from ...logging import OWNER_ID_STATE
 from ...options import ApiOptions
 from ...services.auth.models import CurrentUser
 from ...services.auth.service import AuthService
@@ -127,9 +128,10 @@ async def _current_user(
     脚本只发头，两者都发的通常是在调试——一条不认就换另一条，别让"顺手带上"的那个坏令牌
     把好令牌顶掉。
 
-    认证成功顺带把滑动续期后的剩余秒数挂到 ``request.state``（键名见
-    :data:`~nacho.api.common.headers.SESSION_EXPIRES_STATE`）——请求日志中间件会把它写进
-    ``X-Session-Expires-In``，前端倒计时照着拨准。
+    认证成功顺带把两样东西挂到 ``request.state``：滑动续期后的剩余秒数（键名见
+    :data:`~nacho.api.common.headers.SESSION_EXPIRES_STATE`），请求日志中间件会把它写进
+    ``X-Session-Expires-In``，前端倒计时照着拨准；以及**这次操作属于谁**（键名见
+    :data:`~nacho.api.logging.OWNER_ID_STATE`），中间件拿它当访问日志的 ``owner_id``。
     """
     candidates: list[str] = token_candidates(request, credentials)
     if not candidates:
@@ -146,6 +148,9 @@ async def _current_user(
             continue
         # 键名走常量：写在这、读在请求日志中间件，两边各写一遍字符串迟早对不上
         setattr(request.state, SESSION_EXPIRES_STATE, result.expires_in)
+        # 认出来了就是「这个人的操作」：留给日志当 owner_id。没走鉴权的请求（登录接口本身）
+        # 自然没这一笔，日志那边就是空串 = 公共所有者
+        setattr(request.state, OWNER_ID_STATE, result.user.id)
         return result
     raise failure
 

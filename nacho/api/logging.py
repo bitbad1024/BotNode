@@ -5,6 +5,10 @@
     api           业务日志（登录成功 / 失败、令牌校验失败……）
     api.access    访问日志（每条请求一行：方法、路径、状态码、耗时、trace_id）
 
+两个名字都是**所有者**字段的填写方：登录用户自己发起的请求记在他名下，没登录的请求
+（登录接口本身、被拒的请求）算**公共所有者**——谁的操作一目了然，见
+:data:`OWNER_ID_STATE`。
+
 两个名字是**父子关系**：``api.access`` 派生自 ``api``，所以它没挂自己的出口时会落到
 ``api`` 那一份配置上（日志系统的「自层覆盖 / 回落」规则），一处挂载两路日志都进同一个
 文件。要给访问日志单独落文件，就再 ``attach_api_logging(..., name=ACCESS_LOGGER_NAME)``
@@ -34,6 +38,9 @@ API_LOGGER_NAME: str = "api"
 ACCESS_LOGGER_NAME: str = "api.access"
 #: 请求编号的响应头；请求自带同名头就沿用（链路上的上游已经编过号了）
 TRACE_ID_HEADER: str = "X-Trace-Id"
+#: 当前登录用户挂在 ``request.state`` 上的属性名：鉴权依赖写、请求日志中间件读，
+#: 作为访问日志的 ``owner_id``（谁的操作）。没走鉴权的请求不写 —— 空串 = 公共所有者。
+OWNER_ID_STATE: str = "owner_id"
 
 
 def api_logger(name: str = API_LOGGER_NAME) -> BaseLogger:

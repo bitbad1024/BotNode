@@ -5,7 +5,8 @@
 1. **编号**：``trace_id`` 从请求头 ``X-Trace-Id`` 来（上游编过就沿用），没有就现编一个，
    挂到 ``request.state.trace_id``（异常处理器要用它填进响应体）与响应头 ``X-Trace-Id``；
 2. **记访问日志**：一次请求一行（方法、路径、状态码、耗时、客户端 IP），走
-   :data:`~nacho.api.logging.ACCESS_LOGGER_NAME`（``api.access``）；
+   :data:`~nacho.api.logging.ACCESS_LOGGER_NAME`（``api.access``）；认得出登录用户的请求
+   还会带上 ``owner_id``（这次操作属于谁），没登录的就是空串 = 公共所有者；
    ``options.access_log = False`` 就一条都不记（但编号照旧生成）；
 3. **记没兜住的异常**：业务异常（:class:`~nacho.api.common.errors.ApiError`）由异常处理器记过
    了，这里不重复；其余记一条带堆栈的 ERROR。
@@ -26,7 +27,7 @@ from starlette.responses import Response
 
 from nacho.core.logger import BaseLogger
 
-from ...logging import ACCESS_LOGGER_NAME, TRACE_ID_HEADER, api_logger
+from ...logging import ACCESS_LOGGER_NAME, OWNER_ID_STATE, TRACE_ID_HEADER, api_logger
 from ...options import ApiOptions
 from ..headers import SESSION_EXPIRES_HEADER, SESSION_EXPIRES_STATE
 
@@ -80,6 +81,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         if self._options.access_log:
             self._access.info(
                 "请求完成",
+                owner_id=self._owner_id(request),
                 method=request.method,
                 path=request.url.path,
                 status=response.status_code,
@@ -109,11 +111,19 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             return
         self._access.exception(
             "请求处理异常",
+            owner_id=self._owner_id(request),
             method=request.method,
             path=request.url.path,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
             trace_id=trace_id,
         )
+
+    def _owner_id(self, request: Request) -> str:
+        """这次请求的**所有者**：鉴权依赖认出登录用户后挂上的 id。
+
+        没挂就是空串 = 公共所有者 —— 登录接口本身、被拒的请求这类没有归属的访问。
+        """
+        return str(getattr(request.state, OWNER_ID_STATE, "") or "")  # noqa: B009 可能没挂上
 
     @property
     def _access(self) -> BaseLogger:

@@ -104,6 +104,7 @@
 
     await logger.flush()                           # 刷所有出口的缓冲区
     await logger.search(level="ERROR", limit=20)   # 聚合各出口，按时间倒序并按 record_id 去重
+    await logger.search(owner_id="u-admin")        # 只看某个人名下的日志（不填 = 谁都不限）
 
 完整可运行的示例见 ``examples/logging_demo.py``（分阶段启动 / 模块出口隔离 / 崩溃隔离）
 与 ``examples/child_config_demo.py``（子实例的自层覆盖、回落与冻结）。

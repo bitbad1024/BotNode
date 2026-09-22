@@ -47,10 +47,15 @@ class LogStore(Protocol):
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[LogRecord]:
-        """查询：按条件检索已落地的日志。"""
+        """查询：按条件检索已落地的日志。
+
+        ``owner_id`` 精确匹配所有者：``None`` 不限（默认），空串 = 只要公共的。
+        """
+        ...
         ...
 
     async def delete_before(self, before: TimestampLike) -> int:
