@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ from nacho.api import (  # noqa: E402
     Credentials,
     ErrorCode,
     InvalidCredentialsError,
+    LogData,
     LoginData,
     LoginRequest,
     SESSION_COOKIE,
@@ -48,7 +50,15 @@ from nacho.api import (  # noqa: E402
     create_app,
     profile_of,
 )
-from nacho.core.logger import LogCore, configure, manager  # noqa: E402
+from nacho.core.logger import (  # noqa: E402
+    ConsoleLogProcessor,
+    DatabaseLogProcessor,
+    LogCore,
+    configure,
+    get_logger,
+    manager,
+)
+from nacho.db import SqlLogStore  # noqa: E402
 
 #: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
 ADMIN = {"account": "admin", "password": "nacho-admin"}
@@ -640,6 +650,113 @@ class TestLogging:
             record.get("extra", {}).get("trace_id") == "trace-1"  # type: ignore[union-attr]
             for record in traced
         )
+
+
+# ----------------------------------------------------------------------- 日志检索接口
+async def memory_log_processor() -> DatabaseLogProcessor:
+    """挂在内存 sqlite 上的库出口（``logs`` 表已建好），供日志检索接口用。"""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _MEMORY_ENGINES.append(engine)
+    store = SqlLogStore(engine)
+    await store.ensure_schema()
+    return DatabaseLogProcessor(store, buffer_size=5, flush_interval=0)
+
+
+async def search_logs(
+    client: httpx.AsyncClient, headers: dict[str, str], **params: str
+) -> list[LogData]:
+    """调一次 ``GET /api/logs`` 并返回 ``data`` 里的日志（断言都看它）。"""
+    response = await client.get("/api/logs", headers=headers, params=params)
+    assert response.status_code == 200, response.text
+    return ApiResponse[list[LogData]].model_validate(response.json()).data
+
+
+async def token_of(client: httpx.AsyncClient, account: dict[str, str]) -> str:
+    """登录换一个令牌（这几条用例都要先登录）。"""
+    response = await client.post(LOGIN_PATH, json=account)
+    return ApiResponse[LoginData].model_validate(response.json()).data.token
+
+
+class TestLogSearch:
+    """``GET /api/logs``：查询条件原样透传给日志系统的 search（落库那份就是一条 SQL）。"""
+
+    async def test_requires_login(self) -> None:
+        """没登录一律 401：不往外说有什么日志。"""
+        async with client_for(app_with()) as client:
+            assert (await client.get("/api/logs")).status_code == 401
+
+    async def test_filters_pass_through(self, core: LogCore) -> None:
+        """条件透传：归属 / 关键字 / 出口各自把目标那几条挑出来。"""
+        core.attach(await memory_log_processor())
+        log = get_logger(API_LOGGER_NAME)
+        log.info("管理员干的活", owner_id="u-admin")
+        log.warning("机器人干的活", owner_id="u-robot")
+        log.info("框架自己的活")  # 不填归属 = 公共所有者
+        await drain(core)
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+
+            robots = await search_logs(client, headers, owner_id="u-robot")
+            assert [(row.message, row.owner_id, row.level) for row in robots] == [
+                ("机器人干的活", "u-robot", "WARNING")
+            ]
+
+            found = await search_logs(client, headers, query="机器人")
+            assert [row.message for row in found] == ["机器人干的活"]
+
+            # 归属给空串 = 只看公共那份（框架自身、没归属的请求都算公共）
+            public = await search_logs(client, headers, owner_id="")
+            assert "框架自己的活" in [row.message for row in public]
+            assert all(row.owner_id == "" for row in public)
+
+            # 指定出口：只查落库那份
+            only_db = await search_logs(client, headers, processors="database")
+            assert "机器人干的活" in [row.message for row in only_db]
+
+    async def test_console_hint_is_not_a_log(self, core: LogCore) -> None:
+        """控制台那条「本出口不支持检索」的提示记录不是日志，不会混进结果。"""
+        core.attach(ConsoleLogProcessor(stream=io.StringIO()))
+        await asyncio.sleep(0.1)  # 等分发器把它拉起来
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+            assert await search_logs(client, headers, processors="console") == []
+
+    async def test_normal_user_only_sees_own(self, core: LogCore) -> None:
+        """普通用户只看得到自己名下的；显式要别人的归属 -> 403。"""
+        core.attach(await memory_log_processor())
+        log = get_logger(API_LOGGER_NAME)
+        log.info("管理员干的活", owner_id="u-admin")
+        log.info("机器人干的活", owner_id="u-robot")
+        await drain(core)
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ROBOT)}"}
+
+            rows = await search_logs(client, headers)
+            assert [row.message for row in rows] == ["机器人干的活"]
+            assert rows[0].owner_id == "u-robot"
+
+            forbidden = await client.get(
+                "/api/logs", headers=headers, params={"owner_id": "u-admin"}
+            )
+            assert forbidden.status_code == 403
+
+    async def test_bad_params_are_422(self) -> None:
+        """级别名 / 时间格式 / 越界的 limit 当场挡住：不然会在出口里被吞掉，只看到「一条都没有」。"""
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+            bad_level = await client.get("/api/logs", headers=headers, params={"level": "LOUD"})
+            bad_time = await client.get("/api/logs", headers=headers, params={"start": "不是时间"})
+            bad_limit = await client.get("/api/logs", headers=headers, params={"limit": 0})
+
+        assert bad_level.status_code == 422
+        assert bad_level.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
+        assert bad_time.status_code == 422
+        assert bad_time.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
+        assert bad_limit.status_code == 422  # 上限 / 下限由 Annotated 里的 Query 管
+        assert bad_limit.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
 
 
 # --------------------------------------------------------------------------- 协议
