@@ -5,8 +5,7 @@
 
 容错策略是「能跑就跑」：文件不存在、某一节某一项没写，都按各区域字段的默认值补齐；
 只有**值写错**才抛 :class:`ConfigError` —— 级别名拼错、该填整数填了字符串、driver 不在
-sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在启动阶段就报出来，而不是静默
-用默认值。
+sqlite/mariadb 里、端口越界。这样配置拼错会在启动阶段就报出来，而不是静默用默认值。
 
 校验交给 pydantic：类型、取值范围（端口 1-65535、driver 只能 sqlite/mariadb）、路径解析
 都写在字段旁边 —— 不用再手写 ``isinstance`` 那一套；pydantic 的报错再由 :func:`_describe`
@@ -27,8 +26,8 @@ sqlite/mariadb 里、表名不合法、端口越界。这样配置拼错会在�
 
 数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
 （driver / path / host / port / user / password / database），``[logging.database]`` 是
-日志出口的专用配置 —— 连接类项默认整项继承公共节，日志特有的 enabled / table /
-buffer_size / flush_interval 只在这一节；要给日志单独连另一个库，就在这一节里覆盖同名项，
+日志出口的专用配置 —— 连接类项默认整项继承公共节，日志特有的 enabled / buffer_size /
+flush_interval 只在这一节；要给日志单独连另一个库，就在这一节里覆盖同名项，
 覆盖粒度是**逐项**的（没写的那几项继续继承）。两者合并的最终结果放在
 ``Settings.logging.database.connection``。
 
@@ -60,7 +59,6 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from nacho.core.logger import LogLevel
-from nacho.db import require_table_name
 
 #: 项目根目录：配置、日志、数据库文件的相对路径都相对它解析
 BASE_DIR: Path = Path(__file__).resolve().parent
@@ -138,7 +136,7 @@ def _describe(
     """把 pydantic 的第一条错误翻成本项目的报错：完整出处 + 要求 + 收到的值。"""
     error = exc.errors()[0]
     key: str = str(error["loc"][0]) if error["loc"] else "?"
-    if error["type"] == "value_error":  # 我们自己校验器说的话（如表名），原样带上
+    if error["type"] == "value_error":  # 我们自己校验器说的话，原样带上
         return f"{where(key)}: {str(error['msg']).removeprefix('Value error, ')}"
     field: FieldInfo | None = model.model_fields.get(key)
     requirement: str = _requirement(field) if field else "合法取值"
@@ -247,21 +245,15 @@ class DatabaseLogSettings(_Region):
     """``[logging.database]``：把日志再落一份到数据库的出口。
 
     这里只放日志出口特有的项；连接项在 :attr:`connection`（覆盖之后才知道最终值）。
+    表名不在这里配：日志表固定叫 ``logs``，和 ``users`` / ``auth_sessions`` 一样由代码声明。
     """
 
     enabled: bool = False  # 默认不落库：要多一路数据库出口就置 true
-    table: str = "logs"  # 日志表名（启动时自动建表）
     buffer_size: int = Field(default=500, ge=1, description="不小于 1 的整数")
     flush_interval: float = Field(default=5.0, gt=0, description="大于 0 的秒数")
     #: 这个出口真正连的库：[logging.database] 的连接项逐项盖在 [database] 上之后的结果；
     #: 没单独配就是 [database] 那一份（不是配置项，是算出来的）
     connection: DatabaseSettings = Field(default_factory=DatabaseSettings)
-
-    @field_validator("table")
-    @classmethod
-    def _check_table(cls, value: str) -> str:
-        """表名要拼进 SQL，得是合法标识符。"""
-        return require_table_name(value)
 
 
 class QueueSettings(_Region):
