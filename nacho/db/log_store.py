@@ -7,6 +7,7 @@
     timestamp    DOUBLE       NOT NULL   # Unix 时间戳（秒），检索按它倒序
     level        VARCHAR(16)  NOT NULL   # DEBUG / INFO / WARNING / ERROR / CRITICAL
     logger_name  VARCHAR(128) NOT NULL   # 写日志的实例名
+    owner_id     VARCHAR(64)  NOT NULL   # 所有者：谁的操作；空串 = 公共所有者
     message      TEXT         NOT NULL
     extra        TEXT                    # JSON 对象串
     exc_text     TEXT                    # 异常栈文本，没有异常就是 NULL
@@ -51,6 +52,9 @@ class LogTable(SQLModel, table=True):
     level: str = Field(max_length=16)
     #: 写日志的实例名（``nacho.robot`` 这类）
     logger_name: str = Field(max_length=128)
+    #: 所有者：这条日志是谁的操作（api 层填登录用户 id、ws 层填那条连接的归属）；
+    #: 空串 = 公共所有者，走默认值，所以历史行 / 不带归属的写法都能直接落进来
+    owner_id: str = Field(default="", max_length=64)
     #: 日志正文；长度不限，所以是 TEXT 而不是带长度的 VARCHAR
     message: str = Field(sa_column=Column(Text(), nullable=False))
     #: 附加字段：JSON 对象串
@@ -66,6 +70,7 @@ def _to_row(record: LogRecord) -> LogTable:
         timestamp=record.timestamp,
         level=record.level.name,
         logger_name=record.logger_name,
+        owner_id=record.owner_id,
         message=record.message,
         extra=json.dumps(record.extra, ensure_ascii=False),
         exc_text=record.exc_text,
@@ -104,6 +109,7 @@ def _to_record(row: LogTable) -> LogRecord:
         record_id=row.record_id,
         extra=_decode_extra(row.extra),
         exc_text=row.exc_text,
+        owner_id=row.owner_id or "",
     )
 
 
@@ -149,18 +155,22 @@ class SqlLogStore:
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[LogRecord]:
-        """按条件检索：级别 / 实例名精确匹配，正文模糊匹配，时间戳闭区间，按时间倒序。
+        """按条件检索：级别 / 实例名 / 所有者精确匹配，正文模糊匹配，时间戳闭区间，按时间倒序。
 
         过滤与排序都交给数据库做（条件拼进 ``WHERE`` / ``ORDER BY``），不全表捞回来再筛。
+        ``owner_id`` 给 ``None`` 不限所有者，给空串就是只看公共日志。
         """
         statement = select(LogTable)
         if level is not None:
             statement = statement.where(LogTable.level == LogLevel.parse(level).name)
         if logger_name is not None:
             statement = statement.where(LogTable.logger_name == logger_name)
+        if owner_id is not None:
+            statement = statement.where(LogTable.owner_id == owner_id)
 
         start_ts = normalize_timestamp(start)
         if start_ts is not None:

@@ -88,9 +88,12 @@ class ConsoleLogProcessor(BaseLogProcessor):
         stream.flush()
 
     def _format(self, record: LogRecord) -> str:
+        # 有所有者的（api / ws 这类明确归属的操作）在实例名后带上，如 nacho.api.access(u-admin)；
+        # 公共日志（空串）不加，免得给绝大多数行都挂一对空括号
+        owner = f"({record.owner_id})" if record.owner_id else ""
         text = (
             f"[{record.datetime_text}] {record.level.name:<8} "
-            f"{record.logger_name} {record.message}"
+            f"{record.logger_name}{owner} {record.message}"
         )
         if record.extra:
             text += f" {record.extra}"
@@ -115,6 +118,7 @@ class ConsoleLogProcessor(BaseLogProcessor):
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[LogRecord]:

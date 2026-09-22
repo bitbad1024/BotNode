@@ -645,10 +645,15 @@ class BaseLogger:
         level: LogLevel | str,
         message: object,
         *,
+        owner_id: str = "",
         exc_info: object = False,
         **extra: object,
     ) -> bool:
         """构造日志记录并写入队列。
+
+        ``owner_id`` 是这条日志的**所有者**：谁的操作就填谁（api 层填登录用户 id、ws 层填
+        那条连接的归属），不填就是**空串 = 公共所有者**（启动、框架自身这类没归属的日志）。
+        它单独成一等字段而不塞进 ``extra``：所有者要能渲染、能落库、能按它检索。
 
         ``exc_info`` 收口为 ``object``：既允许 ``True``（用当前异常），也允许
         ``sys.exc_info()`` 那样的 ``(type, value, traceback)`` 三元组；层间用
@@ -685,27 +690,32 @@ class BaseLogger:
             logger_name=self.name,
             extra=extra,
             exc_text=exc_text,
+            owner_id=owner_id,
         )
         return self.write(record)
 
-    def debug(self, message: object, **extra: object) -> bool:
-        return self.log(LogLevel.DEBUG, message, **extra)
+    def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
 
-    def info(self, message: object, **extra: object) -> bool:
-        return self.log(LogLevel.INFO, message, **extra)
+    def info(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.INFO, message, owner_id=owner_id, **extra)
 
-    def warning(self, message: object, **extra: object) -> bool:
-        return self.log(LogLevel.WARNING, message, **extra)
+    def warning(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.WARNING, message, owner_id=owner_id, **extra)
 
-    def error(self, message: object, *, exc_info: object = False, **extra: object) -> bool:
-        return self.log(LogLevel.ERROR, message, exc_info=exc_info, **extra)
+    def error(
+        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
+    ) -> bool:
+        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
 
-    def critical(self, message: object, *, exc_info: object = False, **extra: object) -> bool:
-        return self.log(LogLevel.CRITICAL, message, exc_info=exc_info, **extra)
+    def critical(
+        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
+    ) -> bool:
+        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
 
-    def exception(self, message: object, **extra: object) -> bool:
+    def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
         """记录一条 ERROR 日志并附带当前异常堆栈。"""
-        return self.log(LogLevel.ERROR, message, exc_info=True, **extra)
+        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
 
     # ------------------------------------------------------------------ 刷新与检索
     async def flush(self) -> None:
@@ -729,6 +739,7 @@ class BaseLogger:
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
         processors: Sequence[str] | None = None,
@@ -746,6 +757,7 @@ class BaseLogger:
                     start=start,
                     end=end,
                     logger_name=logger_name,
+                    owner_id=owner_id,
                     limit=limit + offset,
                     offset=0,
                 )

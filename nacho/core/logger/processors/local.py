@@ -118,6 +118,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[LogRecord]:
@@ -128,6 +129,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
             start,
             end,
             logger_name,
+            owner_id,
             limit,
             offset,
         )
@@ -139,6 +141,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
         start: TimestampLike,
         end: TimestampLike,
         logger_name: str | None,
+        owner_id: str | None,
         limit: int,
         offset: int,
     ) -> list[LogRecord]:
@@ -168,6 +171,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
                         start=start,
                         end=end,
                         logger_name=logger_name,
+                        owner_id=owner_id,
                     ):
                         results.append(record)
 

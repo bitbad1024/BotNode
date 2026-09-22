@@ -6,6 +6,7 @@
 
     auth/     鉴权入口：``POST <prefix>/auth/login``、``GET <prefix>/auth/me``
     onebot/   OneBot 管理入口：``<prefix>/onebot/clients``、``<prefix>/onebot/tokens``
+    log/      运行日志入口：``GET <prefix>/logs``
 
 加一个接口就动这一个目录；跨业务的通用件（响应壳、错误出口、中间件、日志）在
 :mod:`nacho.api.common`。
@@ -13,6 +14,7 @@
 from __future__ import annotations
 
 from .auth.router import router as auth_router
+from .log.router import router as log_router
 from .onebot.router import router as onebot_router
 
-__all__ = ["auth_router", "onebot_router"]
+__all__ = ["auth_router", "log_router", "onebot_router"]

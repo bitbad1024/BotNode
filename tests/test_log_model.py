@@ -115,6 +115,7 @@ class TestLogRecord:
         assert record.logger_name == ""
         assert record.extra == {}
         assert record.exc_text is None
+        assert record.owner_id == ""  # 不填 = 公共所有者
         assert before <= record.timestamp <= time.time()
         assert len(record.record_id) == 32
         assert int(record.record_id, 16) >= 0  # 合法的十六进制字符串
@@ -152,6 +153,7 @@ class TestLogRecord:
             "message",
             "extra",
             "exc_text",
+            "owner_id",
         }
         assert data["level"] == "ERROR"  # 存级别名，便于落库与检索
         assert json.loads(json.dumps(data, ensure_ascii=False))["message"] == "机器人启动"
@@ -175,6 +177,7 @@ class TestLogRecordFromDict:
             timestamp=EPOCH_2020,
             extra={"robot_id": "r-001"},
             exc_text="Traceback ...",
+            owner_id="u-admin",
         )
         assert LogRecord.from_dict(record.to_dict()).to_dict() == record.to_dict()
 
@@ -190,6 +193,7 @@ class TestLogRecordFromDict:
         assert record.level is LogLevel.INFO
         assert record.extra == {}
         assert record.exc_text is None
+        assert record.owner_id == ""  # 老数据里没有这个键 -> 公共所有者
         assert record.record_id  # 自动补一个 id
         assert record.timestamp > 0
 
@@ -243,6 +247,18 @@ class TestLogRecordMatches:
     def test_logger_name_must_equal(self, record: LogRecord) -> None:
         assert record.matches(logger_name="nacho.robot")
         assert not record.matches(logger_name="nacho.api")
+
+    def test_owner_is_filtered_exactly_when_given(self, record: LogRecord) -> None:
+        """``owner_id=None`` 不限所有者；给了值就精确匹配——空串就是「只要公共的」。"""
+        assert record.owner_id == ""  # 没归属 = 公共所有者
+        assert record.matches()
+        assert record.matches(owner_id="")
+        assert not record.matches(owner_id="u-admin")
+
+        owned = LogRecord(message="m", owner_id="u-admin")
+        assert owned.matches(owner_id="u-admin")
+        assert not owned.matches(owner_id="")
+        assert owned.matches()
 
     def test_time_range_accepts_datetime_and_text(self, record: LogRecord) -> None:
         assert record.matches(start=datetime(2019, 12, 31, tzinfo=UTC))

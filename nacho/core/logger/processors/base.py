@@ -205,10 +205,14 @@ class BaseLogProcessor(abc.ABC):
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[LogRecord]:
-        """检索方法：按条件查询该处理机中已落地的日志。"""
+        """检索方法：按条件查询该处理机中已落地的日志。
+
+        ``owner_id`` 精确匹配所有者：``None`` 不限（默认），空串 = 只要公共的。
+        """
 
     # ------------------------------------------------------------------ 生命周期
     async def start(self) -> None:

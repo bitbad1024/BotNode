@@ -183,7 +183,10 @@ class OneBotConnection:
             response = parse_action_response(payload)
             if not self._resolve(response):
                 self._log.warning(
-                    "onebot 收到对不上的动作回应，已忽略", echo=response.echo, remote=self.remote
+                    "onebot 收到对不上的动作回应，已忽略",
+                    owner_id=self.id,
+                    echo=response.echo,
+                    remote=self.remote,
                 )
             return None
         return parse_event(payload)
@@ -292,7 +295,11 @@ class OneBotServer:
         if revoke and conn.id and self._tokens is not None:
             await self._tokens.remove_by_id(conn.id)
         self._log.info(
-            "onebot 客户端被踢下线", client=client_id, account=conn.account, revoked=revoke
+            "onebot 客户端被踢下线",
+            owner_id=conn.id,
+            client=client_id,
+            account=conn.account,
+            revoked=revoke,
         )
         await conn.close(reason="kicked")
         return True
@@ -419,6 +426,7 @@ class OneBotServer:
         )
         self._log.info(
             "onebot 客户端接入",
+            owner_id=conn.id,
             remote=conn.remote,
             path=conn.path,
             account=conn.account,
@@ -430,7 +438,7 @@ class OneBotServer:
         except ConnectionClosed:
             pass  # 正常断开：对端关了，或我们主动关的
         except Exception:
-            self._log.exception("onebot 连接处理异常", remote=conn.remote)
+            self._log.exception("onebot 连接处理异常", owner_id=conn.id, remote=conn.remote)
         finally:
             worker.cancel()
             with suppress(asyncio.CancelledError):
@@ -444,6 +452,7 @@ class OneBotServer:
             conn.fail_pending(ConnectionError("连接已断开"))
             self._log.info(
                 "onebot 客户端断开",
+                owner_id=conn.id,
                 remote=conn.remote,
                 account=conn.account,
                 total=len(self._by_client_id),
@@ -464,17 +473,26 @@ class OneBotServer:
             # json.loads 在 typeshed 里返回 Any，先 cast 成 object 表态，下面用 isinstance 现场校验
             loaded = cast(object, json.loads(text))
         except ValueError:
-            self._log.warning("onebot 收到非 JSON 文本，已忽略", remote=conn.remote)
+            self._log.warning(
+                "onebot 收到非 JSON 文本，已忽略", owner_id=conn.id, remote=conn.remote
+            )
             return
         if not isinstance(loaded, dict):
-            self._log.warning("onebot 收到非对象 JSON，已忽略", remote=conn.remote)
+            self._log.warning(
+                "onebot 收到非对象 JSON，已忽略", owner_id=conn.id, remote=conn.remote
+            )
             return
 
         payload = cast("dict[str, object]", loaded)
         try:
             event = conn.accept(payload)
         except ValidationError as exc:
-            self._log.warning("onebot 报文解析失败，已忽略", remote=conn.remote, error=str(exc))
+            self._log.warning(
+                "onebot 报文解析失败，已忽略",
+                owner_id=conn.id,
+                remote=conn.remote,
+                error=str(exc),
+            )
             return
         if event is not None:
             # 机器人号要到第一条事件才露面：记到连接上，在线列表才列得出来
@@ -490,10 +508,13 @@ class OneBotServer:
         """
         if isinstance(event, MetaEvent):
             if event.meta_event_type == "heartbeat":
-                self._log.debug("onebot 心跳", remote=conn.remote, self_id=event.self_id)
+                self._log.debug(
+                    "onebot 心跳", owner_id=conn.id, remote=conn.remote, self_id=event.self_id
+                )
                 return
             self._log.info(
                 "onebot 生命周期",
+                owner_id=conn.id,
                 remote=conn.remote,
                 self_id=event.self_id,
                 sub_type=event.sub_type,
@@ -501,6 +522,7 @@ class OneBotServer:
         if self._handler is None:
             self._log.debug(
                 "onebot 未注册事件处理器，事件已丢弃",
+                owner_id=conn.id,
                 post_type=event.post_type,
                 remote=conn.remote,
             )
@@ -509,5 +531,8 @@ class OneBotServer:
             await self._handler(conn, event)
         except Exception:
             self._log.exception(
-                "onebot 事件处理器抛出异常", post_type=event.post_type, remote=conn.remote
+                "onebot 事件处理器抛出异常",
+                owner_id=conn.id,
+                post_type=event.post_type,
+                remote=conn.remote,
             )

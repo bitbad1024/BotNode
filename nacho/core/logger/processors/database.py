@@ -68,6 +68,7 @@ class DatabaseLogProcessor(BaseLogProcessor):
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[LogRecord]:
@@ -77,6 +78,7 @@ class DatabaseLogProcessor(BaseLogProcessor):
             start=start,
             end=end,
             logger_name=logger_name,
+            owner_id=owner_id,
             limit=limit,
             offset=offset,
         )

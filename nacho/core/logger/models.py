@@ -73,6 +73,9 @@ class LogRecord:
     record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     extra: dict[str, object] = field(default_factory=dict)
     exc_text: str | None = None
+    #: 这条日志的**所有者**：谁的操作就填谁——api 层填登录用户 id，ws 层填那条连接的归属。
+    #: 空串 = **公共所有者**：没有明确归属的日志（启动、框架自身、握手被拒、定时任务……）。
+    owner_id: str = ""
 
     def __post_init__(self) -> None:
         self.level = LogLevel.parse(value=self.level)
@@ -91,12 +94,14 @@ class LogRecord:
             "message": self.message,
             "extra": dict[str, object](self.extra),
             "exc_text": self.exc_text,
+            "owner_id": self.owner_id,
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> LogRecord:
         raw_extra: object | None = data.get("extra")
         raw_exc_text: object | None = data.get("exc_text")
+        raw_owner: object | None = data.get("owner_id")
         return cls(
             message=cast(str, data.get("message", "")),
             level=LogLevel.parse(value=cast(LogLevel | str, data.get("level", LogLevel.INFO))),
@@ -109,6 +114,7 @@ class LogRecord:
                 else {}
             ),
             exc_text=raw_exc_text if isinstance(raw_exc_text, str) else None,
+            owner_id=raw_owner if isinstance(raw_owner, str) else "",
         )
 
     def matches(
@@ -119,11 +125,17 @@ class LogRecord:
         start: TimestampLike = None,
         end: TimestampLike = None,
         logger_name: str | None = None,
+        owner_id: str | None = None,
     ) -> bool:
-        """判断当前记录是否满足检索条件（供各处理机复用）。"""
+        """判断当前记录是否满足检索条件（供各处理机复用）。
+
+        ``owner_id`` 是**精确匹配**：给 ``None`` 表示不限所有者；给空串就是「只要公共的」。
+        """
         if level is not None and self.level < LogLevel.parse(value=level):
             return False
         if logger_name is not None and self.logger_name != logger_name:
+            return False
+        if owner_id is not None and self.owner_id != owner_id:
             return False
 
         start_ts: float | None = normalize_timestamp(value=start)
