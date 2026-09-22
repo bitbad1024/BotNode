@@ -27,6 +27,8 @@ venv/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+# tsc 增量构建缓存（npx tsc -b 的产物）
+frontend/*.tsbuildinfo
 # Vite 本地环境覆盖（含本机后端地址等，只在各自机器上生效）
 frontend/.env.*.local
 

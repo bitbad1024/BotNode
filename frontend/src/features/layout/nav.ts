@@ -3,7 +3,6 @@ import type { ComponentType, SVGProps } from 'react'
 import {
   IconDashboard,
   IconDevices,
-  IconRobot,
   IconKey,
   IconSchedule,
   IconLogs,
@@ -24,7 +23,6 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { path: '/', label: '工作台', icon: IconDashboard, end: true },
   { path: '/sessions', label: '登录设备', icon: IconDevices },
-  { path: '/robots', label: '机器人', icon: IconRobot },
   { path: '/tokens', label: '令牌管理', icon: IconKey },
   { path: '/schedule', label: '调度计划', icon: IconSchedule },
   { path: '/logs', label: '运行日志', icon: IconLogs },
