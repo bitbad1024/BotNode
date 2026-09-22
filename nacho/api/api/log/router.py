@@ -14,7 +14,12 @@
     query                            正文模糊匹配
     start / end                      时间**闭区间**，Unix 时间戳或 ISO 字符串都收
     limit / offset                   分页（按时间倒序：先排序，再翻页）
-    processors                       只看某些出口（逗号分隔）；不写就是所有出口聚合
+    processors                       只看某些出口（逗号分隔，**仅管理员**）；不写就只查落库那份
+
+**默认只查落库那份**（``database`` 出口）：查历史日志以库（SQL）为准 —— 控制台不留存，
+文件那份是给人在本机翻的。库出口没开（``[logging.database] enabled = false``）时回 **503
+并说清楚**，不然只会静默返回空，比报错难查得多；要查别的出口（如 ``file``）显式写
+``?processors=``，**这一步只有管理员能做**（普通用户想指定别的出口 -> 403）。
 
 日志系统内部把出口的失败**吞掉并记账**（一个出口崩了不影响别的），所以这里先把明显写错的
 参数挡住（级别名、时间格式）—— 否则它们会在出口里被吞掉，客户端只看到「一条都没有」。
@@ -26,7 +31,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, status
 
-from nacho.core.logger import LogLevel, LogRecord, normalize_timestamp
+from nacho.core.logger import DatabaseLogProcessor, LogLevel, LogRecord, normalize_timestamp
 
 from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode, HttpStatus
@@ -40,6 +45,10 @@ router = APIRouter(prefix="/logs", tags=["运行日志"])
 
 #: 一次最多给多少条：再多请用 ``offset`` 翻页，别把整库日志一次拉出来
 MAX_LIMIT: int = 500
+
+#: 不指定出口时查哪个：只查**落库那份**（SQL）。查历史以它为准——控制台不留存日志，
+#: 文件那份是给人在本机翻的。名字取自处理机类的类属性，哪天改名这里跟着变。
+DEFAULT_PROCESSOR: str = DatabaseLogProcessor.name
 
 #: 报错提示里能写哪些级别名
 _LEVEL_NAMES: str = "/".join(level.name for level in LogLevel)
@@ -102,7 +111,10 @@ def _check_moment(value: str | None, field: str) -> str | None:
 
 
 def _processor_names(processors: str | None) -> list[str] | None:
-    """``?processors=database,file`` 拆成出口名列表；不写就是所有出口。"""
+    """``?processors=database,file`` 拆成出口名列表。
+
+    不写（或写空）返回 ``None``：由调用方决定默认查哪些出口（这里默认是落库那份）。
+    """
     if not processors:
         return None
     names: list[str] = [name.strip() for name in processors.split(",") if name.strip()]
@@ -120,11 +132,15 @@ def _processor_names(processors: str | None) -> list[str] | None:
         },
         status.HTTP_403_FORBIDDEN: {
             "model": ErrorResponse,
-            "description": "要看别人的归属名下的日志",
+            "description": "要看别人的归属名下的日志，或非管理员指定日志来源",
         },
         HttpStatus.UNPROCESSABLE_ENTITY: {
             "model": ErrorResponse,
             "description": "级别名或时间参数写错",
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": "日志落库出口没开（默认只查落库那份）",
         },
     },
 )
@@ -143,31 +159,63 @@ async def search_logs(
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT, description="最多给多少条")] = 100,
     offset: Annotated[int, Query(ge=0, description="跳过前多少条（翻页用）")] = 0,
     processors: Annotated[
-        str | None, Query(description="只看某些出口（逗号分隔，如 database）")
+        str | None, Query(description="只看某些出口（逗号分隔，仅管理员）；默认只查落库那份")
     ] = None,
 ) -> ApiResponse[list[LogData]]:
-    """检索日志：条件原样交给日志系统的 ``search``（落库那份就是一条 SQL）。
+    """检索日志：条件原样交给日志系统的 ``search``（默认那份就是一条 SQL）。
+
+    **默认只查落库那份**（``database`` 出口）：控制台不留存、文件那份是给人在本机翻的，
+    查历史以库为准；库出口没开就回 503 并说清楚，别静默返回一个空列表。
+
+    要查别的出口（如 ``file``）显式写 ``?processors=`` —— **这一步只有管理员能做**：
+    来源是个全局选择，普通用户只能查默认那份（想指定别的 -> 403）。
 
     非管理员不带 ``owner_id`` 时**默认只看自己的**；显式要别人的归属 -> 403（和 OneBot
-    那组接口一个口径）。``processors`` 指定出口时，只查那些出口的结果。
+    那组接口一个口径）。
     """
     trace_id: str = trace_id_of(request)
+    # 先校验参数：写错了就是写错了，与「出口开没开」这类配置问题分开报
+    chosen_level = _check_level(level)
+    chosen_start = _check_moment(start, "start")
+    chosen_end = _check_moment(end, "end")
+
     if owner_id is None:
         if not is_admin(user):
             owner_id = user.user.id  # 不写就只看自己的，别把别人的漏出去
     else:
         ensure_can_touch(user, owner_id)
 
+    names = _processor_names(processors)
+    if not is_admin(user):
+        # 来源由管理员定：非管理员只能查默认那份，想指定别的出口 -> 403（自己写出来的参数
+        # 越界就说清楚，别默默换成别的出口）。写成默认那份不报错——那跟不写是一回事。
+        if names is not None and names != [DEFAULT_PROCESSOR]:
+            raise ApiError(
+                ErrorCode.HTTP_ERROR,
+                f"只有管理员能指定日志来源（processors）；默认查 {DEFAULT_PROCESSOR} 那份",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        names = None
+
+    if names is None:  # 不指定就只查落库那份（SQL）
+        if logger.get_processor(DEFAULT_PROCESSOR) is None:
+            raise ApiError(
+                ErrorCode.HTTP_ERROR,
+                "日志没落库，查不了历史：配 [logging.database] enabled = true 才有得查",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        names = [DEFAULT_PROCESSOR]
+
     records = await logger.search(
         query=query,
-        level=_check_level(level),
-        start=_check_moment(start, "start"),
-        end=_check_moment(end, "end"),
+        level=chosen_level,
+        start=chosen_start,
+        end=chosen_end,
         logger_name=logger_name,
         owner_id=owner_id,
         limit=limit,
         offset=offset,
-        processors=_processor_names(processors),
+        processors=names,
     )
     data: list[LogData] = [_log_of(record) for record in records if _is_log(record)]
     return ApiResponse[list[LogData]](data=data, trace_id=trace_id)

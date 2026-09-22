@@ -162,9 +162,15 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 > 「一条都没有」，比报错难查得多；控制台出口那条「本出口不支持检索」的提示记录也会被滤掉（那不是
 > 日志，是给 REPL 里的人看的）。
 
+> **默认只查落库那份**（`database` 出口，见 `DEFAULT_PROCESSOR`）：查历史日志以库（SQL）为准
+> —— 控制台不留存，文件那份是给人在本机翻的；库出口没开（`[logging.database] enabled = false`）
+> 时回 **503 并说清楚**，不然只会静默返回一个空列表，比报错难查。要查别的出口（如 `file`）显式
+> 写 `?processors=`，**这一步只有管理员能做** —— 来源是全局选择，普通用户只能查默认那份
+> （想指定别的出口 → 403；写成默认那份不报错，那跟不写是一回事）。
+
 | 文件 | 作用 |
 |---|---|
-| `api/log/router.py` | **HTTP 入口**：`GET <prefix>/logs`（`level` / `logger_name` / `owner_id` / `query` / `start` / `end` / `limit` / `offset` / `processors`），条件原样交给 `logger.search()`，结果按范围收窄；`MAX_LIMIT` 限一次最多给多少条。 |
+| `api/log/router.py` | **HTTP 入口**：`GET <prefix>/logs`（`level` / `logger_name` / `owner_id` / `query` / `start` / `end` / `limit` / `offset` / `processors`），条件原样交给 `logger.search()`，结果按范围收窄；`MAX_LIMIT` 限一次最多给多少条，`DEFAULT_PROCESSOR`（`database`）是不指定出口时的默认。 |
 | `api/log/dependencies.py` | 路由注入件：`get_app_logger`（从 `app.state.logger` 取日志实例，它与日志核心共享出口注册表，所以查得到所有出口）。 |
 | `api/log/responses.py` | 响应体 `LogData`（结构化字段原样给出：级别 / 模块 / 所有者 / 附加字段 / 异常栈）。 |
 
