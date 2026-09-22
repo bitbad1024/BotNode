@@ -118,7 +118,7 @@ from .core import (
     set_default_core,
 )
 from .filters import LevelFilter, LogFilter
-from .interfaces import DatabaseAdapter
+from .interfaces import LogStore
 from .manager import LogManager, configure, get_logger, manager
 from .models import LogLevel, LogRecord, normalize_timestamp
 from .processors import (
@@ -157,5 +157,5 @@ __all__ = [
     "LocalFileLogProcessor",
     "DatabaseLogProcessor",
     # 依赖协议
-    "DatabaseAdapter",
+    "LogStore",
 ]

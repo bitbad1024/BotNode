@@ -101,13 +101,14 @@ backup_count = 3
 enabled = false
 
 # 日志出口特有的项（连接项默认整项继承上面的 [database]，只写日志特有的）
-# 日志表名（启动时自动建表）
-table = "logs"
 # 攒够多少条写一次库
 buffer_size = 500
 # 最多攒多久（秒）必须写一次库
 flush_interval = 5.0
 
+# 落库走异步驱动（sqlite 用 aiosqlite、mariadb 用 aiomysql），与业务存储共用同一个引擎；
+# 日志表固定叫 logs——和 users / auth_sessions 一样由代码声明，这里没有表名可配。
+#
 # 要给日志单独连另一个库，就在这一节里按需覆盖，覆盖是逐项的（没写的继续继承）：
 # driver = "mariadb"
 # path = "logs/nacho-log.db"      # sqlite 用

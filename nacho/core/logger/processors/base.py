@@ -242,7 +242,7 @@ class BaseLogProcessor(abc.ABC):
         """取消定时刷盘任务并等它退出，保证不会留下孤儿任务。"""
         if self._flush_task is None:
             return
-        self._flush_task.cancel()  # pyright: ignore[reportUnusedCallResult]
+        self._flush_task.cancel()
         with suppress(asyncio.CancelledError):
             await self._flush_task
         self._flush_task = None

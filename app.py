@@ -74,7 +74,7 @@ from nacho.core.logger import (
 from nacho.core.scheduler import (
     scheduler
 )
-from nacho.db import MariadbAdapter, SqliteAdapter
+from nacho.db import SqlLogStore
 from nacho.onebot import (
     ONEBOT_LOGGER_NAME,
     OneBotConnection,
@@ -87,13 +87,13 @@ from nacho.onebot import (
 )
 
 # --------------------------------------------------------------------------- 初始化
-#: setup 建立的数据库适配器，停机后由 _main 统一关连接
-_db_adapters: list[SqliteAdapter | MariadbAdapter] = []
+#: 日志出口单独连另一个库时自建的引擎（默认没有，用的就是业务那个）；停机时一并收
+_log_engines: list[AsyncEngine] = []
 
 #: 接口层 HTTP 服务（随主程序由 uvicorn 起）；引用放模块级，供 _shutdown 停机时取用
 _api_server: uvicorn.Server | None = None
 _api_task: asyncio.Task[None] | None = None
-#: 应用共用的数据库引擎（令牌 / 用户 / 会话都挂它上面）；停机时要 dispose
+#: 应用共用的数据库引擎（令牌 / 用户 / 会话 + 默认的日志库出口都挂它上面）；停机要 dispose
 _db_engine: AsyncEngine | None = None
 #: OneBot 反向 WS 服务（同进程随主程序起）；停机时由 _shutdown 一并停
 _onebot_server: OneBotServer | None = None
@@ -106,14 +106,23 @@ class _NoSignalServer(uvicorn.Server):
         pass
 
 
-async def setup(settings: Settings) -> LogCore:
-    """按设置初始化进程默认日志系统：configure 建核心（顺带挂文件 / 数据库出口）-> start。
+async def setup(settings: Settings) -> tuple[LogCore, AsyncEngine]:
+    """按设置初始化：建应用共用的数据库引擎 -> configure 建日志核心（顺带挂文件 / 数据库
+    出口）-> start -> 拉缓存；返回 ``(核心, 业务引擎)``。
 
-    日志先起来，再拉缓存 —— 缓存层的启动信息（用了哪个后端 / 有没有降级）要走日志核心。
+    引擎（只是连接池，第一次真正用到才连库）在这里一起建好：库出口得有引擎才能挂，建好
+    一并交回调用方给业务存储复用（两者**共用同一个**）——``[logging.database]`` 单独配了
+    连接项（要把日志放另一个库）时才另建一个。日志先起来，再拉缓存：缓存层的启动信息
+    （用了哪个后端 / 有没有降级）要走日志核心。
     """
     app, log = settings.app, settings.logging  # 区域：[app] / [logging]
     file_log, db_log = log.file, log.database  # 子区域：[logging.file] / [logging.database]
     #(TODO)用models包装logger的配置,几个模块对齐一下
+    global _db_engine
+    url, db_target = _engine_url(settings.database)  # 顺带把 sqlite 的目录建出来
+    engine: AsyncEngine = create_async_engine(url)
+    _db_engine = engine  # 模块级也留一份：停机时 _shutdown 靠它关（它拿不到这个返回值）
+
     processors: list[BaseLogProcessor] = []
     if file_log.enabled:
         processors.append(
@@ -126,27 +135,18 @@ async def setup(settings: Settings) -> LogCore:
                 backup_count=file_log.backup_count,
             )
         )
+    log_target: str | None = None
     if db_log.enabled:
-        conn = db_log.connection  # 日志出口最终用的那份连接
-        if conn.driver == "mariadb":
-            adapter = MariadbAdapter(
-                host=conn.host,
-                port=conn.port,
-                user=conn.user,
-                password=conn.password,
-                database=conn.database,
-                table=db_log.table,
-            )
-            paramstyle = "format"  # PyMySQL 的 %s 占位
-        else:
-            adapter = SqliteAdapter(conn.path, table=db_log.table)
-            paramstyle = "qmark"  # sqlite 的 ? 占位
-        _db_adapters.append(adapter)
+        # 日志出口写在 [logging.database] 的连接上；没单独配就是 [database] 那块库，直接
+        # 复用业务引擎（同一个连接池），配了另一个库才再建一个。
+        log_url, log_target = _engine_url(db_log.connection)
+        log_engine: AsyncEngine = engine
+        if db_log.connection != settings.database:
+            log_engine = create_async_engine(log_url)
+            _log_engines.append(log_engine)
         processors.append(
             DatabaseLogProcessor(
-                adapter,
-                table=db_log.table,
-                paramstyle=paramstyle,
+                SqlLogStore(log_engine),
                 buffer_size=db_log.buffer_size,
                 flush_interval=db_log.flush_interval,
             )
@@ -168,33 +168,28 @@ async def setup(settings: Settings) -> LogCore:
         "日志出口已就绪",
         console=log.console,
         file=str(file_log.path) if file_log.enabled else None,
-        database=db_log.table if db_log.enabled else None,
+        database=log_target,
     )
+    core.info("数据库引擎就绪", driver=settings.database.driver, target=db_target)  # 口令不进日志
     # 缓存：默认（memory）就是本地内存，配了 redis 而连不上时按 fallback_to_memory 处理
     cache.configure(CacheOptions.from_mapping(settings.cache.model_dump()))
     await cache.start()
-    return core
+    return core, engine
 
 
-def _build_db(db_settings: DatabaseSettings, log: BaseLogger) -> AsyncEngine:
-    """按配置建**应用共用**的异步引擎（令牌 / 用户 / 会话三份落库存储都挂它上面）。
+def _engine_url(db_settings: DatabaseSettings) -> tuple[str, str]:
+    """把连接项拼成**异步驱动**的 URL；返回 ``(url, 给人看的 target)``。
 
-    复用 ``[database]`` 公共节的连接信息；异步驱动与数据库层那份同步驱动不同：sqlite 走
-    ``aiosqlite``，mariadb 走 ``aiomysql``（数据库层日志落库用的是 sqlite3 / PyMySQL，
-    两套驱动各管一段，互不干扰）。
+    sqlite 走 ``aiosqlite``、mariadb 走 ``aiomysql``：库出口与业务存储用的是同一套异步驱动
+    （同一个引擎），不再各养一份驱动。``target`` 只是落日志用的摘录，**口令不进它**。
     """
     if db_settings.driver == "mariadb":
         target = f"{db_settings.host}:{db_settings.port}/{db_settings.database}"
-        url = (
-            f"mysql+aiomysql://{quote_plus(db_settings.user)}:{quote_plus(db_settings.password)}"
-            f"@{target}"
-        )
-    else:
-        db_settings.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
-        target = db_settings.path.as_posix()
-        url = f"sqlite+aiosqlite:///{target}"
-    log.info("数据库引擎就绪", driver=db_settings.driver, target=target)  # 口令不进日志
-    return create_async_engine(url)
+        auth = f"{quote_plus(db_settings.user)}:{quote_plus(db_settings.password)}"
+        return f"mysql+aiomysql://{auth}@{target}", target
+    db_settings.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
+    target = db_settings.path.as_posix()
+    return f"sqlite+aiosqlite:///{target}", target
 
 
 async def _prepare_stores(
@@ -255,8 +250,8 @@ async def _shutdown() -> None:
     await scheduler.stop()  # 等在飞的任务自然收尾（默认 5 秒，超时只记 warning，不强杀）
     await cache.stop()  # 再停缓存：任务收完了，后面不会再有业务来读写
     await manager.stop()  # 停机自动冲刷余量
-    for adapter in _db_adapters:  # 余量落库之后再关连接
-        adapter.close()
+    for engine in _log_engines:  # 余量落库之后再关（默认用的就是业务那个引擎，下面一并收）
+        await engine.dispose()
     if _db_engine is not None:  # 数据库引擎（连接池）单独收
         await _db_engine.dispose()
 
@@ -287,18 +282,19 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         print(f"[配置错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
-    # 2) 初始化：日志 / 缓存 -> 一个数据库引擎 -> 三份落库存储（建表 + 种演示账号）
+    # 2) 初始化：建库引擎 + 日志 / 缓存（库出口挂在同一个引擎上）-> 三份落库存储
     try:
-        core = await setup(settings)
+        # setup 交回的引擎：库出口已经挂在它上面，业务存储接着用同一个（不再另建）；
+        # 连不上库会在第一次用到时暴露，由下面这个 except 兜住
+        core, db = await setup(settings)
         db_log = get_logger("db")  # 出口先挂、实例后取（实例创建即冻结落回配置）
-        db = _build_db(settings.database, db_log)  # RuntimeError = 数据库连不上
         token_registry, user_store, session_store = await _prepare_stores(db, db_log)
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
     # 3) 起服务：两个都在后台任务里跑，主协程最后停在 OneBot 上等停机
-    global _api_server, _api_task, _db_engine, _onebot_server
+    global _api_server, _api_task, _onebot_server
     try:
         core.info(
             "应用启动完成",

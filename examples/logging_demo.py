@@ -19,12 +19,12 @@
 """
 
 import asyncio
-import sqlite3
 import sys
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
 from nacho.core.logger import (  # noqa: E402
     BaseLogProcessor,
@@ -33,58 +33,8 @@ from nacho.core.logger import (  # noqa: E402
     LogCore,
     LogRecord,
     attach_mount,
-    normalize_timestamp,
 )
-from nacho.core.logger.models import TimestampLike  # noqa: E402
-
-
-class SqliteAdapter:
-    """数据库层适配器示例：用标准库 sqlite3 实现 DatabaseAdapter 协议。"""
-
-    def __init__(self, path: str = ":memory:", table: str = "logs") -> None:
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = asyncio.Lock()
-        self._table = table
-
-    async def execute(self, sql: str, params: Sequence[object] | None = None) -> int:
-        async with self._lock:
-            return await asyncio.to_thread(self._execute_sync, sql, params)
-
-    async def execute_many(self, sql: str, rows: Sequence[Sequence[object]]) -> int:
-        async with self._lock:
-            return await asyncio.to_thread(self._execute_many_sync, sql, rows)
-
-    async def fetch_all(
-        self, sql: str, params: Sequence[object] | None = None
-    ) -> list[Mapping[str, object]]:
-        async with self._lock:
-            return await asyncio.to_thread(self._fetch_sync, sql, params)
-
-    async def delete_before(self, before: TimestampLike) -> int:
-        """删除 ``before`` 之前的历史日志，返回删除行数。"""
-        cutoff = normalize_timestamp(before)
-        if cutoff is None:
-            raise ValueError("delete_before 需要一个明确的时刻，不能是 None")
-        return await self.execute(
-            f"DELETE FROM {self._table} WHERE timestamp < ?", (cutoff,)
-        )
-
-    def _execute_sync(self, sql: str, params: Sequence[object] | None) -> int:
-        cursor = self._conn.execute(sql, tuple(params or ()))
-        self._conn.commit()
-        return cursor.rowcount
-
-    def _execute_many_sync(self, sql: str, rows: Sequence[Sequence[object]]) -> int:
-        cursor = self._conn.executemany(sql, [tuple(row) for row in rows])
-        self._conn.commit()
-        return cursor.rowcount
-
-    def _fetch_sync(
-        self, sql: str, params: Sequence[object] | None
-    ) -> list[Mapping[str, object]]:
-        cursor = self._conn.execute(sql, tuple(params or ()))
-        return [dict(row) for row in cursor.fetchall()]
+from nacho.db import SqlLogStore  # noqa: E402
 
 
 class BrokenLogProcessor(BaseLogProcessor):
@@ -118,8 +68,10 @@ async def main() -> None:
     logger.info(message="框架启动完成", version="0.1.0")
 
     # ---- 阶段 2：业务阶段，后端就绪后增量挂载 ----------------------------
-    adapter: SqliteAdapter = SqliteAdapter(table="nacho_logs")
-    logger.attach(DatabaseLogProcessor(adapter, table="nacho_logs", buffer_size=5, flush_interval=0.2))
+    # 库出口只认「存储」（见 SqlLogStore）：这里挂一块内存 sqlite，要落文件就换
+    # "sqlite+aiosqlite:///logs/nacho-log.db"（表由处理机启动时建好）
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    logger.attach(DatabaseLogProcessor(SqlLogStore(engine), buffer_size=5, flush_interval=0.2))
     logger.attach(LocalFileLogProcessor(all_log, buffer_size=5, flush_interval=0.2))
     # 故意挂一个会崩溃的出口：连续 2 批写入失败后自动停用，业务与其它出口不受影响
     logger.attach(BrokenLogProcessor(buffer_size=5, flush_interval=0.2, max_failures=2))
@@ -169,6 +121,7 @@ async def main() -> None:
         print(f"[{record.datetime_text}] {record.level.name:<8} {record.message}")
 
     await logger.stop()
+    await engine.dispose()  # 日志已冲刷落库，可以关连接了
 
     print("\n=== 模块解耦效果 ===")
     print(f"全量文件 {all_log.name}: {count_lines(all_log)} 行（核心自己 + 没挂自有出口的模块，如 arm）")

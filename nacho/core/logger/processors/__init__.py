@@ -5,7 +5,7 @@
 * :class:`ConsoleLogProcessor`：控制台（最小化启动的默认出口）；
 * :class:`LocalFileLogProcessor`：本地文件（JSON Lines + 按大小滚动）；
 * :class:`DatabaseLogProcessor`：数据库（依赖
-  :class:`~nacho.core.logger.interfaces.DatabaseAdapter` 协议）。
+  :class:`~nacho.core.logger.interfaces.LogStore` 协议，落地实现在 ``nacho.db``）。
 
 自定义处理机只需继承 :class:`BaseLogProcessor` 并实现 ``write`` 与 ``search``；
 处理机**不做路由也不做过滤**——路由由日志实例自己那份配置副本负责
