@@ -44,7 +44,7 @@ from nacho.core.logger import BaseLogger
 from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
-from .api import auth_router, log_router, onebot_router
+from .api import auth_router, log_router, onebot_router, workflow_router
 from .api.onebot.protocols import OneBotLike
 from .services.auth import AuthService
 from .services.session import SessionService, SqlSessionStore
@@ -53,6 +53,7 @@ from .services.user.protocols import PasswordHasher, UserStore
 from .services.user.security import Pbkdf2PasswordHasher
 from .services.user.store_sql import SqlUserStore
 from .options import ApiOptions
+from nacho.workflow import SqlWorkflowStore
 
 
 def create_app(
@@ -63,6 +64,7 @@ def create_app(
     db: AsyncEngine | None = None,
     session_store: SessionStore | None = None,
     onebot: OneBotLike | None = None,
+    workflow_store: SqlWorkflowStore | None = None,
     title: str = "nacho",
     version: str = __version__,
     logger: BaseLogger | None = None,
@@ -114,6 +116,10 @@ def create_app(
         remember_ttl=chosen.remember_ttl,
         logger=log,
     )
+    # 工作流存储（定义 + 版本双表）：显式传的优先，否则落库版挂同一块库，开箱即跑
+    workflows_store: SqlWorkflowStore = (
+        workflow_store if workflow_store is not None else SqlWorkflowStore(backing)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -134,6 +140,8 @@ def create_app(
             await store.seed_demo()
         if isinstance(sessions_store, SqlSessionStore):
             await sessions_store.ensure_schema()
+        # 工作流双表（定义 + 版本）同样幂等兜底
+        await workflows_store.ensure_schema()
         try:
             yield
         finally:
@@ -153,6 +161,7 @@ def create_app(
     app.include_router(auth_router, prefix=chosen.prefix)
     app.include_router(onebot_router, prefix=chosen.prefix)
     app.include_router(log_router, prefix=chosen.prefix)
+    app.include_router(workflow_router, prefix=chosen.prefix)
 
     # 依赖注入：服务在这一层建好挂上去（换存储 / 换算法只改这一处）
     app.state.auth_service = AuthService(
@@ -169,4 +178,6 @@ def create_app(
     app.state.user_store = store
     # OneBot 服务端（可空）：没传时 <prefix>/onebot/* 回 503，见 onebot/dependencies.py
     app.state.onebot_server = onebot
+    # 工作流存储（定义 + 版本双表）：<prefix>/workflows/* 用
+    app.state.workflow_store = workflows_store
     return app

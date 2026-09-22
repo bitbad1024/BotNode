@@ -75,6 +75,7 @@ from nacho.core.scheduler import (
     scheduler
 )
 from nacho.db import SqlLogStore
+from nacho.workflow import SqlWorkflowStore
 from nacho.onebot import (
     ONEBOT_LOGGER_NAME,
     OneBotConnection,
@@ -194,8 +195,8 @@ def _engine_url(db_settings: DatabaseSettings) -> tuple[str, str]:
 
 async def _prepare_stores(
     db: AsyncEngine, log: BaseLogger
-) -> tuple[SqlTokenRegistry, SqlUserStore, SqlSessionStore]:
-    """建表 + 种演示账号（幂等）：三份落库存储都挂同一个 ``db``。
+) -> tuple[SqlTokenRegistry, SqlUserStore, SqlSessionStore, SqlWorkflowStore]:
+    """建表 + 种演示账号（幂等）：各份落库存储都挂同一个 ``db``。
 
     放在**启动阶段**而不是等 lifespan：接口服务是 ``create_task`` 起的，启动阶段抛的异常没人
     await、会被静默吞掉，于是「没建成」只在第一个请求时才炸成 1146（表不存在），离真正的原因
@@ -208,12 +209,20 @@ async def _prepare_stores(
     seeded = await users.seed_demo()  # 空表才种演示账号，已有数据不动
     sessions = SqlSessionStore(db)
     await sessions.ensure_schema()
+    workflows = SqlWorkflowStore(db)
+    await workflows.ensure_schema()
     log.info(
         "数据表就绪",
-        tables=["onebot_tokens", "users", "auth_sessions"],
+        tables=[
+            "onebot_tokens",
+            "users",
+            "auth_sessions",
+            "workflow_definitions",
+            "workflow_versions",
+        ],
         demo_accounts=seeded,  # 0 = 表里本来就有账号，一条没动
     )
-    return tokens, users, sessions
+    return tokens, users, sessions, workflows
 
 
 # --------------------------------------------------------------------------- 业务
@@ -288,7 +297,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         # 连不上库会在第一次用到时暴露，由下面这个 except 兜住
         core, db = await setup(settings)
         db_log = get_logger("db")  # 出口先挂、实例后取（实例创建即冻结落回配置）
-        token_registry, user_store, session_store = await _prepare_stores(db, db_log)
+        token_registry, user_store, session_store, workflow_store = await _prepare_stores(db, db_log)
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等
         print(f"[初始化错误] {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
@@ -322,6 +331,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
                     user_store=user_store,
                     session_store=session_store,
                     onebot=_onebot_server,
+                    workflow_store=workflow_store,
                 ),
                 host=settings.api.host,
                 port=settings.api.port,
