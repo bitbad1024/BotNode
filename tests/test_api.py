@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -51,9 +52,11 @@ from nacho.api import (  # noqa: E402
     profile_of,
 )
 from nacho.core.logger import (  # noqa: E402
+    BaseLogProcessor,
     ConsoleLogProcessor,
     DatabaseLogProcessor,
     LogCore,
+    LogRecord,
     configure,
     get_logger,
     manager,
@@ -677,6 +680,24 @@ async def token_of(client: httpx.AsyncClient, account: dict[str, str]) -> str:
     return ApiResponse[LoginData].model_validate(response.json()).data.token
 
 
+class RecordingProcessor(BaseLogProcessor):
+    """把收到的日志原样留在内存里（用来验证「不写 processors 时只查落库那份」）。"""
+
+    name: str = "recording"
+
+    def __init__(self) -> None:
+        super().__init__(buffer_size=5, flush_interval=0)
+        self.received: list[LogRecord] = []
+
+    @override
+    async def write(self, records: list[LogRecord]) -> None:
+        self.received.extend(records)
+
+    @override
+    async def search(self, **kwargs: object) -> list[LogRecord]:
+        return list(self.received)
+
+
 class TestLogSearch:
     """``GET /api/logs``：查询条件原样透传给日志系统的 search（落库那份就是一条 SQL）。"""
 
@@ -710,9 +731,37 @@ class TestLogSearch:
             assert "框架自己的活" in [row.message for row in public]
             assert all(row.owner_id == "" for row in public)
 
-            # 指定出口：只查落库那份
-            only_db = await search_logs(client, headers, processors="database")
-            assert "机器人干的活" in [row.message for row in only_db]
+    async def test_default_queries_only_the_database_outlet(self, core: LogCore) -> None:
+        """不写 ``processors`` 时只查落库那份（SQL）；显式指定才查别的出口。"""
+        recording = RecordingProcessor()
+        # 直接塞一条「只有这个出口有」的日志：要测的是「查谁」，路由那套不参与
+        recording.received.append(LogRecord(message="只有内存出口有这条", owner_id="u-admin"))
+        core.attach(recording)
+        core.attach(await memory_log_processor())
+        log = get_logger(API_LOGGER_NAME)
+        log.info("落库那份有这条", owner_id="u-admin")
+        await drain(core)
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+
+            default_rows = [row.message for row in await search_logs(client, headers)]
+            assert "落库那份有这条" in default_rows  # 默认查的就是落库那份
+            assert "只有内存出口有这条" not in default_rows  # 别的出口那份不在默认结果里
+
+            chosen = [row.message for row in await search_logs(client, headers, processors="recording")]
+            assert "只有内存出口有这条" in chosen  # 显式指定出口就查它
+            assert "落库那份有这条" in chosen
+
+    async def test_missing_database_outlet_is_503(self, core: LogCore) -> None:
+        """库出口没开时回 503 并说清楚：不然只会静默返回空，比报错难查。"""
+        assert core.get_processor(DatabaseLogProcessor.name) is None  # 这个核心里没挂库出口
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+            response = await client.get("/api/logs", headers=headers)
+
+        assert response.status_code == 503
+        assert "落库" in response.json()["error"]["message"]
 
     async def test_console_hint_is_not_a_log(self, core: LogCore) -> None:
         """控制台那条「本出口不支持检索」的提示记录不是日志，不会混进结果。"""
@@ -742,6 +791,26 @@ class TestLogSearch:
                 "/api/logs", headers=headers, params={"owner_id": "u-admin"}
             )
             assert forbidden.status_code == 403
+
+    async def test_normal_user_cannot_choose_the_source(self, core: LogCore) -> None:
+        """来源只由管理员定：非管理员指定别的出口 -> 403；写成默认那份不报错。"""
+        core.attach(await memory_log_processor())
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ROBOT)}"}
+
+            forbidden = await client.get(
+                "/api/logs", headers=headers, params={"processors": "recording"}
+            )
+            assert forbidden.status_code == 403
+
+            # 写成默认那份 = 跟不写一样，没必要为它挑刺
+            default_named = await client.get(
+                "/api/logs",
+                headers=headers,
+                params={"processors": DatabaseLogProcessor.name},
+            )
+            assert default_named.status_code == 200
 
     async def test_bad_params_are_422(self) -> None:
         """级别名 / 时间格式 / 越界的 limit 当场挡住：不然会在出口里被吞掉，只看到「一条都没有」。"""
