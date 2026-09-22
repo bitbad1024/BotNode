@@ -28,12 +28,16 @@ nacho/api/
 │   │   ├── dependencies.py   get_auth_service / bearer_scheme
 │   │   ├── requests.py       LoginRequest（请求 schema）
 │   │   └── responses.py      LoginData（响应 schema）
-│   └── onebot/       OneBot 管理（服务本身在 nacho.onebot，按协议取用，不 import）
-│       ├── router.py         在线列表 / 踢人 / 令牌签发与吊销
-│       ├── protocols.py      OneBotLike / TokenRegistry（结构化协议）
-│       ├── dependencies.py   get_onebot / CurrentUserDep
-│       ├── requests.py       IssueTokenRequest
-│       └── responses.py      ClientData / TokenData / IssuedTokenData…
+│   ├── onebot/       OneBot 管理（服务本身在 nacho.onebot，按协议取用，不 import）
+│   │   ├── router.py         在线列表 / 踢人 / 令牌签发与吊销
+│   │   ├── protocols.py      OneBotLike / TokenRegistry（结构化协议）
+│   │   ├── dependencies.py   get_onebot / CurrentUserDep
+│   │   ├── requests.py       IssueTokenRequest
+│   │   └── responses.py      ClientData / TokenData / IssuedTokenData…
+│   └── log/          运行日志检索（GET /logs）
+│       ├── router.py         条件原样透传给日志系统的 search
+│       ├── dependencies.py   get_app_logger
+│       └── responses.py      LogData
 └── services/        ★ 业务层：只算「业务怎么办」，不认识 FastAPI
     ├── user/        用户：models/protocols/security/store/validation
     ├── session/     会话：登录开出来的那一次会话（设备信息 + 令牌）、滑动续期、吊销
@@ -93,9 +97,10 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/__init__.py` | 入口层总览，导出 `auth_router`、`onebot_router`。 |
+| `api/__init__.py` | 入口层总览，导出 `auth_router`、`onebot_router`、`log_router`。 |
 | `api/auth/__init__.py` | 鉴权入口汇总（登录 / 当前用户两个接口）。 |
 | `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销）。 |
+| `api/log/__init__.py` | 运行日志入口汇总（`LogData` / `log_router`）。 |
 
 ### 3.2 api/auth/ —— 鉴权入口
 
@@ -140,6 +145,28 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）；以及授权：`ADMIN_ROLE` / `is_admin` / `may_touch` / `ensure_can_touch`。 |
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
+
+### 3.4 api/log/ —— 运行日志检索
+
+> 把「查历史日志」做成一个 HTTP 接口。**查询本身不在这里实现**：条件原样递给日志系统的
+> `BaseLogger.search()`，它再扇出到各出口 —— 落库那份就是一条 SQL（`WHERE` / `ORDER BY` /
+> `LIMIT` 全在数据库那边做完，不是捞回来再筛）。出口怎么接、日志怎么落，见 `nacho.db` 与
+> `nacho.core.logger`。
+
+> **登录了还要看范围**：日志里有别人的东西，所以带 `admin` 角色的人**不限**，其余人**只看得见
+> 自己名下**的（按记录里的 `owner_id` 过滤，即 `user.user.id`）；显式写别人的归属 → **403**
+> （和 OneBot 那组接口一个口径：自己写出来的参数越界就说清楚）。
+
+> **参数先校验再透传**：级别名、时间格式写错当场回 **422**。这一步省不得 —— 日志系统内部把
+> 出口的失败**吞掉并记账**（一个出口崩了不影响别的），写错的参数会在出口里被吞掉，客户端只看到
+> 「一条都没有」，比报错难查得多；控制台出口那条「本出口不支持检索」的提示记录也会被滤掉（那不是
+> 日志，是给 REPL 里的人看的）。
+
+| 文件 | 作用 |
+|---|---|
+| `api/log/router.py` | **HTTP 入口**：`GET <prefix>/logs`（`level` / `logger_name` / `owner_id` / `query` / `start` / `end` / `limit` / `offset` / `processors`），条件原样交给 `logger.search()`，结果按范围收窄；`MAX_LIMIT` 限一次最多给多少条。 |
+| `api/log/dependencies.py` | 路由注入件：`get_app_logger`（从 `app.state.logger` 取日志实例，它与日志核心共享出口注册表，所以查得到所有出口）。 |
+| `api/log/responses.py` | 响应体 `LogData`（结构化字段原样给出：级别 / 模块 / 所有者 / 附加字段 / 异常栈）。 |
 
 ---
 

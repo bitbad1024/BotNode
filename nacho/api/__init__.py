@@ -70,7 +70,7 @@ from .logging import (
     api_logger,
     attach_api_logging,
 )
-from .api import auth_router, onebot_router
+from .api import auth_router, log_router, onebot_router
 from .api.auth.dependencies import SESSION_COOKIE
 from .api.auth.requests import LoginRequest
 from .api.auth.responses import (
@@ -79,6 +79,7 @@ from .api.auth.responses import (
     RevokeSessionData,
     SessionData,
 )
+from .api.log import LogData
 from .api.onebot import (
     ClientData,
     IssuedTokenData,
@@ -122,6 +123,7 @@ __all__ = [
     "DEFAULT_TOKEN_TTL",
     "auth_router",
     "onebot_router",
+    "log_router",
     # OneBot 管理接口
     "IssueTokenRequest",
     "SetTokenEnabledRequest",
@@ -130,6 +132,8 @@ __all__ = [
     "IssuedTokenData",
     "KickData",
     "RevokeData",
+    # 运行日志接口
+    "LogData",
     # 响应壳
     "ApiResponse",
     "ErrorResponse",

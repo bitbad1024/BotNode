@@ -6,8 +6,8 @@
 2. 装 :class:`~nacho.api.common.middlewares.RequestLogMiddleware`（编号 + 访问日志）；
 3. 装异常处理器（:func:`~nacho.api.common.errors.register_exception_handlers`）—— 出去的错误
    都是 :class:`~nacho.api.common.models.ErrorResponse` 那个形状；
-4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``），并把各模块
-   的服务挂到 ``app.state`` 上给路由注入。
+4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``、运行日志
+   ``<prefix>/logs``），并把各模块的服务挂到 ``app.state`` 上给路由注入。
 
 依赖全是可选的：不传 ``user_store`` / ``session_store`` 就用落库版
 :class:`~nacho.api.services.user.store_sql.SqlUserStore`（查 ``users`` 表）与
@@ -44,7 +44,7 @@ from nacho.core.logger import BaseLogger
 from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger
-from .api import auth_router, onebot_router
+from .api import auth_router, log_router, onebot_router
 from .api.onebot.protocols import OneBotLike
 from .services.auth import AuthService
 from .services.session import SessionService, SqlSessionStore
@@ -81,7 +81,7 @@ def create_app(
     :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``）；传了 ``<prefix>/onebot/*``
         那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，没传时这些接口回 503；
     :param title / version: OpenAPI 文档上的标题与版本；
-    :param logger: 业务日志实例，默认 ``api`` 那个。
+    :param logger: 业务日志实例（也是 ``<prefix>/logs`` 检索用的那个），默认 ``api`` 那个。
     """
     chosen: ApiOptions = options if options is not None else ApiOptions()
     log: BaseLogger = logger if logger is not None else api_logger(API_LOGGER_NAME)
@@ -149,6 +149,7 @@ def create_app(
     register_exception_handlers(app, logger=log)
     app.include_router(auth_router, prefix=chosen.prefix)
     app.include_router(onebot_router, prefix=chosen.prefix)
+    app.include_router(log_router, prefix=chosen.prefix)
 
     # 依赖注入：服务在这一层建好挂上去（换存储 / 换算法只改这一处）
     app.state.auth_service = AuthService(
@@ -159,6 +160,8 @@ def create_app(
     )
     # 选项也挂上去：信任代理、长期 Cookie 的有效期这些路由要用
     app.state.api_options = chosen
+    # 日志实例也挂上去：<prefix>/logs 拿它检索（与核心共享出口注册表，查得到所有出口）
+    app.state.logger = log
     # 用户存储也挂上去：OneBot 令牌列表要拿归属的 id 来查昵称
     app.state.user_store = store
     # OneBot 服务端（可空）：没传时 <prefix>/onebot/* 回 503，见 onebot/dependencies.py
