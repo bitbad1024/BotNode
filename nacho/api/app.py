@@ -43,7 +43,7 @@ from nacho.core.logger import BaseLogger
 
 from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
-from .logging import API_LOGGER_NAME, api_logger
+from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
 from .api import auth_router, log_router, onebot_router
 from .api.onebot.protocols import OneBotLike
 from .services.auth import AuthService
@@ -85,6 +85,9 @@ def create_app(
     """
     chosen: ApiOptions = options if options is not None else ApiOptions()
     log: BaseLogger = logger if logger is not None else api_logger(API_LOGGER_NAME)
+    # 访问日志只进文件与控制台：落库那份是审计时间线（/logs 查的就是它），
+    # 一次请求一条的访问流水进了库只会把「谁干了什么」淹掉。幂等，重复装配无害。
+    keep_access_off_audit()
     chosen_hasher: PasswordHasher = hasher if hasher is not None else Pbkdf2PasswordHasher()
 
     # 用户 / 会话都只保留落库实现（见各自 store_sql），所以都得有一块库：优先显式传的 ``db``，

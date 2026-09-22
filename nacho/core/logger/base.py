@@ -59,7 +59,7 @@ from collections.abc import Sequence
 from types import TracebackType
 from typing import TypedDict, cast, override
 
-from .filters import LogFilter
+from .filters import DENY_ALL, LogFilter
 from .models import LogLevel, LogRecord, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
 from .queue import AsyncLogQueue, OverflowPolicy
@@ -313,6 +313,17 @@ class BaseLogger:
             target._remove_channel(existing)
             target._filters.pop(existing.name, None)
         target._own.append(processor)
+        if processor.inherit_on_override and self._shared.owner is target:
+            # 全局留存出口（控制台 / 落库）允许运行期后挂：落回配置本来在子实例派生
+            # 那一刻就冻结，不补这一下的话，晚于业务模块取 logger 才挂上的全局出口
+            # （如数据库引擎就绪后才挂的落库出口）永远收不到那些模块的日志。
+            # 仅当出口挂在**核心根实例**上时向全树补；挂到某个子实例（attach_mount
+            # 的模块专属出口）不传播，保持「一个模块一个出口」的隔离语义。
+            for instance in self._shared.instances.values():
+                if instance is target:
+                    continue
+                if not any(existing is processor for existing in instance._inherited):
+                    instance._inherited.append(processor)
         if log_filter is None:
             target._filters.pop(processor.name, None)  # pyright: ignore[reportUnusedCallResult]
         else:
@@ -381,6 +392,31 @@ class BaseLogger:
     def filters(self) -> dict[str, LogFilter]:
         """本实例的「处理机名 -> 过滤器」快照副本。"""
         return dict(self._filters)
+
+    # ------------------------------------------------------------------ 通道静音
+    def mute(self, processor_name: str) -> None:
+        """让**本实例**的日志不再投给某个输出通道（含继承来的全局留存出口）。
+
+        给该通道在这份实例的配置上挂一个「全拒」过滤器（:data:`~nacho.core.logger.filters.DENY_ALL`）：
+        路由照常解析、出口照常在别处工作，只是本实例的每条日志都过不了这道闸。
+        典型用途：落库出口是全局留存出口（``inherit_on_override``），会跟着落回配置进到
+        每一路日志；某一路（如访问日志）只配给人翻文件，就用它把库通道堵上，
+        「什么时间干了什么」的审计事件才不会被逐条请求的流水淹掉。
+
+        与 :meth:`detach` 的区别：detach 把出口从**所有**实例上摘掉（全局下线）；
+        mute 只关**本实例**这一路，别处照常收。重复调用无害；对该实例根本没有的通道
+        调用也 harmless——将来就算这个通道经落回配置传进来，也会被这道闸拦住。
+        """
+        self._filters[processor_name] = DENY_ALL
+
+    def unmute(self, processor_name: str) -> None:
+        """解除 :meth:`mute`：恢复本实例对该出口的正常投递。"""
+        self._filters.pop(processor_name, None)  # pyright: ignore[reportUnusedCallResult]
+
+    @property
+    def muted(self) -> list[str]:
+        """被 :meth:`mute` 静音的通道名（快照副本；状态可查，「这条日志怎么没进库」少翻一层）。"""
+        return [name for name, log_filter in self._filters.items() if log_filter is DENY_ALL]
 
     # ------------------------------------------------------------------ 派生实例
     def qualify(self, name: str) -> str:

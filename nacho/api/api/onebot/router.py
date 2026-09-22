@@ -33,6 +33,7 @@ from fastapi import APIRouter, Request, status
 from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode
 from ...common.models import ApiResponse, ErrorResponse
+from ...logging import api_logger
 from ...services.auth.models import CurrentUser
 from ...services.user.protocols import UserStore
 from .dependencies import (
@@ -108,10 +109,12 @@ async def _fetch_token(server: OneBotLike, users: UserStore, token_id: str) -> T
     return _token_of(record, await _nickname_of(users, record.id))
 
 
-async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id: str) -> None:
+async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id: str) -> TokenLike:
     """按 id 找到令牌、确认在调用者的范围内；**找不到和不是自己的，走同一个 404**。
 
     404 而不是 403：403 等于告诉对方「这条 id 是存在的」，拿 id 就能试探出别人有没有令牌。
+
+    :return: 找到的那条令牌记录（审计日志要拿它的归属与机器人账号）。
     """
     registry = server.tokens
     if registry is None:
@@ -123,6 +126,16 @@ async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id
     record = await registry.get_by_id(token_id)
     if record is None or not may_touch(user, record.id):
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
+    return record
+
+
+def _audit(message: str, *, owner_id: str, **extra: object) -> None:
+    """记一条令牌审计事件（``api`` 那路，落库那份就是审计时间线）。
+
+    ``owner_id`` 归**令牌的主人**（记录 id 即归属用户 id）：谁名下的钥匙被动了，谁就
+    该在自己的日志里看到这条；动手的人在 ``extra["actor"]`` 里。
+    """
+    api_logger().info(message, owner_id=owner_id, **extra)
 
 
 @router.get(
@@ -266,6 +279,14 @@ async def issue_token(
             status_code=status.HTTP_404_NOT_FOUND,
         )
     issued = await registry.issue(user.user.id, account=payload.account, remark=payload.remark)
+    _audit(
+        "WS 令牌已签发",
+        owner_id=issued.record.id,
+        token_id=issued.record.id,
+        account=issued.record.account,
+        actor=user.user.id,
+        trace_id=trace_id,
+    )
     return ApiResponse[IssuedTokenData](
         data=IssuedTokenData(
             record=_token_of(issued.record, await _nickname_of(users, issued.record.id)),
@@ -298,12 +319,20 @@ async def set_token_enabled(
     别人的令牌按「没有这个令牌」处理（404）。
     """
     trace_id: str = trace_id_of(request)
-    await _ensure_token_in_scope(user, server, token_id)
+    record = await _ensure_token_in_scope(user, server, token_id)
     changed = await server.set_token_enabled(token_id, payload.enabled)
     if not changed:
         raise ApiError(
             ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND
         )
+    _audit(
+        "WS 令牌已启用" if payload.enabled else "WS 令牌已停用",
+        owner_id=record.id,
+        token_id=token_id,
+        account=record.account,
+        actor=user.user.id,
+        trace_id=trace_id,
+    )
     return ApiResponse[TokenData](
         data=await _fetch_token(server, users, token_id), trace_id=trace_id
     )
@@ -329,12 +358,20 @@ async def revoke_token(
     别人的令牌按「没有这个令牌」处理（404）。
     """
     trace_id: str = trace_id_of(request)
-    await _ensure_token_in_scope(user, server, token_id)
+    record = await _ensure_token_in_scope(user, server, token_id)
     removed = await server.revoke_by_id(token_id)
     if not removed:
         raise ApiError(
             ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND
         )
+    _audit(
+        "WS 令牌已吊销",
+        owner_id=record.id,
+        token_id=token_id,
+        account=record.account,
+        actor=user.user.id,
+        trace_id=trace_id,
+    )
     return ApiResponse[RevokeData](
         data=RevokeData(token_id=token_id, removed=True), trace_id=trace_id
     )

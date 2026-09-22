@@ -106,6 +106,7 @@ class AuthService:
             issued = await self._sessions.open(user.id, client=client, remember=remember)
         self._log().info(
             "登录成功",
+            owner_id=user.id,  # 审计事件归属本人：普通用户在 /logs 里也查得到自己的这条
             account=account,
             user_id=user.id,
             token_hash=issued.session.token_hash,
@@ -132,7 +133,10 @@ class AuthService:
         user = await self._store.get_by_id(authenticated.user_id)
         if user is None or user.disabled:
             self._log().warning(
-                "令牌对应的账号不可用", user_id=authenticated.user_id, trace_id=trace_id
+                "令牌对应的账号不可用",
+                owner_id=authenticated.user_id,
+                user_id=authenticated.user_id,
+                trace_id=trace_id,
             )
             raise UnauthorizedError("账号不可用")
         return CurrentUser(

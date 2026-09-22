@@ -49,6 +49,28 @@ class LogFilter(abc.ABC):
         return f"<{type(self).__name__}>"
 
 
+class DenyAllFilter(LogFilter):
+    """全拒过滤器：一条都不放行。
+
+    单独一个类而不是拿 ``LevelFilter("CRITICAL")`` 凑数：语义是「这个出口对这份实例
+    关闸」，与级别无关——就算出现比 CRITICAL 更高的级别也照拒。典型用途是
+    :meth:`~nacho.core.logger.base.BaseLogger.mute`：把继承来的全局留存出口
+    （如落库）在**某一路**日志上堵住，别的路照常投递。
+    """
+
+    @override
+    def match(self, record: LogRecord) -> bool:
+        return False
+
+    @override
+    def __repr__(self) -> str:
+        return "<DenyAllFilter>"
+
+
+#: 进程级共享的「全拒」单例（无状态，谁的 ``mute`` 都用它）
+DENY_ALL: DenyAllFilter = DenyAllFilter()
+
+
 class LevelFilter(LogFilter):
     """按最低级别过滤：只放行 ``record.level >= level`` 的日志。
 

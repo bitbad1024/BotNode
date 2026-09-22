@@ -41,6 +41,8 @@ TRACE_ID_HEADER: str = "X-Trace-Id"
 #: 当前登录用户挂在 ``request.state`` 上的属性名：鉴权依赖写、请求日志中间件读，
 #: 作为访问日志的 ``owner_id``（谁的操作）。没走鉴权的请求不写 —— 空串 = 公共所有者。
 OWNER_ID_STATE: str = "owner_id"
+#: 落库出口的通道名（全局留存出口；名字取自 ``DatabaseLogProcessor.name``）
+DATABASE_CHANNEL_NAME: str = "database"
 
 
 def api_logger(name: str = API_LOGGER_NAME) -> BaseLogger:
@@ -75,3 +77,18 @@ def attach_api_logging(
     )
     attach_mount(name, processor)
     return get_logger(name)
+
+
+def keep_access_off_audit(channel: str = DATABASE_CHANNEL_NAME) -> BaseLogger:
+    """访问日志只进文件与控制台、**不进审计库**：把 ``api.access`` 实例的落库通道静音。
+
+    落库出口是**全局留存出口**，会跟着落回配置进到每一路日志；而访问日志一次请求一条、
+    只配给人翻文件，进了库只会把「谁在什么时候干了什么」的审计事件（登录、开会话、
+    签发 / 吊销令牌……）淹掉。落库的那份要当审计时间线用（网页 ``/logs`` 查的就是它），
+    所以在装配时给 ``api.access`` 这份实例配置把库通道 mute 掉：``api.file`` 与控制台
+    照常收，只有库不收。
+
+    :param channel: 要静音的通道名，默认落库出口那个（``"database"``）。
+    :return: 静音后的访问日志实例（``api.access``）。
+    """
+    return api_logger(ACCESS_LOGGER_NAME).mute(channel)
