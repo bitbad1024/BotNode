@@ -1,0 +1,459 @@
+"""工作流框架的测试：校验流水线、双表存储（版本 / 隔离 / 去重）、HTTP 接口。
+
+分三块：
+
+* 校验器：结构 → 拓扑 → 语义三阶段短路与各类错误码（纯函数，不要库）；
+* 存储：内存 sqlite 上验多用户隔离、版本自增、checksum 去重、发布与级联删除；
+* 接口：``create_app`` + httpx ASGI 直连，验登录隔离、校验失败不写库、保存 / 发布链路。
+
+需要 ``fastapi`` / ``httpx``（``pip install "nacho[dev]"``），没装就整文件跳过。
+"""
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+import pytest
+
+pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"nacho[api]\"")
+pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"nacho[dev]\"")
+
+import httpx  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
+
+from nacho.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
+from nacho.workflow import (  # noqa: E402
+    SqlWorkflowStore,
+    WorkflowNameConflict,
+    canonical_graph_json,
+    graph_checksum,
+    validate_graph,
+)
+from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
+
+#: 演示账号（id 即 u-admin / u-robot）
+ADMIN = {"account": "admin", "password": "nacho-admin"}
+ROBOT = {"account": "robot", "password": "nacho-robot"}
+_TEST_HASHER = Pbkdf2PasswordHasher(iterations=1_000)
+
+
+# --------------------------------------------------------------------------- 图夹具
+def node(node_id: str, node_type: str, **config: object) -> dict[str, object]:
+    """造一个节点；outputs 用关键字 ``_outputs`` 传，避免和 config 混。"""
+    outputs = config.pop("_outputs", [])
+    return {"id": node_id, "type": node_type, "config": dict(config), "outputs": list(outputs)}
+
+
+def edge(source: str, target: str) -> dict[str, str]:
+    return {"source": source, "target": target}
+
+
+def linear_graph() -> dict[str, object]:
+    """一张各阶段都该过的最小线性图：start -> end。"""
+    return {"nodes": [node("s", "start"), node("e", "end")], "edges": [edge("s", "e")]}
+
+
+# --------------------------------------------------------------------------- ① 结构校验
+def test_valid_linear_graph_passes() -> None:
+    report = validate_graph(linear_graph())
+    assert report.valid and report.errors == [] and report.stage is None
+
+
+def test_structure_rejects_unknown_type_and_missing_nodes() -> None:
+    bad_type = {"nodes": [node("s", "外星人"), node("e", "end")], "edges": [edge("s", "e")]}
+    report = validate_graph(bad_type)
+    assert not report.valid and report.stage == STAGE_STRUCTURE
+    assert {issue.code for issue in report.errors} == {"UNKNOWN_NODE_TYPE"}
+
+    assert validate_graph({"nodes": []}).stage == STAGE_STRUCTURE  # 空节点列表
+
+
+def test_structure_rejects_duplicate_id_and_dangling_edge() -> None:
+    graph = {
+        "nodes": [node("s", "start"), node("s", "end")],
+        "edges": [edge("s", "ghost")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_STRUCTURE
+    codes = {issue.code for issue in report.errors}
+    assert "DUPLICATE_NODE_ID" in codes
+    assert "EDGE_ENDPOINT_MISSING" in codes
+
+
+def test_structure_short_circuits_topology() -> None:
+    """结构没过时不跑拓扑：两个 start 也不应该报 START_NOT_UNIQUE（短路）。"""
+    graph = {
+        "nodes": [node("s1", "start"), node("s2", "start"), node("e", "end")],
+        "edges": [edge("s1", "ghost")],
+    }
+    report = validate_graph(graph)
+    assert report.stage == STAGE_STRUCTURE
+    assert all(issue.code != "START_NOT_UNIQUE" for issue in report.errors)
+
+
+# --------------------------------------------------------------------------- ② 拓扑校验
+def test_topology_start_and_end_counts() -> None:
+    no_start = {"nodes": [node("e", "end")], "edges": []}
+    report = validate_graph(no_start)
+    assert not report.valid and report.stage == STAGE_TOPOLOGY
+    assert {issue.code for issue in report.errors} == {"START_NOT_UNIQUE"}
+
+    no_end = {"nodes": [node("s", "start")], "edges": []}
+    codes = {issue.code for issue in validate_graph(no_end).errors}
+    assert "END_MISSING" in codes
+
+
+def test_topology_detects_cycle() -> None:
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("a", "task"),
+            node("b", "task"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "a"), edge("a", "b"), edge("b", "a"), edge("a", "e")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_TOPOLOGY
+    assert any(issue.code == "CYCLE_DETECTED" for issue in report.errors)
+
+
+def test_topology_detects_orphan_and_self_loop() -> None:
+    graph = {
+        "nodes": [node("s", "start"), node("e", "end"), node("lonely", "task")],
+        "edges": [edge("s", "e"), edge("lonely", "lonely")],
+    }
+    codes = {issue.code for issue in validate_graph(graph).errors}
+    assert "ORPHAN_NODE" in codes
+    assert "SELF_LOOP" in codes
+
+
+def test_topology_gateway_needs_two_branches() -> None:
+    graph = {
+        "nodes": [node("s", "start"), node("g", "gateway"), node("e", "end")],
+        "edges": [edge("s", "g"), edge("g", "e")],
+    }
+    report = validate_graph(graph)
+    assert report.stage == STAGE_TOPOLOGY
+    assert any(issue.code == "GATEWAY_NEEDS_BRANCHES" for issue in report.errors)
+
+    # 两条分支后转通过（继续跑到语义：这张图语义干净）
+    graph["nodes"].append(node("e2", "end"))
+    graph["edges"].append(edge("g", "e2"))
+    assert validate_graph(graph).valid
+
+
+def test_topology_end_with_outgoing_rejected() -> None:
+    graph = {
+        "nodes": [node("s", "start"), node("e", "end"), node("x", "task")],
+        "edges": [edge("s", "e"), edge("e", "x")],
+    }
+    codes = {issue.code for issue in validate_graph(graph).errors}
+    assert "END_HAS_OUTGOING" in codes
+
+
+# --------------------------------------------------------------------------- ③ 语义校验
+def test_semantic_missing_required_config() -> None:
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("call", "http"),  # 没给 url / method
+            node("boss", "approval"),  # 没给 assignee
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "call"), edge("call", "boss"), edge("boss", "e")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    missing = [issue for issue in report.errors if issue.code == "MISSING_CONFIG"]
+    assert {issue.node_id for issue in missing} == {"call", "boss"}
+
+
+def test_semantic_variable_scope_and_spell_hint() -> None:
+    graph = {
+        "nodes": [
+            node("s", "start", _outputs=["orderAmount"]),
+            node("calc", "expression", expression="{{orderAmount}} * 0.9", _outputs=["price"]),
+            node("typo", "expression", expression="{{orderAmout}} + 1"),
+            node("side", "expression", expression="{{price}}"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "calc"),
+            edge("calc", "typo"),
+            edge("s", "side"),  # price 声明在 calc，side 不在它的下游
+            edge("typo", "e"),
+            edge("side", "e"),
+        ],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    by_code: dict[str, str] = {issue.code: issue for issue in report.errors}
+    # orderAmout 没声明：给拼写建议
+    not_declared = next(issue for issue in report.errors if issue.code == "VARIABLE_NOT_DECLARED")
+    assert not_declared.node_id == "typo"
+    assert "orderAmount" in not_declared.suggestion
+    # price 声明了但不在 side 的前置链路上
+    out_of_scope = next(issue for issue in report.errors if issue.code == "VARIABLE_OUT_OF_SCOPE")
+    assert out_of_scope.node_id == "side" and "calc" in out_of_scope.message
+    assert by_code  # 字典非空仅为抑制未用告警
+
+
+def test_semantic_downstream_variable_passes() -> None:
+    """前置节点声明的变量，下游引用应该通过（{{}} 递归进嵌套 config）。"""
+    graph = {
+        "nodes": [
+            node("s", "start", _outputs=["token"]),
+            node("call", "http", url="http://x/{{token}}", method="POST"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "call"), edge("call", "e")],
+    }
+    assert validate_graph(graph).valid
+
+
+# --------------------------------------------------------------------------- checksum
+def test_checksum_stable_under_key_order_and_spacing() -> None:
+    """同一张图不同写法（键序、空白）算同一个摘要；内容变了摘要才变。"""
+    first = canonical_graph_json(linear_graph())
+    reordered = {"edges": [{"target": "e", "source": "s"}], "nodes": [
+        {"outputs": [], "config": {}, "type": "start", "id": "s"},
+        {"config": {}, "outputs": [], "type": "end", "id": "e"},
+    ]}
+    assert graph_checksum(reordered) == graph_checksum(linear_graph())
+    changed = {"nodes": [node("s", "start"), node("e2", "end")], "edges": [edge("s", "e2")]}
+    assert graph_checksum(changed) != graph_checksum(linear_graph())
+    assert json_loads(first)["nodes"][0]["id"] == "s"
+
+
+def json_loads(text: str) -> dict[str, object]:
+    """测试用小工具（放文件尾部避免遮蔽标准库导入位置）。"""
+    import json
+
+    return json.loads(text)
+
+
+# --------------------------------------------------------------------------- 存储
+_MEMORY_ENGINES: list[AsyncEngine] = []
+
+
+@pytest.fixture
+async def store() -> AsyncGenerator[SqlWorkflowStore]:
+    """每个用例一块内存 sqlite（表已建好），用完 dispose。"""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    _MEMORY_ENGINES.append(engine)
+    created = SqlWorkflowStore(engine)
+    await created.ensure_schema()
+    yield created
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_memory_engines() -> AsyncGenerator[None]:
+    yield
+    while _MEMORY_ENGINES:
+        await _MEMORY_ENGINES.pop().dispose()
+
+
+async def test_store_owner_isolation_and_name_conflict(
+    store: SqlWorkflowStore,
+) -> None:
+    alice = await store.create("u-admin", "审批流")
+    bob = await store.create("u-robot", "审批流")  # 不同归属允许同名
+    assert alice.id != bob.id
+
+    with pytest.raises(WorkflowNameConflict):
+        await store.create("u-admin", "审批流")  # 同归属同名拒绝
+
+    assert {item.id for item in await store.list(owner_id="u-admin")} == {alice.id}
+    assert {item.id for item in await store.list(owner_id=None)} == {alice.id, bob.id}
+    assert (await store.list(owner_id="u-robot"))[0].current_version == 0
+
+
+async def test_store_version_increment_dedup_and_publish(
+    store: SqlWorkflowStore,
+) -> None:
+    definition = await store.create("u-admin", "发版流")
+    graph = linear_graph()
+
+    first, created_first = await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+        note="首版",
+    )
+    assert created_first and first.version == 1
+
+    # 内容没变：命中最新版本，不新增
+    again, created_again = await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+    assert not created_again and again.version == 1
+
+    # 改了：新版本 2，定义指针跟着挪
+    graph_v2 = {"nodes": [node("s", "start"), node("m", "task"), node("e", "end")],
+                "edges": [edge("s", "m"), edge("m", "e")]}
+    second, created_second = await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph_v2),
+        checksum=graph_checksum(graph_v2),
+    )
+    assert created_second and second.version == 2
+    latest = await store.get(definition.id)
+    assert latest is not None and latest.current_version == 2 and latest.status == "draft"
+
+    # 版本历史倒序、按号取快照
+    history = await store.list_versions(definition.id)
+    assert [item.version for item in history] == [2, 1]
+    snapshot = await store.get_version(definition.id, 1)
+    assert snapshot is not None and snapshot.graph().nodes[0].id == "s"
+
+    # 发布最新版；发布不存在的版本返回 None
+    published = await store.publish(definition.id, 2)
+    assert published is not None and published.status == "published"
+    assert published.published_version == 2
+    assert await store.publish(definition.id, 99) is None
+
+
+async def test_store_delete_cascades_versions(store: SqlWorkflowStore) -> None:
+    definition = await store.create("u-admin", "待删流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(linear_graph()),
+        checksum=graph_checksum(linear_graph()),
+    )
+    assert await store.delete(definition.id) is True
+    assert await store.get(definition.id) is None
+    assert await store.list_versions(definition.id) == []
+    assert await store.delete(definition.id) is False  # 再删一次
+
+
+# --------------------------------------------------------------------------- HTTP 接口
+def api_app() -> FastAPI:
+    """接口层应用（演示账号在 lifespan 里种好；工作流双表在同一块内存 sqlite）。"""
+    return create_app(ApiOptions(prefix="/api"), hasher=_TEST_HASHER)
+
+
+@asynccontextmanager
+async def api_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
+    """直连 ASGI 并手动跑一遍 lifespan（建表 / 种账号在里面）。"""
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
+
+
+async def login(client: httpx.AsyncClient, who: dict[str, str]) -> str:
+    response = await client.post("/api/auth/login", json=who)
+    assert response.status_code == 200, response.text
+    return str(response.json()["data"]["token"])
+
+
+def auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def test_api_create_validate_save_publish_full_chain() -> None:
+    async with api_client(api_app()) as client:
+        token = await login(client, ADMIN)
+
+        # 校验接口：坏图返回 valid=false 且不碰库
+        invalid = await client.post(
+            "/api/workflows/validate", headers=auth(token), json={"graph": {"nodes": []}}
+        )
+        assert invalid.status_code == 200 and invalid.json()["data"]["valid"] is False
+
+        # 新建
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "接口链路流"}
+        )
+        assert created.status_code == 201, created.text
+        workflow_id = created.json()["data"]["id"]
+
+        # 保存坏版本：200 + 报告，版本号没动
+        rejected = await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": {"nodes": [node("s", "start")]}},  # 没 end
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["data"]["valid"] is False
+        detail = await client.get(f"/api/workflows/{workflow_id}", headers=auth(token))
+        assert detail.json()["data"]["current_version"] == 0
+
+        # 保存好版本：201 + created=true；再存同样内容 created=false
+        saved = await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": linear_graph(), "note": "首版"},
+        )
+        assert saved.status_code == 201 and saved.json()["data"]["created"] is True
+        saved_again = await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": linear_graph()},
+        )
+        # 内容没变：200（没创建新资源）+ created=false
+        assert saved_again.status_code == 200
+        assert saved_again.json()["data"]["created"] is False
+
+        # 版本历史 / 单版本 / 发布
+        versions = await client.get(
+            f"/api/workflows/{workflow_id}/versions", headers=auth(token)
+        )
+        assert versions.status_code == 200 and len(versions.json()["data"]) == 1
+        published = await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+        assert published.status_code == 200
+        assert published.json()["data"]["status"] == "published"
+
+        # 删除
+        removed = await client.delete(
+            f"/api/workflows/{workflow_id}", headers=auth(token)
+        )
+        assert removed.status_code == 204
+        assert (await client.get(f"/api/workflows/{workflow_id}", headers=auth(token))).status_code == 404
+
+
+async def test_api_owner_isolation_between_users() -> None:
+    async with api_client(api_app()) as client:
+        admin_token = await login(client, ADMIN)
+        robot_token = await login(client, ROBOT)
+
+        created = await client.post(
+            "/api/workflows", headers=auth(admin_token), json={"name": "管理员的流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+
+        # 普通用户看不到管理员的：详情 404，列表里也没有
+        forbidden = await client.get(
+            f"/api/workflows/{workflow_id}", headers=auth(robot_token)
+        )
+        assert forbidden.status_code == 404
+        robot_list = await client.get("/api/workflows", headers=auth(robot_token))
+        assert robot_list.json()["data"] == []
+
+        # 管理员默认看全部；也能用 owner_id 缩
+        admin_list = await client.get("/api/workflows", headers=auth(admin_token))
+        assert len(admin_list.json()["data"]) == 1
+        scoped = await client.get(
+            "/api/workflows?owner_id=u-robot", headers=auth(admin_token)
+        )
+        assert scoped.json()["data"] == []
+
+        # 普通用户的 owner_id 过滤参数被忽略，强制只看自己
+        sneak = await client.get(
+            "/api/workflows?owner_id=u-admin", headers=auth(robot_token)
+        )
+        assert sneak.json()["data"] == []
+
+
+async def test_api_requires_login() -> None:
+    async with api_client(api_app()) as client:
+        assert (await client.get("/api/workflows")).status_code == 401
+        assert (await client.post("/api/workflows/validate", json={"graph": linear_graph()})
+                ).status_code == 401
