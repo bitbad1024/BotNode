@@ -33,7 +33,8 @@ from .models import (
 
 #: 合法节点类型（与 models.NodeType 保持一致；这里用 frozenset 做成员判断）
 NODE_TYPES: frozenset[str] = frozenset(
-    {"start", "end", "gateway", "approval", "expression", "http", "condition", "task"}
+    {"start", "end", "gateway", "approval", "expression", "http", "condition", "task",
+     "time-trigger", "log", "test"}
 )
 
 #: 各类型节点必须在 config 里给出的字段：(字段, 给人看的字段名)
@@ -42,7 +43,12 @@ REQUIRED_CONFIG: dict[str, tuple[tuple[str, str], ...]] = {
     "http": (("url", "请求地址"), ("method", "请求方法")),
     "approval": (("assignee", "审批人"),),
     "condition": (("condition", "条件"),),
+    "time-trigger": (("cron", "cron 表达式"),),
+    "log": (("message", "日志内容"),),
 }
+
+#: 合法日志级别（log 节点 config.level 可选，缺省 INFO）
+LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 #: 配置字符串里的变量引用：{{ name }}
 _VARIABLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -348,13 +354,48 @@ def _topology_stage(graph: WorkflowGraph) -> list[ValidationIssue]:
 
 # --------------------------------------------------------------------------- ③ 语义
 def _semantic_stage(graph: WorkflowGraph, checker: ExpressionSyntaxChecker) -> list[ValidationIssue]:
-    """语义阶段：节点配置完整性 → 变量作用域 → 表达式语法。"""
+    """语义阶段：节点配置完整性 → 变量作用域 → 表达式语法 → 类型专属校验。"""
     errors: list[ValidationIssue] = []
     by_id: dict[str, WorkflowNode] = {node.id: node for node in graph.nodes}
     errors.extend(_config_completeness(graph))
+    errors.extend(_type_specific(graph))
     errors.extend(_variable_scope(graph, by_id))
     errors.extend(_expression_syntax(graph, checker))
     return errors
+
+
+def _type_specific(graph: WorkflowGraph) -> list[ValidationIssue]:
+    """③-D 类型专属配置校验：time-trigger 的 cron 合法性、log 的 level 合法性。"""
+    from nacho.core.scheduler import CronExpr, CronError  # 局部导入避免循环依赖
+
+    issues: list[ValidationIssue] = []
+    for node in graph.nodes:
+        if node.type == "time-trigger":
+            cron = node.config.get("cron")
+            if isinstance(cron, str) and cron.strip():
+                try:
+                    CronExpr.parse(cron.strip())
+                except CronError as exc:
+                    issues.append(
+                        ValidationIssue(
+                            node_id=node.id,
+                            code="INVALID_CRON",
+                            message=f"time-trigger 节点 {node.id} 的 cron 表达式不合法：{exc}",
+                            suggestion="cron 用 5 段（分 时 日 月 周）或 6 段（秒 分 时 日 月 周），如 */5 * * * *",
+                        )
+                    )
+        elif node.type == "log":
+            level = node.config.get("level")
+            if level is not None and (not isinstance(level, str) or level.upper() not in LOG_LEVELS):
+                issues.append(
+                    ValidationIssue(
+                        node_id=node.id,
+                        code="INVALID_LOG_LEVEL",
+                        message=f"log 节点 {node.id} 的级别 {level!r} 不合法",
+                        suggestion=f"可选级别：{', '.join(sorted(LOG_LEVELS))}（缺省 INFO）",
+                    )
+                )
+    return issues
 
 
 def _config_completeness(graph: WorkflowGraph) -> list[ValidationIssue]:

@@ -16,7 +16,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------- 图
 #: 支持的节点类型；新增执行器类型时在这里登记，校验的「配置完整性」表在 validator 里
-NodeType = Literal["start", "end", "gateway", "approval", "expression", "http", "condition", "task"]
+NodeType = Literal[
+    "start",
+    "end",
+    "gateway",
+    "approval",
+    "expression",
+    "http",
+    "condition",
+    "task",
+    "time-trigger",  # 时间触发：按 cron 把流程图挂到调度器队列
+    "log",           # 写日志输出
+    "test",          # 测试 / 调试节点：回显配置内容，供画布联调用
+]
 
 #: 工作流状态：草稿（可继续改）/ 已发布（published_version 指的那份可被执行器取用）
 WorkflowStatus = Literal["draft", "published"]

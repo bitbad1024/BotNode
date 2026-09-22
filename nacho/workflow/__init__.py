@@ -1,10 +1,11 @@
-"""工作流编排：图校验流水线 + 定义 / 版本落库。
+"""工作流编排：图校验流水线 + 定义 / 版本落库 + 节点执行器。
 
 业务核心包（同 :mod:`nacho.onebot` 的地位，不 import FastAPI）：
 
 * :mod:`nacho.workflow.models`    图（节点 / 边）、校验报告、落库记录、规范 JSON / 摘要
 * :mod:`nacho.workflow.validator` 入库前校验：结构 → 拓扑 → 语义（Dry Run 留协议位）
 * :mod:`nacho.workflow.store`     双表落库（定义 + 不可变版本），归属隔离
+* :mod:`nacho.workflow.executor`  节点执行器（start / end / time-trigger / log / test）与运行器
 """
 from __future__ import annotations
 
@@ -41,6 +42,12 @@ from .validator import (
     validate_graph,
     validate_with_dry_run,
 )
+from .executor import (
+    NodeExecutionContext,
+    SimpleWorkflowRunner,
+    get_executor,
+    register_executor,
+)
 
 __all__ = [
     # 模型
@@ -65,6 +72,11 @@ __all__ = [
     "ExpressionSyntaxChecker",
     "AcceptAllExpressions",
     "DryRunner",
+    # 执行
+    "NodeExecutionContext",
+    "SimpleWorkflowRunner",
+    "get_executor",
+    "register_executor",
     # 落库
     "SqlWorkflowStore",
     "WorkflowDefinitionTable",

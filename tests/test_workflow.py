@@ -24,12 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E40
 
 from nacho.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
 from nacho.workflow import (  # noqa: E402
+    NodeExecutionContext,
+    SimpleWorkflowRunner,
     SqlWorkflowStore,
+    WorkflowGraph,
     WorkflowNameConflict,
     canonical_graph_json,
     graph_checksum,
     validate_graph,
 )
+from nacho.workflow.executor import get_executor  # noqa: E402
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -211,6 +215,150 @@ def test_semantic_downstream_variable_passes() -> None:
         "edges": [edge("s", "call"), edge("call", "e")],
     }
     assert validate_graph(graph).valid
+
+
+# --------------------------------------------------------------------------- ③-D 类型专属语义校验
+def test_semantic_time_trigger_requires_cron_and_validates_it() -> None:
+    """time-trigger 缺 cron 报 MISSING_CONFIG；cron 非法报 INVALID_CRON。"""
+    g_missing = {
+        "nodes": [node("s", "start"), node("t", "time-trigger"), node("e", "end")],
+        "edges": [edge("s", "t"), edge("t", "e")],
+    }
+    report = validate_graph(g_missing)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert any(e.code == "MISSING_CONFIG" for e in report.errors)
+
+    g_bad = {
+        "nodes": [node("s", "start"), node("t", "time-trigger", cron="not a cron"), node("e", "end")],
+        "edges": [edge("s", "t"), edge("t", "e")],
+    }
+    report = validate_graph(g_bad)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert any(e.code == "INVALID_CRON" for e in report.errors)
+
+    g_good = {
+        "nodes": [node("s", "start"), node("t", "time-trigger", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "t"), edge("t", "e")],
+    }
+    assert validate_graph(g_good).valid
+
+
+def test_semantic_log_requires_message_and_validates_level() -> None:
+    """log 缺 message 报 MISSING_CONFIG；level 非法报 INVALID_LOG_LEVEL。"""
+    g_missing = {
+        "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
+        "edges": [edge("s", "l"), edge("l", "e")],
+    }
+    report = validate_graph(g_missing)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert any(e.code == "MISSING_CONFIG" for e in report.errors)
+
+    g_bad_level = {
+        "nodes": [node("s", "start"), node("l", "log", message="hi", level="TRACE"), node("e", "end")],
+        "edges": [edge("s", "l"), edge("l", "e")],
+    }
+    report = validate_graph(g_bad_level)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert any(e.code == "INVALID_LOG_LEVEL" for e in report.errors)
+
+    g_good = {
+        "nodes": [node("s", "start"), node("l", "log", message="hi", level="WARNING"), node("e", "end")],
+        "edges": [edge("s", "l"), edge("l", "e")],
+    }
+    assert validate_graph(g_good).valid
+
+
+def test_semantic_test_node_passes_without_config() -> None:
+    """test 节点无必填配置，应该直接通过。"""
+    g = {
+        "nodes": [node("s", "start"), node("t", "test"), node("e", "end")],
+        "edges": [edge("s", "t"), edge("t", "e")],
+    }
+    assert validate_graph(g).valid
+
+
+# --------------------------------------------------------------------------- ④ 节点执行器
+@pytest.mark.asyncio
+async def test_executor_start_end_log_test_run() -> None:
+    """start -> test -> log -> end 全链路：log 内容被 {{变量}} 替换，test 的 echo 进上下文。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start", _outputs=["name"]),
+                node("t", "test", echo="hello {{name}}"),
+                node("l", "log", message="echo was: {{echo}}", level="INFO"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "t"), edge("t", "l"), edge("l", "e")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    ctx.variables["name"] = "nacho"
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert ctx.variables["echo"] == "hello nacho"
+    assert ctx.variables["log_message"] == "echo was: hello nacho"
+    # 日志收集器按顺序记了四个节点
+    assert any("hello nacho" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_time_trigger_registers_with_scheduler() -> None:
+    """time-trigger 注入调度器时按 cron 登记任务，task_id = wf-<node.id>，可幂等重登记。"""
+    from nacho.core.scheduler import TaskManager
+
+    scheduler = TaskManager()
+    triggered: list[str] = []
+
+    async def run_workflow() -> None:
+        triggered.append("fired")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("t", "time-trigger", cron="*/5 * * * *", name="每5分钟"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "t"), edge("t", "e")],
+        }
+    )
+    ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow)
+    await SimpleWorkflowRunner().run(graph, ctx)
+    task = scheduler.get("wf-t")
+    assert task is not None
+    assert task.name == "每5分钟"
+
+    # 再跑一遍：先移除再登记，不报错且仍是同一个 task_id
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert scheduler.get("wf-t") is not None
+
+
+@pytest.mark.asyncio
+async def test_executor_time_trigger_without_scheduler_skips_gracefully() -> None:
+    """没注入调度器时，time-trigger 不抛异常，返回 scheduled=False。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("t", "time-trigger", cron="*/5 * * * *"), node("e", "end")],
+            "edges": [edge("s", "t"), edge("t", "e")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert ctx.variables.get("scheduled") is False
+    assert any("未注入调度器" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_unsupported_node_type_raises() -> None:
+    """没注册执行器的节点类型跑图时抛 NotImplementedError。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("c", "condition", condition="x>0"), node("e", "end")],
+            "edges": [edge("s", "c"), edge("c", "e")],
+        }
+    )
+    with pytest.raises(NotImplementedError):
+        await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
 
 
 # --------------------------------------------------------------------------- checksum
