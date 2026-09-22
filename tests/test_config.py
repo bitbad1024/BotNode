@@ -50,7 +50,7 @@ class TestDatabaseLayers:
         assert (conn.driver, conn.host, conn.port) == ("mariadb", "10.0.0.5", 3307)
         assert (conn.user, conn.password, conn.database) == ("sys", "pw", "appdb")
         log_db = settings.logging.database
-        assert (log_db.table, log_db.buffer_size) == ("logs", 500)
+        assert log_db.buffer_size == 500  # 日志特有的项没写 -> 默认值（表名不在这儿配）
         assert log_db.enabled is False  # 落不落库是日志出口自己的开关
 
     def test_public_section_reads_on_its_own(self, tmp_path: Path) -> None:
@@ -92,7 +92,7 @@ class TestDatabaseLayers:
                     [logging.database]
                     driver = "sqlite"
                     path = "logs/only-log.db"
-                    table = "log_entries"
+                    flush_interval = 9.0
                     """
                 ),
             )
@@ -100,7 +100,7 @@ class TestDatabaseLayers:
         conn = settings.logging.database.connection
         assert conn.driver == "sqlite"
         assert conn.path == BASE_DIR / "logs" / "only-log.db"
-        assert settings.logging.database.table == "log_entries"
+        assert settings.logging.database.flush_interval == 9.0
         assert (conn.host, conn.port, conn.user) == ("10.0.0.5", 3307, "sys")
         assert conn.database == "appdb"
 
@@ -181,7 +181,6 @@ class TestErrors:
             ("[database]\nport = 70000\n", "database.port"),
             ('[database]\nhost = 1\n', "database.host"),
             ('[logging.database]\nport = "x"\n', "logging.database.port"),
-            ('[logging.database]\ntable = "1bad"\n', "logging.database.table"),
             ('[logging]\nlevel = "LOUD"\n', "logging.level"),
             ('[cache]\nbackend = "memcached"\n', "cache.backend"),
             ("[cache]\ndefault_ttl = -1\n", "cache.default_ttl"),
@@ -203,7 +202,7 @@ class TestTemplate:
         assert settings.config_path == TEMPLATE_PATH
         conn = settings.logging.database.connection
         assert (conn.driver, conn.host) == ("sqlite", "127.0.0.1")
-        assert settings.logging.database.table == "logs"
+        assert settings.logging.database.enabled is False
 
     def test_template_agrees_with_defaults(self) -> None:
         """模板里的值要和代码默认值一致，否则「照抄模板启动」会悄悄改行为。"""
