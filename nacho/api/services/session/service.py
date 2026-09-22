@@ -107,6 +107,7 @@ class SessionService:
             raise InternalError("会话缓存不可用，请稍后重试") from exc
         self._log().info(
             "会话已开启",
+            owner_id=user_id,  # 审计事件归属本人
             token_hash=digest,
             user_id=user_id,
             device=client.device_name,
@@ -162,6 +163,7 @@ class SessionService:
             session = updated if updated is not None else session
         self._log().info(
             "会话已复用",
+            owner_id=user_id,  # 审计事件归属本人
             token_hash=digest,
             user_id=user_id,
             device=session.device_name,
@@ -213,7 +215,11 @@ class SessionService:
         await self._drop_cache(token_hash)
         removed: bool = await self._store.remove(token_hash)
         self._log().info(
-            "会话已吊销", token_hash=token_hash, user_id=user_id, device=session.device_name
+            "会话已吊销",
+            owner_id=user_id,  # 审计事件归属本人
+            token_hash=token_hash,
+            user_id=user_id,
+            device=session.device_name,
         )
         return removed
 
@@ -227,7 +233,9 @@ class SessionService:
         for session in sessions:
             await self._drop_cache(session.token_hash)
         removed: int = await self._store.remove_all(user_id)
-        self._log().info("全部会话已吊销", user_id=user_id, count=removed)
+        self._log().info(
+            "全部会话已吊销", owner_id=user_id, user_id=user_id, count=removed
+        )
         return removed
 
     # ------------------------------------------------------------------ 内部

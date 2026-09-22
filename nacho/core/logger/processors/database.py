@@ -20,6 +20,11 @@ class DatabaseLogProcessor(BaseLogProcessor):
 
     name: str = "database"
 
+    #: 落库与控制台一样是**全局留存出口**：模块给自己挂了专属文件出口（自层覆盖）后，
+    #: 日志仍要继续落库——否则业务模块（如 nacho.api 挂了自己的 api.log）的日志
+    #: 一条都进不了库，历史检索就只剩框架启动那几条。
+    inherit_on_override: bool = True
+
     def __init__(
         self,
         store: LogStore,

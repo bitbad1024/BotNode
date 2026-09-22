@@ -15,7 +15,11 @@
  *   「会话心跳」事件，authStore 收到后拨准倒计时；
  * - 任何请求回 401 都广播「未授权」事件，authStore 收到清会话，路由守卫自然踢回登录页。
  */
-import axios, { AxiosError, type AxiosResponse } from 'axios'
+import axios, {
+  AxiosError,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+} from 'axios'
 import { API_BASE_URL } from '../config/env'
 
 /** 会话在浏览器存储里的键名（localStorage / sessionStorage 同名）。 */
@@ -159,7 +163,9 @@ async function request<T>(p: Promise<AxiosResponse>): Promise<ApiOk<T>> {
 }
 
 export const http = {
-  get: <T>(url: string) => request<T>(instance.get(url)),
+  /** GET：第二个参数透传 axios 配置，查询条件走 config.params（自动 URL 编码）。 */
+  get: <T>(url: string, config?: AxiosRequestConfig) =>
+    request<T>(instance.get(url, config)),
   post: <T, B = unknown>(url: string, body?: B) =>
     request<T>(instance.post(url, body)),
   /** DELETE：令牌吊销、踢下线这类动作用；查询串直接拼在 url 上。 */

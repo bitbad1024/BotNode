@@ -867,6 +867,54 @@ class TestDispatcherFiltering:
 
         assert first.received == []
 
+    async def test_mute_blocks_one_instance_channel_only(self) -> None:
+        """mute 只关**本实例**这一路：全局出口别处照常收，其它出口对本实例照常投。
+
+        场景对应「访问日志不进审计库」：落库是全局留存出口，跟着落回配置进了
+        ``api`` 与 ``api.access`` 两路；给 ``api.access`` mute 掉库通道后，它的日志
+        只有文件收到，``api`` 自己的日志两路照收。
+        """
+        db = CollectingProcessor(name="database")
+        file = CollectingProcessor(name="file")
+        core = LogCore(console=False, processors=[db, file], dispatch_timeout=0.01)
+        api = core.child("api")
+        access = api.child("access")
+        access.mute("database")
+
+        await core.start()
+        try:
+            api.info("业务事件")
+            access.info("访问流水")
+            assert (
+                await wait_until(lambda: file.received == ["业务事件", "访问流水"]) is True
+            )
+        finally:
+            await core.stop()
+
+        assert db.received == ["业务事件"]  # 静音的那一路没进库
+        assert access.muted == ["database"]  # 静音状态可查
+
+    async def test_unmute_restores_delivery(self) -> None:
+        """unmute 解除静音：同一实例的日志重新投给该通道。"""
+        db = CollectingProcessor(name="database")
+        file = CollectingProcessor(name="file")
+        core = LogCore(console=False, processors=[db, file], dispatch_timeout=0.01)
+        access = core.child("access")
+        access.mute("database")
+
+        await core.start()
+        try:
+            access.info("静音期")
+            # file 收到即代表这一批已分发完（同一轮里 db 的闸也评过）：此刻再解除静音才干净
+            assert await wait_until(lambda: file.received == ["静音期"]) is True
+            access.unmute("database")
+            access.info("恢复期")
+            assert await wait_until(lambda: db.received == ["恢复期"]) is True
+        finally:
+            await core.stop()
+
+        assert db.received == ["恢复期"]
+
 
 class TestManagerFacade:
     """进程门面：configure 增量挂载，get_logger 派生共享核心的子实例。"""
