@@ -218,29 +218,46 @@ def test_semantic_downstream_variable_passes() -> None:
 
 
 # --------------------------------------------------------------------------- ③-D 类型专属语义校验
-def test_semantic_time_trigger_requires_cron_and_validates_it() -> None:
-    """time-trigger 缺 cron 报 MISSING_CONFIG；cron 非法报 INVALID_CRON。"""
+def test_semantic_start_time_trigger_requires_cron_and_validates_it() -> None:
+    """start 选时间触发：缺 cron 报 MISSING_CONFIG，cron 非法报 INVALID_CRON；消息触发免配置。"""
     g_missing = {
-        "nodes": [node("s", "start"), node("t", "time-trigger"), node("e", "end")],
-        "edges": [edge("s", "t"), edge("t", "e")],
+        "nodes": [node("s", "start", trigger="time"), node("e", "end")],
+        "edges": [edge("s", "e")],
     }
     report = validate_graph(g_missing)
     assert not report.valid and report.stage == STAGE_SEMANTIC
     assert any(e.code == "MISSING_CONFIG" for e in report.errors)
 
     g_bad = {
-        "nodes": [node("s", "start"), node("t", "time-trigger", cron="not a cron"), node("e", "end")],
-        "edges": [edge("s", "t"), edge("t", "e")],
+        "nodes": [node("s", "start", trigger="time", cron="not a cron"), node("e", "end")],
+        "edges": [edge("s", "e")],
     }
     report = validate_graph(g_bad)
     assert not report.valid and report.stage == STAGE_SEMANTIC
     assert any(e.code == "INVALID_CRON" for e in report.errors)
 
     g_good = {
-        "nodes": [node("s", "start"), node("t", "time-trigger", cron="*/5 * * * *"), node("e", "end")],
-        "edges": [edge("s", "t"), edge("t", "e")],
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
     }
     assert validate_graph(g_good).valid
+
+    # trigger 非法值
+    g_bad_trigger = {
+        "nodes": [node("s", "start", trigger="webhook"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    report = validate_graph(g_bad_trigger)
+    assert not report.valid
+    assert any(e.code == "INVALID_TRIGGER" for e in report.errors)
+
+    # 消息触发（含完全不配 trigger 的旧 start）无需任何配置
+    g_message = {
+        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    assert validate_graph(g_message).valid
+    assert validate_graph(linear_graph()).valid
 
 
 def test_semantic_log_requires_message_and_validates_level() -> None:
@@ -302,8 +319,8 @@ async def test_executor_start_end_log_test_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_executor_time_trigger_registers_with_scheduler() -> None:
-    """time-trigger 注入调度器时按 cron 登记任务，task_id = wf-<node.id>，可幂等重登记。"""
+async def test_executor_start_time_trigger_registers_with_scheduler() -> None:
+    """start（时间触发）注入调度器时按 cron 登记，task_id = wf-<node.id>，可幂等重登记。"""
     from nacho.core.scheduler import TaskManager
 
     scheduler = TaskManager()
@@ -315,37 +332,79 @@ async def test_executor_time_trigger_registers_with_scheduler() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
-                node("t", "time-trigger", cron="*/5 * * * *", name="每5分钟"),
+                node("s", "start", trigger="time", cron="*/5 * * * *", name="每5分钟"),
                 node("e", "end"),
             ],
-            "edges": [edge("s", "t"), edge("t", "e")],
+            "edges": [edge("s", "e")],
         }
     )
     ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow)
     await SimpleWorkflowRunner().run(graph, ctx)
-    task = scheduler.get("wf-t")
+    task = scheduler.get("wf-s")
     assert task is not None
     assert task.name == "每5分钟"
 
     # 再跑一遍：先移除再登记，不报错且仍是同一个 task_id
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert scheduler.get("wf-t") is not None
+    assert scheduler.get("wf-s") is not None
 
 
 @pytest.mark.asyncio
-async def test_executor_time_trigger_without_scheduler_skips_gracefully() -> None:
-    """没注入调度器时，time-trigger 不抛异常，返回 scheduled=False。"""
+async def test_executor_start_message_trigger_does_not_register() -> None:
+    """消息触发的 start 不登记调度器，只写一条开始日志。"""
+    from nacho.core.scheduler import TaskManager
+
+    scheduler = TaskManager()
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start"), node("t", "time-trigger", cron="*/5 * * * *"), node("e", "end")],
-            "edges": [edge("s", "t"), edge("t", "e")],
+            "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+            "edges": [edge("s", "e")],
+        }
+    )
+    ctx = NodeExecutionContext(scheduler=scheduler)
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert scheduler.list() == []
+    assert "scheduled" not in ctx.variables
+    assert any("消息触发" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() -> None:
+    """没注入调度器时，时间触发 start 不抛异常，返回 scheduled=False。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+            "edges": [edge("s", "e")],
         }
     )
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
     assert ctx.variables.get("scheduled") is False
     assert any("未注入调度器" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_legacy_time_trigger_node_still_registers() -> None:
+    """旧版 time-trigger 节点（历史版本快照）仍能登记调度器，不需要重新发布。"""
+    from nacho.core.scheduler import TaskManager
+
+    scheduler = TaskManager()
+
+    async def run_workflow() -> None:
+        return None
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("t", "time-trigger", cron="*/5 * * * *"),
+                node("e", "end"),
+            ],
+            "edges": [edge("t", "e")],
+        }
+    )
+    ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow)
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert scheduler.get("wf-t") is not None
 
 
 @pytest.mark.asyncio

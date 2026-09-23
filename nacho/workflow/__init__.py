@@ -5,7 +5,7 @@
 * :mod:`nacho.workflow.models`    图（节点 / 边）、校验报告、落库记录、规范 JSON / 摘要
 * :mod:`nacho.workflow.validator` 入库前校验：结构 → 拓扑 → 语义（Dry Run 留协议位）
 * :mod:`nacho.workflow.store`     双表落库（定义 + 不可变版本），归属隔离
-* :mod:`nacho.workflow.executor`  节点执行器（start / end / time-trigger / log / test）与运行器
+* :mod:`nacho.workflow.executor`  节点执行器（start 时间/消息触发 / end / log / test）与运行器
 """
 from __future__ import annotations
 
