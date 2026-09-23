@@ -1,14 +1,11 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig(({ mode }) => {
-  // 开发态把后端接口与 API 文档代理到本机 FastAPI（默认 18080），前端同源访问 /api/*，
-  // 无需后端开 CORS。本机 18080 落在 Windows 保留端口段时，可在
-  // frontend/.env.development.local 里写 VITE_BACKEND_URL 覆盖（该文件不入库）。
-  const env = loadEnv(mode, process.cwd(), '')
-  const backend = env.VITE_BACKEND_URL || 'http://127.0.0.1:18080'
+// 开发态把后端接口与 API 文档代理到本机 FastAPI（默认 8000），
+// 前端同源访问 /api/*，无需后端开 CORS。
+const backend = 'http://127.0.0.1:18080'
 
-  return {
+export default defineConfig({
   plugins: [react()],
   css: {
     modules: {
@@ -30,5 +27,4 @@ export default defineConfig(({ mode }) => {
       '/openapi.json': { target: backend, changeOrigin: true },
     },
   },
-  }
 })

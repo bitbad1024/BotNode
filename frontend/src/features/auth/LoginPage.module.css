@@ -193,66 +193,6 @@
   box-shadow: 0 0 0 4px var(--lp-danger-bg) !important;
 }
 
-/* 记住设备：自定义复选框（原生 input 只做无障碍/焦点载体） */
-.rememberRow {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: -3px;
-  cursor: pointer;
-  user-select: none;
-}
-.rememberBox {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-.rememberMark {
-  flex-shrink: 0;
-  width: 17px;
-  height: 17px;
-  margin-top: 1px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 5px;
-  border: 1.5px solid var(--lp-input-border-hover);
-  background: var(--lp-input-bg);
-  color: transparent;
-  transition:
-    border-color 0.16s ease,
-    background 0.16s ease,
-    color 0.16s ease,
-    box-shadow 0.16s ease;
-}
-.rememberRow:hover .rememberMark {
-  border-color: var(--lp-brand);
-}
-.rememberBox:checked + .rememberMark {
-  background: var(--lp-brand);
-  border-color: var(--lp-brand);
-  color: var(--lp-brand-ink);
-}
-.rememberBox:focus-visible + .rememberMark {
-  box-shadow: 0 0 0 4px var(--lp-ring);
-}
-.rememberText {
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--lp-text);
-  line-height: 1.35;
-}
-.rememberText i {
-  display: block;
-  font-style: normal;
-  font-weight: 400;
-  font-size: 11.5px;
-  color: var(--lp-faint);
-  margin-top: 2px;
-}
-
 .submit {
   margin-top: 4px;
   width: 100%;
