@@ -31,7 +31,11 @@ from .models import (
     WorkflowNode,
 )
 
-#: 合法节点类型（与 models.NodeType 保持一致；这里用 frozenset 做成员判断）
+# 校验「http 节点的 method」时和执行器认同一份方法表（执行器在 nodes/http.py 里）
+from .nodes.http import HTTP_METHODS
+
+#: 合法节点类型（与 models.NodeType 保持一致；这里用 frozenset 做成员判断）。
+#: 加类型时：这里 + models.NodeType + REQUIRED_CONFIG 一起改，执行函数放 nacho.workflow.nodes
 NODE_TYPES: frozenset[str] = frozenset(
     {"start", "end", "gateway", "approval", "expression", "http", "condition", "task",
      "log", "test"}
@@ -368,7 +372,7 @@ def _semantic_stage(graph: WorkflowGraph, checker: ExpressionSyntaxChecker) -> l
 
 
 def _type_specific(graph: WorkflowGraph) -> list[ValidationIssue]:
-    """③-D 类型专属配置校验：start 的触发方式与 cron、log 的 level 合法性。"""
+    """③-D 类型专属配置校验：start 的触发方式与 cron、log 的 level、http 的 method。"""
     from nacho.core.scheduler import CronExpr, CronError  # 局部导入避免循环依赖
 
     issues: list[ValidationIssue] = []
@@ -384,6 +388,24 @@ def _type_specific(graph: WorkflowGraph) -> list[ValidationIssue]:
                         code="INVALID_LOG_LEVEL",
                         message=f"log 节点 {node.id} 的级别 {level!r} 不合法",
                         suggestion=f"可选级别：{', '.join(sorted(LOG_LEVELS))}（缺省 INFO）",
+                    )
+                )
+        elif node.type == "http":
+            # 方法拼错在这里就拦住（执行器认同一份方法表）。写成 {{变量}} 的放行：
+            # 那是运行期渲染出来才知道的，这里判不了
+            method = node.config.get("method")
+            if (
+                isinstance(method, str)
+                and method.strip()
+                and _VARIABLE_RE.search(method) is None
+                and method.strip().upper() not in HTTP_METHODS
+            ):
+                issues.append(
+                    ValidationIssue(
+                        node_id=node.id,
+                        code="INVALID_HTTP_METHOD",
+                        message=f"http 节点 {node.id} 的方法 {method!r} 不合法",
+                        suggestion=f"可选方法：{', '.join(sorted(HTTP_METHODS))}",
                     )
                 )
     return issues

@@ -15,7 +15,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------- 图
-#: 支持的节点类型；新增执行器类型时在这里登记，校验的「配置完整性」表在 validator 里
+#: 支持的节点类型；新增一个类型要动三处：这里、validator 的 NODE_TYPES 与 REQUIRED_CONFIG
+#: （校验白名单），执行函数写在 nacho.workflow.nodes 下（一类一个文件，见那个包）
 NodeType = Literal[
     "start",       # 开始节点：config.trigger 决定触发方式——time（cron 定时）/ message（消息）
     "end",

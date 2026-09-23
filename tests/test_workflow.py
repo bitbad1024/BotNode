@@ -10,8 +10,10 @@
 """
 from __future__ import annotations
 
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any, ClassVar
 
 import pytest
 
@@ -29,11 +31,17 @@ from nacho.workflow import (  # noqa: E402
     SqlWorkflowStore,
     WorkflowGraph,
     WorkflowNameConflict,
+    WorkflowNode,
     canonical_graph_json,
     graph_checksum,
+    load_node_modules,
+    register_node,
+    registered_types,
+    render_variables,
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
+from nacho.workflow.nodes import exec_http  # noqa: E402
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -418,6 +426,222 @@ async def test_executor_unsupported_node_type_raises() -> None:
     )
     with pytest.raises(NotImplementedError):
         await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
+
+
+# ------------------------------------------------------------- ④-B http 节点（打桩，不走网络）
+class FakeResponse:
+    """假的 httpx 响应：http 节点只用到 ``status_code`` / ``text`` 两样。"""
+
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+
+class FakeAsyncClient:
+    """替身 ``httpx.AsyncClient``：记下收到的请求，回一个编好的响应（或抛编好的异常）。
+
+    ``httpx`` 是可选依赖、真发请求又要走网络，所以按本项目一贯的做法**打桩**：节点内部
+    取的就是 ``httpx.AsyncClient`` 这个名字，替换掉它即可（见 :func:`fake_http`）。
+    """
+
+    #: 编好的行为（fixture 每次重置）
+    status: int = 200
+    text: str = ""
+    error: Exception | None = None
+    #: 收到的请求 / 建客户端时的参数
+    calls: ClassVar[list[dict[str, object]]] = []
+    client_kwargs: ClassVar[dict[str, object]] = {}
+
+    def __init__(self, **kwargs: object) -> None:
+        FakeAsyncClient.client_kwargs = dict(kwargs)
+
+    async def __aenter__(self) -> "FakeAsyncClient":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        content: str | None = None,
+    ) -> FakeResponse:
+        FakeAsyncClient.calls.append(
+            {"method": method, "url": url, "headers": headers, "content": content}
+        )
+        if FakeAsyncClient.error is not None:
+            raise FakeAsyncClient.error
+        return FakeResponse(FakeAsyncClient.status, FakeAsyncClient.text)
+
+
+@pytest.fixture
+def fake_http(monkeypatch: pytest.MonkeyPatch) -> type[FakeAsyncClient]:
+    """把 ``httpx.AsyncClient`` 换成替身（节点内部就取它这个名字，打这里够用）。"""
+    import httpx
+
+    FakeAsyncClient.calls = []
+    FakeAsyncClient.client_kwargs = {}
+    FakeAsyncClient.status = 200
+    FakeAsyncClient.text = '{"ok": true}'
+    FakeAsyncClient.error = None
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    return FakeAsyncClient
+
+
+def http_node(**config: object) -> WorkflowNode:
+    """造一个 http 节点；config 缺省补一份能跑通的（url / method 是必填项）。"""
+    merged: dict[str, object] = {"url": "https://api.example.com/items", "method": "GET"}
+    merged.update(config)
+    return WorkflowNode.model_construct(id="h1", type="http", config=merged, outputs=[])
+
+
+@pytest.mark.asyncio
+async def test_http_node_renders_config_and_returns_outputs(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """url / headers / body 都过 ``{{变量}}`` 渲染；状态码与正文作为输出交给下游。"""
+    fake_http.status = 201
+    fake_http.text = '{"id": 7}'
+    node_obj = http_node(
+        url="https://api.example.com/items/{{item_id}}",
+        method="post",
+        headers={"X-Robot": "{{robot}}"},
+        body='{"id": {{item_id}}}',
+        timeout=3,
+    )
+    ctx = NodeExecutionContext()
+    ctx.variables.update({"item_id": "7", "robot": "r-001"})
+
+    outputs = await exec_http(node_obj, ctx)
+
+    assert outputs == {"http_status": 201, "http_body": '{"id": 7}'}
+    assert fake_http.calls == [
+        {
+            "method": "POST",  # 方法大小写不敏感
+            "url": "https://api.example.com/items/7",
+            "headers": {"X-Robot": "r-001"},  # 头里也渲染
+            "content": '{"id": 7}',
+        }
+    ]
+    assert fake_http.client_kwargs["timeout"] == 3.0
+    assert any("POST" in line and "201" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_http_node_keeps_error_status_as_a_result(fake_http: type[FakeAsyncClient]) -> None:
+    """4xx / 5xx 是「对方的回答」：不抛异常，状态码与正文照常交给下游。"""
+    fake_http.status = 500
+    fake_http.text = "boom"
+
+    outputs = await exec_http(http_node(), NodeExecutionContext())
+
+    assert outputs == {"http_status": 500, "http_body": "boom"}
+
+
+@pytest.mark.asyncio
+async def test_http_node_raises_on_connection_failure(fake_http: type[FakeAsyncClient]) -> None:
+    """连不上 / 超时是环境问题：直接抛出去，别伪装成「成功但没内容」。"""
+    import httpx
+
+    fake_http.error = httpx.ConnectError("连不上")
+
+    with pytest.raises(httpx.ConnectError):
+        await exec_http(http_node(), NodeExecutionContext())
+
+
+@pytest.mark.asyncio
+async def test_http_node_rejects_unknown_method_and_empty_url() -> None:
+    """配置写错当场抛（校验阶段也会拦，见 INVALID_HTTP_METHOD）。"""
+    with pytest.raises(ValueError, match="method"):
+        await exec_http(http_node(method="FETCH"), NodeExecutionContext())
+    with pytest.raises(ValueError, match="url"):
+        await exec_http(http_node(url=""), NodeExecutionContext())
+
+
+@pytest.mark.asyncio
+async def test_http_node_without_httpx_says_how_to_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没装 httpx（可选依赖）：报错里给安装提示，而不是莫名的 AttributeError。"""
+    monkeypatch.setitem(sys.modules, "httpx", None)  # 之后再 import httpx 会抛 ImportError
+
+    with pytest.raises(RuntimeError, match="httpx"):
+        await exec_http(http_node(), NodeExecutionContext())
+
+
+def test_http_method_is_checked_at_validation() -> None:
+    """method 拼错在校验阶段就报；合法方法放行。"""
+
+    def graph_with(method: str) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("h", "http", url="https://api.example.com", method=method),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "h"), edge("h", "e")],
+        }
+
+    bad = validate_graph(graph_with("FETCH"))
+    assert [issue.code for issue in bad.errors] == ["INVALID_HTTP_METHOD"]
+
+    assert validate_graph(graph_with("GET")).valid
+
+
+# --------------------------------------------------------------------------- ⑤ 自写节点
+def test_builtin_node_executors_are_registered() -> None:
+    """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
+    for node_type in ("start", "end", "log", "test", "time-trigger"):
+        assert get_executor(node_type) is not None
+    assert set(registered_types()) >= {"start", "end", "log", "test", "time-trigger"}
+
+
+def test_register_node_decorator_registers_and_returns_the_function() -> None:
+    """``@register_node`` 当场注册，并返回原函数（照旧能直接调用 / 拿去单测）。"""
+
+    @register_node("my-echo")
+    async def exec_my_echo(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        return {"echo": node.id, "seen": len(ctx.variables)}
+
+    assert get_executor("my-echo") is exec_my_echo
+
+
+def test_load_node_modules_is_idempotent_and_loud_on_failure() -> None:
+    """装别人的节点模块：重复加载幂等；模块不存在当场抛（别把「没注册上」藏到跑图时才报）。"""
+    assert load_node_modules("nacho.workflow.nodes.log") == ["nacho.workflow.nodes.log"]
+    # 第二次命中 sys.modules 缓存：模块体不会再执行一遍
+    assert load_node_modules("nacho.workflow.nodes.log") == ["nacho.workflow.nodes.log"]
+
+    with pytest.raises(ModuleNotFoundError):
+        load_node_modules("nacho.workflow.nodes.no_such_module")
+
+
+@pytest.mark.asyncio
+async def test_custom_node_type_runs_end_to_end() -> None:
+    """自写的节点类型：注册进注册表后，运行器按类型就能取到并跑出变量。
+
+    这里直接构造图 —— **类型白名单**（``models.NodeType`` / ``validator.NODE_TYPES``）是校验
+    那一关的事，本条验的是「注册表 + 运行器」这条链路。
+    """
+
+    @register_node("my-upper")
+    async def exec_my_upper(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        text = render_variables(str(node.config.get("text", "")), ctx.variables)
+        return {"upper": text.upper()}
+
+    custom = WorkflowNode.model_construct(
+        id="u", type="my-upper", config={"text": "hi {{name}}"}, outputs=["upper"]
+    )
+    graph = WorkflowGraph(nodes=[custom], edges=[])
+    ctx = NodeExecutionContext()
+    ctx.variables["name"] = "nacho"
+
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    assert ctx.variables["upper"] == "HI NACHO"
 
 
 # --------------------------------------------------------------------------- checksum
