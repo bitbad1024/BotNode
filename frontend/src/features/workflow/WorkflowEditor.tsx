@@ -275,9 +275,15 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [validating, setValidating] = useState(false)
   const [showPalette, setShowPalette] = useState(true)
   const [showInspector, setShowInspector] = useState(true)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [boxSel, setBoxSel] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
 
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ nodeId: string; offsetX: number; offsetY: number } | null>(null)
+  const panRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
+  const boxRef = useRef<{ startX: number; startY: number } | null>(null)
   /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
   const connectRef = useRef<{
     nodeId: string
@@ -354,6 +360,32 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [positions, persistPositions, selectedId],
   )
 
+  const deleteSelected = useCallback(() => {
+    if (selectedIds.size === 0) return
+    setGraph((g) => ({
+      nodes: g.nodes.filter((n) => !selectedIds.has(n.id)),
+      edges: g.edges.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)),
+    }))
+    const next = { ...positions }
+    for (const id of selectedIds) delete next[id]
+    persistPositions(next)
+    setSelectedIds(new Set())
+  }, [selectedIds, positions, persistPositions])
+
+  // Delete 键批量删除
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (selectedIds.size === 0) return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      e.preventDefault()
+      deleteSelected()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedIds, deleteSelected])
+
   const deleteEdge = useCallback((edge: WorkflowEdge) => {
     setGraph((g) => ({
       ...g,
@@ -378,6 +410,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   // ---- 拖拽节点 ----
   const onNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
+    if (e.button !== 0) return // 非左键交给画布处理（右键平移）
     if ((e.target as HTMLElement).dataset.role === 'port') return
     e.stopPropagation()
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -385,41 +418,119 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     const pos = positions[nodeId] ?? { x: 0, y: 0 }
     dragRef.current = {
       nodeId,
-      offsetX: e.clientX - rect.left - pos.x,
-      offsetY: e.clientY - rect.top - pos.y,
+      offsetX: (e.clientX - rect.left - pan.x) / zoom - pos.x,
+      offsetY: (e.clientY - rect.top - pan.y) / zoom - pos.y,
     }
     setSelectedId(nodeId)
+  }
+
+  const onCanvasMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 2) {
+      // 右键：开始平移
+      e.preventDefault()
+      panRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        panX: pan.x,
+        panY: pan.y,
+      }
+    } else if (e.button === 0) {
+      // 左键点空白：准备框选（需要拖动超过阈值才真正开始）
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const x = (e.clientX - rect.left - pan.x) / zoom
+      const y = (e.clientY - rect.top - pan.y) / zoom
+      boxRef.current = { startX: x, startY: y }
+    }
   }
 
   const onCanvasMouseMove = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    if (panRef.current) {
+      const { startX, startY, panX, panY } = panRef.current
+      setPan({ x: panX + (e.clientX - startX), y: panY + (e.clientY - startY) })
+      return
+    }
+    const x = (e.clientX - rect.left - pan.x) / zoom
+    const y = (e.clientY - rect.top - pan.y) / zoom
+    if (boxRef.current) {
+      const dx = x - boxRef.current.startX
+      const dy = y - boxRef.current.startY
+      // 拖动超过阈值才显示框选
+      if (!boxSel && Math.abs(dx) < 5 && Math.abs(dy) < 5) return
+      if (!boxSel) {
+        setBoxSel({ x0: boxRef.current.startX, y0: boxRef.current.startY, x1: x, y1: y })
+      } else {
+        setBoxSel({ ...boxSel, x1: x, y1: y })
+      }
+      // 实时计算选中
+      const x0 = Math.min(boxRef.current.startX, x)
+      const y0 = Math.min(boxRef.current.startY, y)
+      const x1 = Math.max(boxRef.current.startX, x)
+      const y1 = Math.max(boxRef.current.startY, y)
+      const ids = new Set<string>()
+      for (const n of graph.nodes) {
+        const p = positions[n.id]
+        if (!p) continue
+        const def = nodeDef(n.type)
+        const h = nodeHeight(def)
+        if (p.x + NODE_W >= x0 && p.x <= x1 && p.y + h >= y0 && p.y <= y1) {
+          ids.add(n.id)
+        }
+      }
+      setSelectedIds(ids)
+      return
+    }
     if (dragRef.current) {
       const { nodeId, offsetX, offsetY } = dragRef.current
       persistPositions({
         ...positions,
-        [nodeId]: { x: Math.max(0, x - offsetX), y: Math.max(0, y - offsetY) },
+        [nodeId]: { x: x - offsetX, y: y - offsetY },
       })
     }
     if (connectRef.current) {
-      setConnectCursor({ x, y })
+      setConnectCursor({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom })
     }
   }
 
+  // ---- 滚轮缩放 ----
+  const onCanvasWheel = (e: React.WheelEvent) => {
+    e.preventDefault()
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
+    const delta = -e.deltaY * 0.0015
+    const next = Math.min(3, Math.max(0.25, zoom * (1 + delta)))
+    if (next === zoom) return
+    // 以鼠标位置为缩放中心：调整 pan 使鼠标下方的画布点不变
+    const ratio = next / zoom
+    setPan({ x: mx - (mx - pan.x) * ratio, y: my - (my - pan.y) * ratio })
+    setZoom(next)
+  }
+
   const onCanvasMouseUp = () => {
+    // 如果没拖出框选，是普通点击——交给 onClick 取消选中
+    if (boxRef.current && !boxSel) {
+      boxRef.current = null
+      return
+    }
     dragRef.current = null
     connectRef.current = null
+    panRef.current = null
+    boxRef.current = null
     setConnectCursor(null)
+    setBoxSel(null)
   }
 
   // ---- 端口连线 ----
   const onPortMouseDown = (e: React.MouseEvent, nodeId: string, portId: string, portType: PortType, direction: 'in' | 'out') => {
+    if (e.button !== 0) return
     e.stopPropagation()
     connectRef.current = { nodeId, portId, portType, direction }
     const rect = canvasRef.current?.getBoundingClientRect()
-    if (rect) setConnectCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    if (rect) setConnectCursor({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom })
   }
 
   const onPortMouseUp = (e: React.MouseEvent, nodeId: string, portId: string, portType: PortType, direction: 'in' | 'out') => {
@@ -601,6 +712,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           >
             配置
           </button>
+          <button
+            className="btn"
+            onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1) }}
+            title="重置视图"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
           <button className={`btn ${styles.closeBtn}`} onClick={onClose}>
             <IconClose size={16} />
           </button>
@@ -643,9 +761,16 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         <div
           ref={canvasRef}
           className={styles.canvas}
+          style={{ cursor: panRef.current ? 'grabbing' : 'default' }}
+          onContextMenu={(e) => e.preventDefault()}
+          onMouseDown={onCanvasMouseDown}
           onMouseMove={onCanvasMouseMove}
           onMouseUp={onCanvasMouseUp}
-          onClick={() => setSelectedId(null)}
+          onWheel={onCanvasWheel}
+          onClick={() => {
+            setSelectedId(null)
+            setSelectedIds(new Set())
+          }}
         >
           {loading ? (
             <div className={styles.loading}>
@@ -653,7 +778,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               正在加载…
             </div>
           ) : (
-            <>
+            <div className={styles.canvasContent} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
               <svg className={styles.edges}>
                 {graph.edges.map((edge, i) => {
                   const c = edgeCoords(edge)
@@ -708,9 +833,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 return (
                   <div
                     key={node.id}
-                    className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${hasError ? styles.hasError : ''}`}
+                    className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${selectedIds.has(node.id) ? styles.boxSelected : ''} ${hasError ? styles.hasError : ''}`}
                     style={{ left: pos.x, top: pos.y, width: NODE_W, height: h }}
                     onMouseDown={(e) => onNodeMouseDown(e, node.id)}
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {/* 头部：色条 + 标签 */}
                     <div className={styles.nodeHeader} style={{ '--c': def.color } as React.CSSProperties}>
@@ -794,7 +920,24 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               {graph.nodes.length === 0 && (
                 <div className={styles.empty}>从左侧点节点名添加到画布</div>
               )}
-            </>
+
+              {boxSel && (() => {
+                const x = Math.min(boxSel.x0, boxSel.x1)
+                const y = Math.min(boxSel.y0, boxSel.y1)
+                const w = Math.abs(boxSel.x1 - boxSel.x0)
+                const h = Math.abs(boxSel.y1 - boxSel.y0)
+                return (
+                  <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
+                    <rect x={x} y={y} width={w} height={h}
+                      fill="rgba(99, 102, 241, 0.08)"
+                      stroke="var(--accent)"
+                      strokeWidth="1"
+                      strokeDasharray="4 3"
+                    />
+                  </svg>
+                )
+              })()}
+            </div>
           )}
         </div>
 

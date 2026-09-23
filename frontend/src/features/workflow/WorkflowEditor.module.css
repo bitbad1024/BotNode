@@ -85,6 +85,16 @@
   overflow: hidden;
 }
 
+.canvasContent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 99999px;
+  height: 99999px;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
 /* 节点面板——悬浮左侧 */
 .palette {
   position: absolute;
@@ -167,9 +177,11 @@
 /* SVG 连线层 */
 .edges {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
+  overflow: visible;
   pointer-events: none;
 }
 .edgeDelete {
@@ -201,6 +213,10 @@
 .node.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.node.boxSelected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .node.hasError {
   border-color: var(--danger);
