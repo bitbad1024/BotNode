@@ -34,16 +34,19 @@ from .models import (
 #: 合法节点类型（与 models.NodeType 保持一致；这里用 frozenset 做成员判断）
 NODE_TYPES: frozenset[str] = frozenset(
     {"start", "end", "gateway", "approval", "expression", "http", "condition", "task",
-     "time-trigger", "log", "test"}
+     "log", "test"}
 )
 
+#: start 节点的触发方式：time = cron 定时触发（需配 cron）；message = 消息触发（无需配置）
+START_TRIGGERS: frozenset[str] = frozenset({"time", "message"})
+
 #: 各类型节点必须在 config 里给出的字段：(字段, 给人看的字段名)
+#: start 的 cron 是**条件必填**（仅 trigger=time 时），见 :func:`_type_specific`
 REQUIRED_CONFIG: dict[str, tuple[tuple[str, str], ...]] = {
     "expression": (("expression", "表达式"),),
     "http": (("url", "请求地址"), ("method", "请求方法")),
     "approval": (("assignee", "审批人"),),
     "condition": (("condition", "条件"),),
-    "time-trigger": (("cron", "cron 表达式"),),
     "log": (("message", "日志内容"),),
 }
 
@@ -365,25 +368,13 @@ def _semantic_stage(graph: WorkflowGraph, checker: ExpressionSyntaxChecker) -> l
 
 
 def _type_specific(graph: WorkflowGraph) -> list[ValidationIssue]:
-    """③-D 类型专属配置校验：time-trigger 的 cron 合法性、log 的 level 合法性。"""
+    """③-D 类型专属配置校验：start 的触发方式与 cron、log 的 level 合法性。"""
     from nacho.core.scheduler import CronExpr, CronError  # 局部导入避免循环依赖
 
     issues: list[ValidationIssue] = []
     for node in graph.nodes:
-        if node.type == "time-trigger":
-            cron = node.config.get("cron")
-            if isinstance(cron, str) and cron.strip():
-                try:
-                    CronExpr.parse(cron.strip())
-                except CronError as exc:
-                    issues.append(
-                        ValidationIssue(
-                            node_id=node.id,
-                            code="INVALID_CRON",
-                            message=f"time-trigger 节点 {node.id} 的 cron 表达式不合法：{exc}",
-                            suggestion="cron 用 5 段（分 时 日 月 周）或 6 段（秒 分 时 日 月 周），如 */5 * * * *",
-                        )
-                    )
+        if node.type == "start":
+            issues.extend(_validate_start_trigger(node, CronExpr, CronError))
         elif node.type == "log":
             level = node.config.get("level")
             if level is not None and (not isinstance(level, str) or level.upper() not in LOG_LEVELS):
@@ -396,6 +387,47 @@ def _type_specific(graph: WorkflowGraph) -> list[ValidationIssue]:
                     )
                 )
     return issues
+
+
+def _validate_start_trigger(
+    node: WorkflowNode, cron_expr_cls: type, cron_error_cls: type
+) -> list[ValidationIssue]:
+    """start 节点：config.trigger 必须是 time/message（缺省按 message）；time 时 cron 必填且合法。"""
+    trigger = node.config.get("trigger", "message")
+    if not isinstance(trigger, str) or trigger not in START_TRIGGERS:
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_TRIGGER",
+                message=f"start 节点 {node.id} 的触发方式 {trigger!r} 不合法",
+                suggestion="config.trigger 只能是 time（定时）或 message（消息）",
+            )
+        ]
+    if trigger != "time":
+        return []
+
+    cron = node.config.get("cron")
+    if not isinstance(cron, str) or not cron.strip():
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="MISSING_CONFIG",
+                message=f"start 节点 {node.id} 选择了时间触发，但缺少必填配置 cron（cron 表达式）",
+                suggestion="在 config.cron 中补充 5/6 段 cron 表达式，如 */5 * * * *",
+            )
+        ]
+    try:
+        cron_expr_cls.parse(cron.strip())
+    except cron_error_cls as exc:
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_CRON",
+                message=f"start 节点 {node.id} 的 cron 表达式不合法：{exc}",
+                suggestion="cron 用 5 段（分 时 日 月 周）或 6 段（秒 分 时 日 月 周），如 */5 * * * *",
+            )
+        ]
+    return []
 
 
 def _config_completeness(graph: WorkflowGraph) -> list[ValidationIssue]:

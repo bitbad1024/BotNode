@@ -19,6 +19,7 @@ import {
   type NodeType,
   type ValidationIssue,
   type ValidationReport,
+  type SaveVersionResultData,
   type WorkflowEdge,
   type WorkflowGraph,
   type WorkflowNode,
@@ -63,9 +64,12 @@ const PORT_COLORS: Record<PortType, string> = {
 
 const NODE_TYPES: Record<string, NodeTypeDef> = {
   start: {
-    type: 'start', label: '开始', color: '#22c55e', defaults: {},
+    type: 'start', label: '开始', color: '#22c55e', defaults: { trigger: 'message' },
     inputs: [],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
+    outputs: [
+      { id: 'trigger', type: 'trigger', label: '触发' },
+      { id: 'message', type: 'message', label: '消息' },
+    ],
     constants: [],
   },
   end: {
@@ -73,12 +77,6 @@ const NODE_TYPES: Record<string, NodeTypeDef> = {
     inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
     outputs: [],
     constants: [],
-  },
-  'time-trigger': {
-    type: 'time-trigger', label: '时间触发', color: '#f59e0b', defaults: { cron: '*/5 * * * *' },
-    inputs: [],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    constants: ['cron'],
   },
   log: {
     type: 'log', label: '写日志', color: '#3b82f6', defaults: { message: '', level: 'INFO' },
@@ -155,11 +153,43 @@ const NODE_TYPES: Record<string, NodeTypeDef> = {
 }
 
 const PALETTE_ORDER: string[] = [
-  'start', 'end', 'time-trigger', 'log', 'test', 'task',
+  'start', 'end', 'log', 'test', 'task',
   'http', 'condition', 'expression', 'gateway', 'approval',
 ]
 
-function nodeDef(type: string): NodeTypeDef {
+/** start 节点时间触发形态：只输出触发端口，cron 是常量配置。 */
+const START_TIME_DEF: NodeTypeDef = {
+  type: 'start',
+  label: '开始 · 时间',
+  color: '#f59e0b',
+  defaults: { trigger: 'time', cron: '*/5 * * * *' },
+  inputs: [],
+  outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
+  constants: ['cron'],
+}
+
+/** start 节点消息触发形态：输出触发 + 消息端口，无常量配置。 */
+const START_MESSAGE_DEF: NodeTypeDef = {
+  type: 'start',
+  label: '开始 · 消息',
+  color: '#22c55e',
+  defaults: { trigger: 'message' },
+  inputs: [],
+  outputs: [
+    { id: 'trigger', type: 'trigger', label: '触发' },
+    { id: 'message', type: 'message', label: '消息' },
+  ],
+  constants: [],
+}
+
+/**
+ * 取节点类型定义；start 的端口 / 常量随 config.trigger 动态变化：
+ * time = 只输出触发 + cron 常量；message（含缺省）= 触发 + 消息输出。
+ */
+function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
+  if (type === 'start') {
+    return config?.trigger === 'time' ? START_TIME_DEF : START_MESSAGE_DEF
+  }
   return NODE_TYPES[type] ?? {
     type: type as NodeType, label: type, color: '#64748b', defaults: {},
     inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
@@ -197,10 +227,11 @@ function portAbsPos(
   direction: 'in' | 'out',
   nodeType: string,
   positions: Record<string, { x: number; y: number }>,
+  config?: Record<string, unknown>,
 ): { x: number; y: number } | null {
   const pos = positions[nodeId]
   if (!pos) return null
-  const def = nodeDef(nodeType)
+  const def = nodeDef(nodeType, config)
   const y = pos.y + portCenterY(def, direction, portId)
   const x = direction === 'in' ? pos.x : pos.x + NODE_W
   return { x, y }
@@ -214,6 +245,46 @@ function uid(prefix: string): string {
 
 function emptyGraph(): WorkflowGraph {
   return { nodes: [], edges: [] }
+}
+
+/**
+ * 旧版图迁移：独立的 time-trigger 节点已并入 start（config.trigger=time）。
+ * 旧图典型结构是 start → time-trigger → ...，直接转换会出现两个 start 违反唯一入口，
+ * 所以同时把前置的旧 start 合并掉：旧 start → 迁移节点的边删除，旧 start 的其他出边
+ * 改接到迁移节点。用户重新保存后后端快照也完成迁移。
+ */
+function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
+  const migratedIds = new Set<string>()
+  const nodes = g.nodes.map((n) => {
+    if (n.type !== 'time-trigger') return n
+    migratedIds.add(n.id)
+    const config: Record<string, unknown> = {
+      trigger: 'time',
+      cron: typeof n.config.cron === 'string' ? n.config.cron : '*/5 * * * *',
+    }
+    if (n.config.name !== undefined) config.name = n.config.name
+    return { ...n, type: 'start' as const, config }
+  })
+  if (migratedIds.size === 0) return g
+
+  // 找直接连到迁移节点的旧 start（它们已被迁移节点取代）
+  const rewire = new Map<string, string>() // 旧 start id -> 迁移节点 id
+  for (const e of g.edges) {
+    if (!migratedIds.has(e.target)) continue
+    const src = g.nodes.find((n) => n.id === e.source)
+    if (src && src.type === 'start') rewire.set(src.id, e.target)
+  }
+
+  const edges = g.edges
+    // 删掉「旧 start → 迁移节点」这条边（迁移节点自己就是入口了）
+    .filter((e) => !(rewire.has(e.source) && migratedIds.has(e.target)))
+    // 旧 start 的其他出边改接到迁移节点
+    .map((e) => {
+      const to = rewire.get(e.source)
+      return to ? { ...e, source: to } : e
+    })
+
+  return { nodes: nodes.filter((n) => !rewire.has(n.id)), edges }
 }
 
 function posKey(workflowId: string): string {
@@ -313,7 +384,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           if (vers.length > 0) {
             const { data: latest } = await getVersion(workflowId, vers[0].version)
             if (!cancelled) {
-              setGraph(latest.graph)
+              setGraph(normalizeGraph(latest.graph))
               persistPositions(loadPositions(workflowId))
             }
           } else {
@@ -408,6 +479,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }))
   }, [])
 
+  /** 切换开始节点的触发方式：time 补默认 cron；message 清掉 cron。 */
+  const setStartTrigger = useCallback((id: string, trigger: string) => {
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => {
+        if (n.id !== id || n.type !== 'start') return n
+        const config: Record<string, unknown> = { ...n.config, trigger }
+        if (trigger === 'time' && typeof config.cron !== 'string') config.cron = '*/5 * * * *'
+        if (trigger === 'message') delete config.cron
+        return { ...n, config }
+      }),
+    }))
+  }, [])
+
   // ---- 拖拽节点 ----
   const onNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
     if (e.button !== 0) return // 非左键交给画布处理（右键平移）
@@ -473,7 +558,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       for (const n of graph.nodes) {
         const p = positions[n.id]
         if (!p) continue
-        const def = nodeDef(n.type)
+        const def = nodeDef(n.type, n.config)
         const h = nodeHeight(def)
         if (p.x + NODE_W >= x0 && p.x <= x1 && p.y + h >= y0 && p.y <= y1) {
           ids.add(n.id)
@@ -601,12 +686,19 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     setSaving(true)
     try {
       const { data } = await saveVersion(workflowId, graph, '画布编辑')
-      if (!data.created) {
+      // 校验不过：后端返回 200 + 校验报告（没有 version/created），不写库
+      if ('valid' in data) {
+        setReport(data)
+        pushToast('error', `校验未通过（${data.stage}），未保存，请修正后重试`)
+        return
+      }
+      const result: SaveVersionResultData = data
+      if (!result.created) {
         pushToast('info', '内容未变，未产生新版本')
       } else {
-        pushToast('success', `已保存 v${data.version.version}`)
+        pushToast('success', `已保存 v${result.version.version}`)
       }
-      setVersions((v) => [data.version, ...v.filter((x) => x.version !== data.version.version)])
+      setVersions((v) => [result.version, ...v.filter((x) => x.version !== result.version.version)])
       setReport(null)
     } catch (err) {
       pushToast('error', err instanceof ApiRequestError ? err.message : '保存失败')
@@ -627,6 +719,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   // ---- 渲染辅助 ----
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
+  const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
   const errorByNode = new Map<string, ValidationIssue[]>()
   if (report) {
     for (const issue of report.errors) {
@@ -655,8 +748,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       }
     }
     if (!sourcePortId || !targetPortId) return null
-    const srcDef = nodeDef(srcNode.type)
-    const tgtDef = nodeDef(tgtNode.type)
+    const srcDef = nodeDef(srcNode.type, srcNode.config)
+    const tgtDef = nodeDef(tgtNode.type, tgtNode.config)
     return {
       x1: sp.x + NODE_W,
       y1: sp.y + portCenterY(srcDef, 'out', sourcePortId),
@@ -671,7 +764,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     const { nodeId, portId, direction } = connectRef.current
     const node = graph.nodes.find((n) => n.id === nodeId)
     if (!node) return null
-    return portAbsPos(nodeId, portId, direction, node.type, positions)
+    return portAbsPos(nodeId, portId, direction, node.type, positions, node.config)
   }
 
   return (
@@ -785,7 +878,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   if (!c) return null
                   // 端口颜色
                   const srcNode = graph.nodes.find((n) => n.id === edge.source)
-                  const srcDef = srcNode ? nodeDef(srcNode.type) : null
+                  const srcDef = srcNode ? nodeDef(srcNode.type, srcNode.config) : null
                   const port = srcDef?.outputs.find((p) => p.id === (edge.sourcePort ?? 'trigger'))
                   const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
                   return (
@@ -825,7 +918,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               </svg>
 
               {graph.nodes.map((node) => {
-                const def = nodeDef(node.type)
+                const def = nodeDef(node.type, node.config)
                 const pos = positions[node.id] ?? { x: 0, y: 0 }
                 const h = nodeHeight(def)
                 const hasError = errorByNode.has(node.id)
@@ -944,11 +1037,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         {/* 配置面板——悬浮，可折叠 */}
         {showInspector && (
         <aside className={styles.inspector}>
-          {selectedNode ? (
+          {selectedNode && selectedDef ? (
             <>
               <div className={styles.inspectorHead}>
                 <span className={styles.inspectorTitle}>
-                  {nodeDef(selectedNode.type).label}
+                  {selectedDef.label}
                 </span>
                 <button className={styles.iconBtn} onClick={() => deleteNode(selectedNode.id)}>
                   <IconTrash size={14} />
@@ -958,20 +1051,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               {/* 端口信息 */}
               <div className={styles.portInfo}>
                 <div className={styles.portInfoTitle}>端口</div>
-                {nodeDef(selectedNode.type).inputs.length > 0 && (
+                {selectedDef.inputs.length > 0 && (
                   <div className={styles.portInfoSection}>
                     <span className={styles.portInfoLabel}>输入</span>
-                    {nodeDef(selectedNode.type).inputs.map((p) => (
+                    {selectedDef.inputs.map((p) => (
                       <span className={styles.portInfoItem} key={p.id} style={{ color: PORT_COLORS[p.type] }}>
                         ● {p.label}（{p.type}）
                       </span>
                     ))}
                   </div>
                 )}
-                {nodeDef(selectedNode.type).outputs.length > 0 && (
+                {selectedDef.outputs.length > 0 && (
                   <div className={styles.portInfoSection}>
                     <span className={styles.portInfoLabel}>输出</span>
-                    {nodeDef(selectedNode.type).outputs.map((p) => (
+                    {selectedDef.outputs.map((p) => (
                       <span className={styles.portInfoItem} key={p.id} style={{ color: PORT_COLORS[p.type] }}>
                         ● {p.label}（{p.type}）
                       </span>
@@ -984,7 +1077,22 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 <label className={styles.label}>节点 ID</label>
                 <input className={styles.input} value={selectedNode.id} disabled />
               </div>
-              {Object.entries(selectedNode.config).map(([key, value]) => (
+              {selectedNode.type === 'start' && (
+                <div className={styles.field}>
+                  <label className={styles.label}>触发方式</label>
+                  <select
+                    className={styles.input}
+                    value={String(selectedNode.config.trigger ?? 'message')}
+                    onChange={(e) => setStartTrigger(selectedNode.id, e.target.value)}
+                  >
+                    <option value="message">消息触发（无需配置）</option>
+                    <option value="time">时间触发（cron 定时）</option>
+                  </select>
+                </div>
+              )}
+              {Object.entries(selectedNode.config)
+                .filter(([key]) => key !== 'trigger')
+                .map(([key, value]) => (
                 <div className={styles.field} key={key}>
                   <label className={styles.label}>{key}</label>
                   {key === 'method' ? (
