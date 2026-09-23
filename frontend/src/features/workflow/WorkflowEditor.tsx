@@ -10,7 +10,6 @@
  * 坐标存 localStorage（后端 WorkflowNode extra=ignore，不存 UI 字段）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
 import {
   getVersion,
   listVersions,
@@ -30,6 +29,7 @@ import { useToast } from '../../common/Toast'
 import {
   IconArrowLeft,
   IconCheck,
+  IconClose,
   IconSave,
   IconTrash,
 } from '../../common/icons'
@@ -257,9 +257,12 @@ function truncate(s: string, max: number): string {
 
 // --------------------------------------------------------------------------- 组件
 
-export default function WorkflowEditor() {
-  const { workflowId } = useParams<{ workflowId: string }>()
-  const navigate = useNavigate()
+interface WorkflowEditorProps {
+  workflowId: string
+  onClose: () => void
+}
+
+export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorProps) {
   const { pushToast } = useToast()
 
   const [graph, setGraph] = useState<WorkflowGraph>(emptyGraph())
@@ -270,6 +273,8 @@ export default function WorkflowEditor() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [validating, setValidating] = useState(false)
+  const [showPalette, setShowPalette] = useState(true)
+  const [showInspector, setShowInspector] = useState(true)
 
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ nodeId: string; offsetX: number; offsetY: number } | null>(null)
@@ -562,7 +567,7 @@ export default function WorkflowEditor() {
     <div className={styles.page}>
       {/* 工具栏 */}
       <header className={styles.toolbar}>
-        <button className="btn" onClick={() => navigate('/workflows')}>
+        <button className="btn" onClick={onClose}>
           <IconArrowLeft size={15} />
           返回
         </button>
@@ -582,11 +587,29 @@ export default function WorkflowEditor() {
           <button className="btn" onClick={() => void onPublish()}>
             发布
           </button>
+          <button
+            className={`btn ${showPalette ? '' : styles.toggleOff}`}
+            onClick={() => setShowPalette((v) => !v)}
+            title="切换节点面板"
+          >
+            节点
+          </button>
+          <button
+            className={`btn ${showInspector ? '' : styles.toggleOff}`}
+            onClick={() => setShowInspector((v) => !v)}
+            title="切换配置面板"
+          >
+            配置
+          </button>
+          <button className={`btn ${styles.closeBtn}`} onClick={onClose}>
+            <IconClose size={16} />
+          </button>
         </div>
       </header>
 
       <div className={styles.body}>
-        {/* 节点面板 */}
+        {/* 节点面板——悬浮，可折叠 */}
+        {showPalette && (
         <aside className={styles.palette}>
           <div className={styles.paletteTitle}>节点</div>
           {PALETTE_ORDER.map((type) => {
@@ -614,6 +637,7 @@ export default function WorkflowEditor() {
             </div>
           </div>
         </aside>
+        )}
 
         {/* 画布 */}
         <div
@@ -774,7 +798,8 @@ export default function WorkflowEditor() {
           )}
         </div>
 
-        {/* 配置面板 */}
+        {/* 配置面板——悬浮，可折叠 */}
+        {showInspector && (
         <aside className={styles.inspector}>
           {selectedNode ? (
             <>
@@ -898,6 +923,7 @@ export default function WorkflowEditor() {
             </div>
           )}
         </aside>
+        )}
       </div>
     </div>
   )

@@ -1,11 +1,13 @@
-/* 工作流画布编辑器 */
+/* 工作流画布编辑器——全屏覆盖层 */
 
 .page {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--topbar-h) - var(--layout-pad) * 2);
-  min-height: 480px;
-  gap: 12px;
+  background: var(--surface-2);
+  gap: 0;
 }
 
 /* 工具栏 */
@@ -13,10 +15,25 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
+  padding: 8px 16px;
   background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.closeBtn {
+  margin-left: 4px;
+  padding: 6px;
+  border-color: var(--border);
+  color: var(--text-2);
+}
+.closeBtn:hover {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.toggleOff {
+  opacity: 0.5;
+  border-style: dashed;
 }
 .toolbarTitle {
   flex: 1;
@@ -48,17 +65,33 @@
   color: #fff;
 }
 
-/* 三栏布局 */
+/* 画布区占满，面板悬浮 */
 .body {
-  display: grid;
-  grid-template-columns: 160px 1fr 280px;
-  gap: 12px;
+  position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
 }
 
-/* 节点面板 */
+/* 画布——占满整个 body */
+.canvas {
+  position: relative;
+  flex: 1;
+  border-radius: 0;
+  border: none;
+  background: var(--surface-2);
+  background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+  background-size: 20px 20px;
+  overflow: hidden;
+}
+
+/* 节点面板——悬浮左侧 */
 .palette {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 150px;
+  max-height: calc(100% - 24px);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -66,6 +99,8 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  z-index: 10;
 }
 .paletteTitle {
   font-size: 12px;
@@ -129,16 +164,7 @@
   flex-shrink: 0;
 }
 
-/* 画布 */
-.canvas {
-  position: relative;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
-  background-size: 20px 20px;
-  overflow: hidden;
-}
+/* SVG 连线层 */
 .edges {
   position: absolute;
   inset: 0;
@@ -313,8 +339,13 @@
   font-size: 13px;
 }
 
-/* 配置面板 */
+/* 配置面板——悬浮右侧 */
 .inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 270px;
+  max-height: calc(100% - 24px);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -323,6 +354,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  z-index: 10;
 }
 .inspectorHead {
   display: flex;

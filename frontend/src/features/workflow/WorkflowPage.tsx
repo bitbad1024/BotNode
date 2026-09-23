@@ -1,6 +1,6 @@
-/** 工作流列表：新建 / 查看 / 发布 / 删除；点编辑进入画布编辑器。 */
+/** 工作流列表：新建 / 查看 / 发布 / 删除；点编辑弹出全屏画布编辑器。 */
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import {
   createWorkflow,
   deleteWorkflow,
@@ -16,6 +16,7 @@ import {
   IconRefresh,
   IconTrash,
 } from '../../common/icons'
+import WorkflowEditor from './WorkflowEditor'
 import styles from './WorkflowPage.module.css'
 
 function describe(err: unknown): string {
@@ -37,7 +38,6 @@ function statusLabel(w: WorkflowData): { text: string; cls: string } {
 
 export default function WorkflowPage() {
   const { pushToast } = useToast()
-  const navigate = useNavigate()
 
   const [items, setItems] = useState<WorkflowData[]>([])
   const [loading, setLoading] = useState(true)
@@ -46,6 +46,7 @@ export default function WorkflowPage() {
   const [submitting, setSubmitting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -187,7 +188,7 @@ export default function WorkflowPage() {
                         <button
                           className="btn"
                           disabled={busy}
-                          onClick={() => navigate(`/workflows/${w.id}`)}
+                          onClick={() => setEditingId(w.id)}
                         >
                           <IconEdit size={14} />
                           编辑
@@ -231,6 +232,17 @@ export default function WorkflowPage() {
           </table>
         )}
       </section>
+
+      {editingId && createPortal(
+        <WorkflowEditor
+          workflowId={editingId}
+          onClose={() => {
+            setEditingId(null)
+            void load()
+          }}
+        />,
+        document.body,
+      )}
     </div>
   )
 }

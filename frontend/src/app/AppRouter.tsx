@@ -10,7 +10,6 @@ import SchedulePage from '../features/schedule/SchedulePage'
 import LogsPage from '../features/logs/LogsPage'
 import DebugPage from '../features/onebot/DebugPage'
 import WorkflowPage from '../features/workflow/WorkflowPage'
-import WorkflowEditor from '../features/workflow/WorkflowEditor'
 
 export default function AppRouter() {
   return (
@@ -23,7 +22,6 @@ export default function AppRouter() {
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/tokens" element={<TokensPage />} />
           <Route path="/workflows" element={<WorkflowPage />} />
-          <Route path="/workflows/:workflowId" element={<WorkflowEditor />} />
           <Route path="/schedule" element={<SchedulePage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/debug" element={<DebugPage />} />
