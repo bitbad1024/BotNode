@@ -9,6 +9,7 @@ import TokensPage from '../features/tokens/TokensPage'
 import SchedulePage from '../features/schedule/SchedulePage'
 import LogsPage from '../features/logs/LogsPage'
 import DebugPage from '../features/onebot/DebugPage'
+import WorkflowPage from '../features/workflow/WorkflowPage'
 
 export default function AppRouter() {
   return (
@@ -20,6 +21,7 @@ export default function AppRouter() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/tokens" element={<TokensPage />} />
+          <Route path="/workflows" element={<WorkflowPage />} />
           <Route path="/schedule" element={<SchedulePage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/debug" element={<DebugPage />} />

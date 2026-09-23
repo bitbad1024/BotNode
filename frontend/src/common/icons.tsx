@@ -242,3 +242,23 @@ export const IconPin = (p: IconProps) => (
     <circle cx="12" cy="10" r="2.3" />
   </svg>
 )
+
+export const IconEdit = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z" />
+    <path d="M13.5 6.5l3 3" />
+  </svg>
+)
+
+export const IconArrowLeft = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M19 12H5M12 19l-7-7 7-7" />
+  </svg>
+)
+
+export const IconSave = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M5 4h11l3 3v13H5z" />
+    <path d="M8 4v5h7V4M8 20v-6h8v6" />
+  </svg>
+)

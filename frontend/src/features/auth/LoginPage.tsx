@@ -4,9 +4,8 @@ import { useNavigate, useLocation, Navigate } from 'react-router-dom'
 import { login } from './authApi'
 import { ApiRequestError } from '../../lib/http'
 import { useAuth } from './authStore'
-import { useToast } from '../../common/Toast'
 import { ThemeToggle } from '../../common/theme'
-import { IconUser, IconLock, IconEye, IconEyeOff, IconAlert, IconCheck } from '../../common/icons'
+import { IconUser, IconLock, IconEye, IconEyeOff, IconAlert } from '../../common/icons'
 import {
   SHOW_DEMO_ACCOUNTS,
   DEMO_ACCOUNTS,
@@ -16,21 +15,13 @@ import styles from './LoginPage.module.css'
 
 const accountPattern = /^[A-Za-z0-9_.-]{3,32}$/
 
-// 后端校验错误 details[].field 是「body.xxx」这种技术名，展示时翻译成中文标签
-const FIELD_LABELS: Record<string, string> = {
-  'body.account': '账号',
-  'body.password': '密码',
-}
-
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { dispatch, isAuthenticated } = useAuth()
-  const { pushToast } = useToast()
 
   const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
-  const [remember, setRemember] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [touchedA, setTouchedA] = useState(false)
@@ -64,29 +55,20 @@ export default function LoginPage() {
     setLoading(true)
     setError(null)
     try {
-      const { data } = await login(account.trim(), password, remember)
+      const { data } = await login(account.trim(), password)
       dispatch({
         type: 'SET_SESSION',
         token: data.token,
-        tokenHash: data.token_hash,
         user: data.user,
         expiresInSeconds: data.expires_in,
-        remembered: remember,
-        deviceName: data.device_name,
       })
-      if (data.reused) {
-        pushToast('info', '已复用这台设备上的现有登录')
-      } else if (data.device_name) {
-        pushToast('success', `已在新设备登录：${data.device_name}`)
-      }
       const from =
         (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/'
       navigate(from, { replace: true })
     } catch (err) {
       if (err instanceof ApiRequestError) {
-        const d = err.details[0]
-        const detail = d
-          ? `${FIELD_LABELS[d.field] ?? d.field}：${d.message}`
+        const detail = err.details[0]
+          ? `${err.details[0].field} · ${err.details[0].message}`
           : err.message
         setError({ title: err.message, detail, traceId: err.traceId })
       } else {
@@ -180,22 +162,6 @@ export default function LoginPage() {
               </button>
             </div>
           </div>
-
-          <label className={styles.rememberRow}>
-            <input
-              type="checkbox"
-              className={styles.rememberBox}
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />
-            <span className={styles.rememberMark} aria-hidden="true">
-              <IconCheck size={12} />
-            </span>
-            <span className={styles.rememberText}>
-              记住这台设备
-              <i>30 天免登录；不勾则关闭浏览器即失效（2 小时）</i>
-            </span>
-          </label>
 
           <button className={styles.submit} type="submit" disabled={!canSubmit}>
             {loading ? (
