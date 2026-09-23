@@ -89,6 +89,21 @@
 .nameCell {
   font-weight: 600;
 }
+.renameInput {
+  width: 100%;
+  min-width: 140px;
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+}
+.renameInput:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .muted {
   color: var(--text-3);
 }

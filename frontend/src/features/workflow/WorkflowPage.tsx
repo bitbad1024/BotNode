@@ -6,6 +6,7 @@ import {
   deleteWorkflow,
   listWorkflows,
   publishWorkflow,
+  renameWorkflow,
   type WorkflowData,
 } from './workflowApi'
 import { ApiRequestError } from '../../lib/http'
@@ -47,6 +48,8 @@ export default function WorkflowPage() {
   const [busy, setBusy] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [renameId, setRenameId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -88,6 +91,23 @@ export default function WorkflowPage() {
       pushToast('success', '工作流已删除')
       setConfirmId(null)
       await load()
+    } catch (err) {
+      pushToast('error', describe(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function commitRename(id: string) {
+    const value = renameValue.trim()
+    const current = items.find((w) => w.id === id)?.name
+    setRenameId(null)
+    if (!value || value === current) return
+    setBusy(true)
+    try {
+      const { data } = await renameWorkflow(id, value)
+      pushToast('success', `已改名为「${data.name}」`)
+      setItems((list) => list.map((w) => (w.id === id ? data : w)))
     } catch (err) {
       pushToast('error', describe(err))
     } finally {
@@ -176,7 +196,25 @@ export default function WorkflowPage() {
                 const confirming = confirmId === w.id
                 return (
                   <tr key={w.id}>
-                    <td className={styles.nameCell}>{w.name}</td>
+                    <td className={styles.nameCell}>
+                      {renameId === w.id ? (
+                        <input
+                          autoFocus
+                          className={styles.renameInput}
+                          value={renameValue}
+                          maxLength={128}
+                          disabled={busy}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void commitRename(w.id)
+                            if (e.key === 'Escape') setRenameId(null)
+                          }}
+                          onBlur={() => setRenameId(null)}
+                        />
+                      ) : (
+                        w.name
+                      )}
+                    </td>
                     <td>
                       <span className={`chip ${st.cls}`}>{st.text}</span>
                     </td>
@@ -192,6 +230,16 @@ export default function WorkflowPage() {
                         >
                           <IconEdit size={14} />
                           编辑
+                        </button>
+                        <button
+                          className="btn"
+                          disabled={busy || renameId === w.id}
+                          onClick={() => {
+                            setRenameId(w.id)
+                            setRenameValue(w.name)
+                          }}
+                        >
+                          重命名
                         </button>
                         <button
                           className="btn"
