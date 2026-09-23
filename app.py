@@ -341,6 +341,9 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         )
         _api_task = asyncio.create_task(_api_server.serve(), name="api")
 
+        # 启动定时任务调度器：工作流的 time-trigger 节点靠它到点触发
+        await scheduler.start()
+
         # 等停机：OneBot 起监听并一直跑，主协程就停在这一行（端口被占等当场报错退出）。
         # 服务都在后台任务里，不需要再手搓一个"业务循环"；Ctrl+C 取消本协程同样走到下面收尾。
         try:

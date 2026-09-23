@@ -28,6 +28,8 @@ from ...common.errors import ApiError, ErrorCode
 from ...common.models import ApiResponse
 from ...logging import api_logger
 from ...services.auth.models import CurrentUser
+from nacho.core.scheduler import scheduler
+from nacho.workflow.runtime import run_published_workflow
 from nacho.workflow import (
     WorkflowNameConflict,
     canonical_graph_json,
@@ -307,6 +309,8 @@ async def publish_workflow(
             f"没有版本 {target_version}",
             status_code=status.HTTP_404_NOT_FOUND,
         )
+    # 发布即生效：跑一遍已发布版本的图，让 time-trigger 等节点把任务登记到调度器
+    await run_published_workflow(record.id, target_version, store, scheduler)
     _audit(
         "工作流版本已发布",
         owner_id=record.owner_id,
