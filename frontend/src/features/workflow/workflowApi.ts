@@ -11,7 +11,6 @@ export type NodeType =
   | 'http'
   | 'condition'
   | 'task'
-  | 'time-trigger'
   | 'log'
   | 'test'
 
@@ -110,9 +109,9 @@ export function deleteWorkflow(id: string) {
   return http.del<void>(`/workflows/${encodeURIComponent(id)}`)
 }
 
-/** POST /workflows/{id}/versions：保存一版；校验不通过返回 valid=false，不写库。 */
+/** POST /workflows/{id}/versions：保存一版；校验不通过返回 200 + 校验报告（valid=false），不写库。 */
 export function saveVersion(id: string, graph: WorkflowGraph, note = '') {
-  return http.post<SaveVersionResultData, { graph: WorkflowGraph; note: string }>(
+  return http.post<SaveVersionResultData | ValidationReport, { graph: WorkflowGraph; note: string }>(
     `/workflows/${encodeURIComponent(id)}/versions`,
     { graph, note },
   )

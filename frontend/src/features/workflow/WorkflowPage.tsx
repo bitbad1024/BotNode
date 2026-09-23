@@ -114,8 +114,8 @@ export default function WorkflowPage() {
         <div>
           <h2 className={styles.title}>工作流</h2>
           <p className={styles.desc}>
-            用节点 + 连线编排自动化流程：开始 / 时间触发 / 日志 / 测试等节点拖到画布上，
-            校验通过后保存版本，发布即生效。
+            用节点 + 连线编排自动化流程：开始节点支持时间触发（cron）与消息触发，
+            搭配日志 / 测试等节点，校验通过后保存版本，发布即生效。
           </p>
         </div>
         <button className="btn" onClick={() => void load()} disabled={loading}>
