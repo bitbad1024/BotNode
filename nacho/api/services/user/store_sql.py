@@ -12,8 +12,8 @@
     disabled       BOOLEAN      NOT NULL DEFAULT FALSE
 
 ``roles`` 在库里是 JSON 字符串，进出都转成 ``tuple[str, ...]``；其余字段直接对应
-:class:`~nacho.api.services.user.models.UserRecord`。本类只负责「查」（外加建表 / 种演示账号），
-没有增删改接口——真要管账号，照同一份协议另接即可。
+:class:`~nacho.api.services.user.models.UserRecord`。本类负责「查」与「注册那一笔新增」（外加
+建表 / 种演示账号）——改资料 / 停用 / 删除还没有：真要管账号，照同一份协议另接即可。
 
 引擎由外部注入（:class:`AsyncEngine`）：本模块不建引擎、不读配置，连接参数归入口层管；
 会话按「一次查询一个会话」开，用完即关。
@@ -25,10 +25,12 @@ from collections.abc import Iterable
 from typing import cast
 
 from sqlalchemy import Column, Text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ...common.errors import AccountAlreadyExistsError
 from .demo import DEMO_USERS
 from .models import UserRecord
 from .protocols import PasswordHasher
@@ -127,6 +129,37 @@ class SqlUserStore:
                 )
             await session.commit()
             return len(DEMO_USERS)
+
+    # ------------------------------------------------------------------ 新增
+    async def add(
+        self, *, account: str, password_hash: str, nickname: str = ""
+    ) -> UserRecord:
+        """新增一个账号（注册那一笔写入）；账号已被占用抛 :class:`AccountAlreadyExistsError`。
+
+        ``id`` 按 ``u-<账号>`` 生成（与 :meth:`seed_demo` 同一套：账号本身唯一，id 自然唯一）。
+        密码只进哈希 —— 明文到不了这一层。
+
+        唯一约束才是「同账号只能注册一次」的最终裁判：并发下两个请求同时注册同一个账号，服务层
+        先查的那一遍拦不住，由库抛 ``IntegrityError``，这里翻成那个 409 的异常。
+
+        不用手动 rollback：冲突是在 **flush** 阶段炸的，SQLAlchemy 抛异常之前已经把事务回滚了
+        （``Session._flush`` 的 except 分支），这里再回滚一次是空转；异常立刻抛出这个块，
+        ``async with`` 退出时 ``close()``，连接归还连接池时池也会 rollback。
+        """
+        async with self._sessions() as session:
+            row = UserTable(
+                id=f"u-{account}",
+                account=account,
+                password_hash=password_hash,
+                nickname=nickname,
+            )
+            session.add(row)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                raise AccountAlreadyExistsError() from exc
+            # 提交成功后才转记录（会话是 expire_on_commit=False，读属性不会再查一次库）
+            return _to_record(row)
 
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:

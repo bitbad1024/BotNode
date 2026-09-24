@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from .codes import ErrorCode, HttpStatus
 from .exceptions import (
+    AccountAlreadyExistsError,
     AccountDisabledError,
     ApiError,
     InternalError,
@@ -48,6 +49,7 @@ __all__ = [
     "ValidationError",
     "InvalidCredentialsError",
     "AccountDisabledError",
+    "AccountAlreadyExistsError",
     "UnauthorizedError",
     "TokenInvalidError",
     "TokenExpiredError",

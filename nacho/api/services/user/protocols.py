@@ -41,6 +41,19 @@ class UserStore(Protocol):
         """
         ...
 
+    async def add(
+        self, *, account: str, password_hash: str, nickname: str = ""
+    ) -> UserRecord:
+        """新增一个账号（注册用），返回落库后的记录。
+
+        ``password_hash`` 是**已经算好**的哈希（明文密码不进这一层）；``id`` 由实现自己生成。
+
+        账号已被占用时抛
+        :class:`~nacho.api.common.errors.AccountAlreadyExistsError`：实现要在写库时兜住唯一约束，
+        并发下两个请求同时注册同一个账号，出来的也得是这个异常，而不是数据库的冲突错误。
+        """
+        ...
+
 
 @runtime_checkable
 class PasswordHasher(Protocol):

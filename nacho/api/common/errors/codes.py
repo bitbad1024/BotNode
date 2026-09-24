@@ -20,6 +20,8 @@ class ErrorCode(StrEnum):
     INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
     #: 账号被停用
     ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
+    #: 注册时这个账号已被占用（账号唯一，同账号只能注册一次）
+    ACCOUNT_ALREADY_EXISTS = "ACCOUNT_ALREADY_EXISTS"
     #: 没带令牌 / 令牌用不了
     UNAUTHORIZED = "UNAUTHORIZED"
     #: 令牌被改过 / 不是本服务签的

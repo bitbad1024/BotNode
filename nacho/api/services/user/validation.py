@@ -26,6 +26,9 @@ ACCOUNT_MAX_LENGTH: Final[int] = 32
 #: 密码长度要求；只限制长度，强度（要几种字符）交给业务自己加
 PASSWORD_MIN_LENGTH: Final[int] = 8
 PASSWORD_MAX_LENGTH: Final[int] = 128
+#: 昵称长度要求（库里列宽 128，这里按「显示名」收得更紧；字数按字符数算，中文也算 1 个）
+NICKNAME_MIN_LENGTH: Final[int] = 1
+NICKNAME_MAX_LENGTH: Final[int] = 32
 
 #: 账号允许的字符集：字母、数字、下划线、点、短横线
 _ACCOUNT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -55,7 +58,19 @@ def _check_password(value: SecretStr) -> SecretStr:
     return value
 
 
+def _check_nickname(value: str) -> str:
+    """昵称：去两端空白后查长度；**不管字符集**（叫什么名字不该由正则来管）。"""
+    nickname: str = value.strip()
+    if not NICKNAME_MIN_LENGTH <= len(nickname) <= NICKNAME_MAX_LENGTH:
+        raise ValueError(
+            f"昵称长度要在 {NICKNAME_MIN_LENGTH}-{NICKNAME_MAX_LENGTH} 之间，收到 {len(nickname)}"
+        )
+    return nickname
+
+
 #: 账号：去空白 + 长度 + 字符集
 Account: TypeAlias = Annotated[str, AfterValidator(_check_account)]
 #: 密码：``SecretStr`` + 长度
 Password: TypeAlias = Annotated[SecretStr, AfterValidator(_check_password)]
+#: 昵称：去空白 + 长度
+Nickname: TypeAlias = Annotated[str, AfterValidator(_check_nickname)]

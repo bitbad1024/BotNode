@@ -30,9 +30,12 @@ from .store_sql import SqlUserStore
 from .validation import (
     ACCOUNT_MAX_LENGTH,
     ACCOUNT_MIN_LENGTH,
+    NICKNAME_MAX_LENGTH,
+    NICKNAME_MIN_LENGTH,
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
     Account,
+    Nickname,
     Password,
 )
 
@@ -46,8 +49,11 @@ __all__ = [
     "Pbkdf2PasswordHasher",
     "Account",
     "Password",
+    "Nickname",
     "ACCOUNT_MIN_LENGTH",
     "ACCOUNT_MAX_LENGTH",
     "PASSWORD_MIN_LENGTH",
     "PASSWORD_MAX_LENGTH",
+    "NICKNAME_MIN_LENGTH",
+    "NICKNAME_MAX_LENGTH",
 ]
