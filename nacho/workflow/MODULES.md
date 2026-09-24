@@ -25,8 +25,7 @@ nacho/workflow/
 │   ├── test.py          内置：test（回显，画布联调用）
 │   ├── constant.py      内置：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
-│   ├── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
-│   └── time_trigger.py  兼容：旧版 time-trigger 类型（历史版本快照），行为同 start 的时间触发
+│   └── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点（校验器与运行器共用同一份）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行（SimpleWorkflowRunner）
 └── runtime.py       运行时：加载已发布版本的图并执行（时间触发的 start 到点后走它）
@@ -100,7 +99,6 @@ store ──────────────► models
 | `constant.py` | **常量**：config 里每一个键就是一个常量（键名 = 变量名），执行时原样产出，下游连线后用 `{{名字}}` 读 | 一组「名字 -> 值」，直接平铺在 config 上；至少要有一个，键名必须能当变量名（自注册校验器） |
 | `http.py` | 发一次 HTTP 请求 | **`url`**、**`method`**（枚举由自注册校验器把）、`timeout`（缺省 10，注册默认值）、`headers`、`body` |
 | `declared.py` | 占位声明 gateway / approval / expression / condition / task：规则可校验、执行器未实现 | approval 的 **`assignee`**、expression 的 **`expression`**、condition 的 **`condition`** |
-| `time_trigger.py` | 兼容：旧版 `time-trigger` 类型（历史版本快照），行为同 `start` 的时间触发 | `cron`（复用 start 的时间校验器） |
 
 > **字面量尽量走常量节点**：地址、模板、固定文案这类字符串写在 `constant` 节点上，谁要用就连
 > 一根线过来用 `{{名字}}` 读 —— 别把同一串值复制进每个节点的 config（改一次要翻整张图）。常量节点

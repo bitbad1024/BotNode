@@ -271,12 +271,10 @@ function emptyGraph(): WorkflowGraph {
 }
 
 /**
- * 旧版图迁移 / 后端形态归一：
- * 1. 独立的 time-trigger 节点已并入 start（config.trigger=time）。旧图典型结构是
- *    start → time-trigger → ...，直接转换会出现两个 start 违反唯一入口，所以同时把
- *    前置的旧 start 合并掉：旧 start → 迁移节点的边删除，旧 start 的其他出边改接。
- * 2. 后端边端口字段是 source_port/target_port，统一成前端用的驼峰写法。
- * 用户暂存 / 重新保存后后端快照也完成迁移。
+ * 后端形态归一：边的端口字段后端是 source_port/target_port，统一成前端用的驼峰写法。
+ *
+ * （旧版独立 time-trigger 节点并入 start 的迁移已随旧快照一起删掉了 —— 现在只可能是
+ * start + config.trigger=time，见 nodes/start.py。）
  */
 function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
   const normEdge = (e: WorkflowEdge): WorkflowEdge => ({
@@ -286,39 +284,7 @@ function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
     targetPort: e.targetPort ?? e.target_port,
   })
 
-  const migratedIds = new Set<string>()
-  const nodes = g.nodes.map((n) => {
-    if (n.type !== 'time-trigger') return n
-    migratedIds.add(n.id)
-    const config: Record<string, unknown> = {
-      trigger: 'time',
-      cron: typeof n.config.cron === 'string' ? n.config.cron : '*/5 * * * *',
-    }
-    if (n.config.name !== undefined) config.name = n.config.name
-    return { ...n, type: 'start' as const, config }
-  })
-  if (migratedIds.size === 0) {
-    return { nodes, edges: g.edges.map(normEdge) }
-  }
-
-  // 找直接连到迁移节点的旧 start（它们已被迁移节点取代）
-  const rewire = new Map<string, string>() // 旧 start id -> 迁移节点 id
-  for (const e of g.edges) {
-    if (!migratedIds.has(e.target)) continue
-    const src = g.nodes.find((n) => n.id === e.source)
-    if (src && src.type === 'start') rewire.set(src.id, e.target)
-  }
-
-  const edges = g.edges
-    // 删掉「旧 start → 迁移节点」这条边（迁移节点自己就是入口了）
-    .filter((e) => !(rewire.has(e.source) && migratedIds.has(e.target)))
-    // 旧 start 的其他出边改接到迁移节点
-    .map((e) => {
-      const to = rewire.get(e.source)
-      return to ? { ...normEdge(e), source: to } : normEdge(e)
-    })
-
-  return { nodes: nodes.filter((n) => !rewire.has(n.id)), edges }
+  return { nodes: g.nodes, edges: g.edges.map(normEdge) }
 }
 
 /**
