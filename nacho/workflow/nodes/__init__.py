@@ -7,6 +7,7 @@
       end.py             内置节点：end（图终点）
       log.py             内置节点：log（按级别写业务日志）
       test.py            内置节点：test（回显，画布联调用）
+      constant.py        内置节点：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
       time_trigger.py    兼容：旧版 time-trigger 类型（历史版本快照），行为同 start 的时间触发
       declared.py        占位：gateway / approval / expression / condition / task（规则已登记、
@@ -53,6 +54,7 @@ from .base import (
     render_variables,
 )
 from . import declared  # noqa: F401  # import 即完成占位类型登记
+from .constant import exec_constant, validate_constant_node
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http
 from .log import LOG_LEVELS, exec_log
@@ -96,6 +98,8 @@ __all__ = [
     "exec_end",
     "exec_log",
     "LOG_LEVELS",
+    "exec_constant",
+    "validate_constant_node",
     "exec_test",
     "exec_http",
     "HTTP_METHODS",
