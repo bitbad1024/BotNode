@@ -19,15 +19,21 @@ export interface WorkflowNode {
   type: NodeType | string
   config: Record<string, unknown>
   outputs: string[]
+  /** 画布坐标：随图持久化（后端快照 / 暂存区都存），但不参与版本 hash */
+  x?: number | null
+  y?: number | null
 }
 
 export interface WorkflowEdge {
   source: string
   target: string
-  /** 输出端口 ID（前端连线用；后端 extra=ignore 自动丢弃） */
+  /** 输出端口 ID（前端连线用；后端会持久化到版本快照里） */
   sourcePort?: string
   /** 输入端口 ID */
   targetPort?: string
+  /** 后端返回的下划线写法，normalizeGraph 会归一到驼峰字段 */
+  source_port?: string
+  target_port?: string
 }
 
 export interface WorkflowGraph {
@@ -57,7 +63,17 @@ export interface WorkflowData {
   status: 'draft' | 'published'
   current_version: number
   published_version: number
+  /** 暂存区最近保存时间（0 = 没暂存过） */
+  draft_updated_at: number
+  /** 编辑器当前指向：draft = 暂存区，version = 最新提交版本 */
+  current_ref: 'draft' | 'version'
   created_at: number
+  updated_at: number
+}
+
+export interface WorkflowDraftData {
+  /** 暂存图；从没暂存过为 null */
+  graph: WorkflowGraph | null
   updated_at: number
 }
 
@@ -109,12 +125,25 @@ export function deleteWorkflow(id: string) {
   return http.del<void>(`/workflows/${encodeURIComponent(id)}`)
 }
 
-/** POST /workflows/{id}/versions：保存一版；校验不通过返回 200 + 校验报告（valid=false），不写库。 */
+/** POST /workflows/{id}/versions：提交一版；校验不通过返回 200 + 校验报告（valid=false），不写库。 */
 export function saveVersion(id: string, graph: WorkflowGraph, note = '') {
   return http.post<SaveVersionResultData | ValidationReport, { graph: WorkflowGraph; note: string }>(
     `/workflows/${encodeURIComponent(id)}/versions`,
     { graph, note },
   )
+}
+
+/** PUT /workflows/{id}/draft：暂存编辑中的图（不做业务校验，半张图也能存）。 */
+export function saveDraft(id: string, graph: WorkflowGraph) {
+  return http.put<WorkflowData, { graph: WorkflowGraph }>(
+    `/workflows/${encodeURIComponent(id)}/draft`,
+    { graph },
+  )
+}
+
+/** GET /workflows/{id}/draft：读暂存区（没暂存过时 graph 为 null）。 */
+export function getDraft(id: string) {
+  return http.get<WorkflowDraftData>(`/workflows/${encodeURIComponent(id)}/draft`)
 }
 
 /** GET /workflows/{id}/versions：版本历史（倒序，最新在前）。 */

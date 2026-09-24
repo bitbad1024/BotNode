@@ -1,4 +1,9 @@
-/** 工作流画布编辑器：节点拖拽 + 类型化端口连线 + 配置 + 校验 + 保存版本。
+/** 工作流画布编辑器：节点拖拽 + 类型化端口连线 + 配置 + 校验 + 暂存 / 提交版本 / 发布。
+ *
+ * 工作流分三层：
+ * - 暂存区（draft）：编辑中的图，随时「暂存」，不做校验，坐标等 UI 字段也存在里面；
+ * - 版本（version）：校验通过后「保存版本」生成不可变快照，坐标不参与 hash；
+ * - 发布（published）：发布只挪指针，服务启动时统一把已发布工作流载入调度器。
  *
  * 端口类型约定：
  * - trigger（触发 / 控制流）：决定"什么时候执行下一个节点"，绿色
@@ -7,19 +12,23 @@
  * 每种节点有固定的输入/输出端口集合（见 NODE_TYPES），连线时类型必须匹配。
  * 常量输入（config 字段）显示为节点底部的标签条，不可连线，在右侧配置面板编辑。
  *
- * 坐标存 localStorage（后端 WorkflowNode extra=ignore，不存 UI 字段）。
+ * 节点坐标直接存在节点 x/y 上随图提交；旧版坐标在 localStorage 里，加载时自动迁移。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  getDraft,
   getVersion,
+  getWorkflow,
   listVersions,
   publishWorkflow,
+  saveDraft,
   saveVersion,
   validateGraph,
   type NodeType,
   type ValidationIssue,
   type ValidationReport,
   type SaveVersionResultData,
+  type WorkflowData,
   type WorkflowEdge,
   type WorkflowGraph,
   type WorkflowNode,
@@ -248,12 +257,21 @@ function emptyGraph(): WorkflowGraph {
 }
 
 /**
- * 旧版图迁移：独立的 time-trigger 节点已并入 start（config.trigger=time）。
- * 旧图典型结构是 start → time-trigger → ...，直接转换会出现两个 start 违反唯一入口，
- * 所以同时把前置的旧 start 合并掉：旧 start → 迁移节点的边删除，旧 start 的其他出边
- * 改接到迁移节点。用户重新保存后后端快照也完成迁移。
+ * 旧版图迁移 / 后端形态归一：
+ * 1. 独立的 time-trigger 节点已并入 start（config.trigger=time）。旧图典型结构是
+ *    start → time-trigger → ...，直接转换会出现两个 start 违反唯一入口，所以同时把
+ *    前置的旧 start 合并掉：旧 start → 迁移节点的边删除，旧 start 的其他出边改接。
+ * 2. 后端边端口字段是 source_port/target_port，统一成前端用的驼峰写法。
+ * 用户暂存 / 重新保存后后端快照也完成迁移。
  */
 function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
+  const normEdge = (e: WorkflowEdge): WorkflowEdge => ({
+    source: e.source,
+    target: e.target,
+    sourcePort: e.sourcePort ?? e.source_port,
+    targetPort: e.targetPort ?? e.target_port,
+  })
+
   const migratedIds = new Set<string>()
   const nodes = g.nodes.map((n) => {
     if (n.type !== 'time-trigger') return n
@@ -265,7 +283,9 @@ function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
     if (n.config.name !== undefined) config.name = n.config.name
     return { ...n, type: 'start' as const, config }
   })
-  if (migratedIds.size === 0) return g
+  if (migratedIds.size === 0) {
+    return { nodes, edges: g.edges.map(normEdge) }
+  }
 
   // 找直接连到迁移节点的旧 start（它们已被迁移节点取代）
   const rewire = new Map<string, string>() // 旧 start id -> 迁移节点 id
@@ -281,30 +301,41 @@ function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
     // 旧 start 的其他出边改接到迁移节点
     .map((e) => {
       const to = rewire.get(e.source)
-      return to ? { ...e, source: to } : e
+      return to ? { ...normEdge(e), source: to } : normEdge(e)
     })
 
   return { nodes: nodes.filter((n) => !rewire.has(n.id)), edges }
+}
+
+/**
+ * 坐标迁移：旧版坐标只存在 localStorage，节点自身没 x/y。加载旧图时把本地坐标
+ * 补到节点上（下次暂存 / 提交就随图持久化到后端）；节点已带坐标的以图里的为准。
+ */
+function withLegacyPositions(
+  g: WorkflowGraph,
+  legacy: Record<string, { x: number; y: number }>,
+): WorkflowGraph {
+  return {
+    ...g,
+    nodes: g.nodes.map((n) => {
+      if (typeof n.x === 'number' && typeof n.y === 'number') return n
+      const p = legacy[n.id]
+      return p ? { ...n, x: p.x, y: p.y } : n
+    }),
+  }
 }
 
 function posKey(workflowId: string): string {
   return `nacho.workflow.pos.${workflowId}`
 }
 
+/** 读旧版本地坐标（仅用于迁移；新坐标随图存取，不再写 localStorage）。 */
 function loadPositions(workflowId: string): Record<string, { x: number; y: number }> {
   try {
     const raw = localStorage.getItem(posKey(workflowId))
     return raw ? (JSON.parse(raw) as Record<string, { x: number; y: number }>) : {}
   } catch {
     return {}
-  }
-}
-
-function savePositions(workflowId: string, positions: Record<string, { x: number; y: number }>) {
-  try {
-    localStorage.setItem(posKey(workflowId), JSON.stringify(positions))
-  } catch {
-    /* ignore */
   }
 }
 
@@ -337,12 +368,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const { pushToast } = useToast()
 
   const [graph, setGraph] = useState<WorkflowGraph>(emptyGraph())
-  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [report, setReport] = useState<ValidationReport | null>(null)
   const [versions, setVersions] = useState<WorkflowVersionData[]>([])
+  /** 工作流定义：带 current_ref（当前指向暂存区还是版本）与版本指针 */
+  const [definition, setDefinition] = useState<WorkflowData | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [drafting, setDrafting] = useState(false)
   const [validating, setValidating] = useState(false)
   const [showPalette, setShowPalette] = useState(true)
   const [showInspector, setShowInspector] = useState(true)
@@ -364,13 +397,35 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   } | null>(null)
   const [connectCursor, setConnectCursor] = useState<{ x: number; y: number } | null>(null)
 
-  const persistPositions = useCallback(
-    (next: Record<string, { x: number; y: number }>) => {
-      setPositions(next)
-      if (workflowId) savePositions(workflowId, next)
-    },
-    [workflowId],
+  /** 旧版本地坐标（仅迁移用一次）：节点没带 x/y 时兜底布局 */
+  const legacyPositionsRef = useRef<Record<string, { x: number; y: number }>>(
+    workflowId ? loadPositions(workflowId) : {},
   )
+
+  /**
+   * 坐标直接从节点 x/y 派生（渲染 / 框选 / 连线都读它）；
+   * 没坐标的旧节点用 localStorage 里的遗留坐标兜底。
+   */
+  const positions = useMemo(() => {
+    const map: Record<string, { x: number; y: number }> = {}
+    for (const n of graph.nodes) {
+      if (typeof n.x === 'number' && typeof n.y === 'number') {
+        map[n.id] = { x: n.x, y: n.y }
+      } else {
+        const legacy = legacyPositionsRef.current[n.id]
+        if (legacy) map[n.id] = legacy
+      }
+    }
+    return map
+  }, [graph.nodes])
+
+  /** 拖节点：直接改节点 x/y（随暂存 / 提交一起持久化）。 */
+  const moveNode = useCallback((id: string, x: number, y: number) => {
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === id ? { ...n, x, y } : n)),
+    }))
+  }, [])
 
   useEffect(() => {
     if (!workflowId) return
@@ -378,18 +433,29 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     void (async () => {
       setLoading(true)
       try {
+        // 定义里的 current_ref 决定打开时看暂存区还是已提交版本
+        const { data: def } = await getWorkflow(workflowId)
         const { data: vers } = await listVersions(workflowId)
-        if (!cancelled) {
-          setVersions(vers)
-          if (vers.length > 0) {
-            const { data: latest } = await getVersion(workflowId, vers[0].version)
-            if (!cancelled) {
-              setGraph(normalizeGraph(latest.graph))
-              persistPositions(loadPositions(workflowId))
-            }
-          } else {
-            persistPositions(loadPositions(workflowId))
+        if (cancelled) return
+        setDefinition(def)
+        setVersions(vers)
+
+        let loaded: WorkflowGraph | null = null
+        if (def.current_ref === 'draft') {
+          const { data: draft } = await getDraft(workflowId)
+          if (draft.graph) loaded = draft.graph
+        }
+        // 指针指向版本 / 暂存区为空但已有提交：读对应版本快照（缺省读最新版）
+        if (!loaded && def.current_version > 0) {
+          const wantVersion =
+            def.current_ref === 'version' ? def.current_version : vers[0]?.version
+          if (wantVersion) {
+            const { data: snapshot } = await getVersion(workflowId, wantVersion)
+            loaded = snapshot.graph
           }
+        }
+        if (!cancelled && loaded) {
+          setGraph(withLegacyPositions(normalizeGraph(loaded), legacyPositionsRef.current))
         }
       } catch (err) {
         pushToast('error', err instanceof ApiRequestError ? err.message : '加载失败')
@@ -398,7 +464,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       }
     })()
     return () => { cancelled = true }
-  }, [workflowId, persistPositions, pushToast])
+  }, [workflowId, pushToast])
 
   // ---- 节点操作 ----
   const addNode = useCallback(
@@ -406,15 +472,17 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       const def = nodeDef(type)
       const id = uid(type)
       const node: WorkflowNode = {
-        id, type: def.type, config: { ...def.defaults }, outputs: [],
+        id,
+        type: def.type,
+        config: { ...def.defaults },
+        outputs: [],
+        x: 80 + Math.random() * 200,
+        y: 80 + Math.random() * 120,
       }
-      const x = 80 + Math.random() * 200
-      const y = 80 + Math.random() * 120
       setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }))
-      persistPositions({ ...positions, [id]: { x, y } })
       setSelectedId(id)
     },
-    [positions, persistPositions],
+    [],
   )
 
   const deleteNode = useCallback(
@@ -423,12 +491,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         nodes: g.nodes.filter((n) => n.id !== id),
         edges: g.edges.filter((e) => e.source !== id && e.target !== id),
       }))
-      const next = { ...positions }
-      delete next[id]
-      persistPositions(next)
       if (selectedId === id) setSelectedId(null)
     },
-    [positions, persistPositions, selectedId],
+    [selectedId],
   )
 
   const deleteSelected = useCallback(() => {
@@ -437,11 +502,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       nodes: g.nodes.filter((n) => !selectedIds.has(n.id)),
       edges: g.edges.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)),
     }))
-    const next = { ...positions }
-    for (const id of selectedIds) delete next[id]
-    persistPositions(next)
     setSelectedIds(new Set())
-  }, [selectedIds, positions, persistPositions])
+  }, [selectedIds])
 
   // Delete 键批量删除
   useEffect(() => {
@@ -569,10 +631,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
     if (dragRef.current) {
       const { nodeId, offsetX, offsetY } = dragRef.current
-      persistPositions({
-        ...positions,
-        [nodeId]: { x: x - offsetX, y: y - offsetY },
-      })
+      moveNode(nodeId, x - offsetX, y - offsetY)
     }
     if (connectRef.current) {
       setConnectCursor({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom })
@@ -666,7 +725,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     setConnectCursor(null)
   }
 
-  // ---- 校验 / 保存 / 发布 ----
+  // ---- 暂存 / 校验 / 提交版本 / 发布 ----
   const onValidate = useCallback(async () => {
     setValidating(true)
     try {
@@ -681,6 +740,22 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
   }, [graph, pushToast])
 
+  /** 暂存：不校验，编辑到一半也能存；存完指针留在暂存区。 */
+  const onDraft = useCallback(async () => {
+    if (!workflowId) return
+    setDrafting(true)
+    try {
+      const { data } = await saveDraft(workflowId, graph)
+      setDefinition(data)
+      pushToast('success', '已暂存')
+    } catch (err) {
+      pushToast('error', err instanceof ApiRequestError ? err.message : '暂存失败')
+    } finally {
+      setDrafting(false)
+    }
+  }, [workflowId, graph, pushToast])
+
+  /** 提交版本：先校验后写不可变快照，成功后指针切到版本侧。 */
   const onSave = useCallback(async () => {
     if (!workflowId) return
     setSaving(true)
@@ -689,19 +764,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       // 校验不过：后端返回 200 + 校验报告（没有 version/created），不写库
       if ('valid' in data) {
         setReport(data)
-        pushToast('error', `校验未通过（${data.stage}），未保存，请修正后重试`)
+        pushToast('error', `校验未通过（${data.stage}），未提交，请修正后重试`)
         return
       }
       const result: SaveVersionResultData = data
       if (!result.created) {
         pushToast('info', '内容未变，未产生新版本')
       } else {
-        pushToast('success', `已保存 v${result.version.version}`)
+        pushToast('success', `已提交 v${result.version.version}`)
       }
+      setDefinition(result.workflow)
       setVersions((v) => [result.version, ...v.filter((x) => x.version !== result.version.version)])
       setReport(null)
     } catch (err) {
-      pushToast('error', err instanceof ApiRequestError ? err.message : '保存失败')
+      pushToast('error', err instanceof ApiRequestError ? err.message : '提交失败')
     } finally {
       setSaving(false)
     }
@@ -710,8 +786,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const onPublish = useCallback(async () => {
     if (!workflowId) return
     try {
-      await publishWorkflow(workflowId)
-      pushToast('success', '最新版本已发布')
+      const { data } = await publishWorkflow(workflowId)
+      setDefinition(data)
+      pushToast('success', '最新版本已发布（重启服务后生效）')
     } catch (err) {
       pushToast('error', err instanceof ApiRequestError ? err.message : '发布失败')
     }
@@ -777,16 +854,30 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         </button>
         <div className={styles.toolbarTitle}>
           工作流编辑器
-          {versions[0] && <span className={styles.verTag}>当前 v{versions[0].version}</span>}
+          {definition?.current_ref === 'draft' ? (
+            <span className={styles.verTag} title="当前查看 / 编辑的是暂存区">
+              暂存区{definition.draft_updated_at ? '（已暂存）' : ''}
+            </span>
+          ) : (
+            definition && definition.current_version > 0 && (
+              <span className={styles.verTag} title="当前查看的是已提交版本">
+                当前 v{definition.current_version}
+              </span>
+            )
+          )}
         </div>
         <div className={styles.toolbarActions}>
+          <button className="btn" onClick={() => void onDraft()} disabled={drafting}>
+            <IconSave size={14} />
+            {drafting ? '暂存中…' : '暂存'}
+          </button>
           <button className="btn" onClick={() => void onValidate()} disabled={validating}>
             <IconCheck size={14} />
             {validating ? '校验中…' : '校验'}
           </button>
           <button className={`btn ${styles.primary}`} onClick={() => void onSave()} disabled={saving}>
             <IconSave size={14} />
-            {saving ? '保存中…' : '保存版本'}
+            {saving ? '提交中…' : '保存版本'}
           </button>
           <button className="btn" onClick={() => void onPublish()}>
             发布

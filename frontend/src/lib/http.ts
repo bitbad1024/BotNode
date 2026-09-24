@@ -168,6 +168,9 @@ export const http = {
     request<T>(instance.get(url, config)),
   post: <T, B = unknown>(url: string, body?: B) =>
     request<T>(instance.post(url, body)),
+  /** PUT：整份覆盖式更新（如工作流暂存区）用。 */
+  put: <T, B = unknown>(url: string, body?: B) =>
+    request<T>(instance.put(url, body)),
   /** DELETE：令牌吊销、踢下线这类动作用；查询串直接拼在 url 上。 */
   del: <T>(url: string) => request<T>(instance.delete(url)),
   /** PATCH：改单个字段（如令牌启用 / 停用）用。 */

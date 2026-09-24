@@ -1,4 +1,4 @@
-"""工作流管理的 HTTP 入口：定义增删查改 + 版本保存 / 历史 / 发布 + 入库前校验。
+"""工作流管理的 HTTP 入口：定义增删查改 + 暂存 / 版本保存 / 历史 / 发布 + 入库前校验。
 
     POST   <prefix>/workflows/validate             只校验不入库（画布里随时试）
     POST   <prefix>/workflows                      新建空工作流（只要名字）
@@ -6,7 +6,9 @@
     GET    <prefix>/workflows/{id}                 定义详情
     PATCH  <prefix>/workflows/{id}                 改名
     DELETE <prefix>/workflows/{id}                 删除（连同全部版本）
-    POST   <prefix>/workflows/{id}/versions        校验通过后保存一个版本（不过不写库）
+    PUT    <prefix>/workflows/{id}/draft           暂存编辑中的图（不校验，指针切到 draft）
+    GET    <prefix>/workflows/{id}/draft           读暂存区（没暂存过 graph=null）
+    POST   <prefix>/workflows/{id}/versions        校验通过后提交一个版本（不过不写库）
     GET    <prefix>/workflows/{id}/versions        版本历史
     GET    <prefix>/workflows/{id}/versions/{ver}  某个版本快照
     POST   <prefix>/workflows/{id}/publish         发布版本（不传 version = 发布最新版）
@@ -16,22 +18,25 @@
 
 校验失败（图不合法）与请求格式错误不同：前者是**业务结果**，HTTP 200 +
 ``{valid:false, stage, errors}``，前端按节点画红点；后者（字段缺 / 类型错）走全局
-422。保存接口在 ``valid=false`` 时**不写任何数据**。
+422。提交版本接口在 ``valid=false`` 时**不写任何数据**。
+
+发布接口**只挪发布指针**，不立即执行图；已发布工作流在服务启动时统一载入调度器
+（见 :func:`nacho.workflow.runtime.load_published_workflows`），改了定时配置需重启生效。
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from ...common.dependencies import trace_id_of
-from ...common.errors import ApiError, ErrorCode
+from ...common.errors import ApiError, ErrorCode, HttpStatus
 from ...common.models import ApiResponse
 from ...logging import api_logger
 from ...services.auth.models import CurrentUser
-from nacho.core.scheduler import scheduler
-from nacho.workflow.runtime import run_published_workflow
 from nacho.workflow import (
     WorkflowNameConflict,
+    canonical_draft_json,
     canonical_graph_json,
     graph_checksum,
     validate_graph,
@@ -46,6 +51,7 @@ from .requests import (
     CreateWorkflowRequest,
     PublishRequest,
     RenameWorkflowRequest,
+    SaveDraftRequest,
     SaveVersionRequest,
     ValidateRequest,
 )
@@ -53,6 +59,7 @@ from .responses import (
     SaveVersionResultData,
     ValidationReportData,
     WorkflowData,
+    WorkflowDraftData,
     WorkflowVersionData,
 )
 
@@ -186,6 +193,55 @@ async def delete_workflow(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# --------------------------------------------------------------------------- 暂存
+@router.put("/{workflow_id}/draft")
+async def save_draft(
+    workflow_id: str,
+    payload: SaveDraftRequest,
+    request: Request,
+    store: WorkflowStoreDep,
+    user: CurrentUserDep,
+) -> ApiResponse[WorkflowData]:
+    """暂存编辑中的图：**不校验业务内容**（半张图也能存），只要求顶层是 {nodes, edges}。
+
+    存完当前指针切到 ``draft``；之后编辑器打开默认加载暂存区。提交版本走 POST versions。
+    """
+    record = await get_in_scope(store, user, workflow_id)
+    trace_id = trace_id_of(request)
+    try:
+        graph_json = canonical_draft_json(payload.graph)
+    except ValidationError as exc:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR,
+            f"暂存图格式不合法：{exc.errors()[0].get('msg', '类型错误') if exc.errors() else '解析失败'}",
+            status_code=HttpStatus.UNPROCESSABLE_ENTITY,
+        ) from exc
+
+    updated = await store.save_draft(record.id, graph_json)
+    if updated is None:  # get_in_scope 已确认存在；并发被删时走 404
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没有这个工作流", status_code=status.HTTP_404_NOT_FOUND
+        )
+    _audit(
+        "工作流已暂存",
+        owner_id=record.owner_id,
+        workflow_id=record.id,
+        trace_id=trace_id,
+    )
+    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id)
+
+
+@router.get("/{workflow_id}/draft")
+async def get_draft(
+    workflow_id: str,
+    store: WorkflowStoreDep,
+    user: CurrentUserDep,
+) -> ApiResponse[WorkflowDraftData]:
+    """读暂存区；从没暂存过时 ``graph`` 为 null（200，不算错误）。"""
+    record = await get_in_scope(store, user, workflow_id)
+    return ApiResponse(data=WorkflowDraftData.from_record(record))
+
+
 # --------------------------------------------------------------------------- 版本
 @router.post("/{workflow_id}/versions")
 async def save_version(
@@ -293,13 +349,18 @@ async def publish_workflow(
     store: WorkflowStoreDep,
     user: CurrentUserDep,
 ) -> ApiResponse[WorkflowData]:
-    """发布版本：不传 ``version`` 就发布当前最新版本；没存过任何版本 -> 409。"""
+    """发布版本：不传 ``version`` 就发布当前最新版本；没存过任何版本 -> 409。
+
+    发布**只挪发布指针**（status=published + published_version），不在请求里执行图——
+    时间触发的注册在服务启动时统一做（载入所有已发布工作流），避免发布动作本身产生
+    一次副作用执行；改了 cron 等触发配置后重启服务即生效。
+    """
     record = await get_in_scope(store, user, workflow_id)
     target_version = payload.version if payload.version is not None else record.current_version
     if target_version == 0:
         raise ApiError(
             ErrorCode.HTTP_ERROR,
-            "还没有可发布的版本，请先保存图",
+            "还没有可发布的版本，请先提交图",
             status_code=status.HTTP_409_CONFLICT,
         )
     published = await store.publish(record.id, target_version)
@@ -309,8 +370,6 @@ async def publish_workflow(
             f"没有版本 {target_version}",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    # 发布即生效：跑一遍已发布版本的图，让时间触发的开始节点把 cron 任务登记到调度器
-    await run_published_workflow(record.id, target_version, store, scheduler)
     _audit(
         "工作流版本已发布",
         owner_id=record.owner_id,

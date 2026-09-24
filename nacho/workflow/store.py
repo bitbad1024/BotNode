@@ -2,13 +2,16 @@
 
 表结构（类型 / 约束写在 Python 里，DDL 按方言生成，sqlite 与 mariadb 共用一份）::
 
-    workflow_definitions          一个工作流一行（元数据 + 版本指针）
+    workflow_definitions          一个工作流一行（元数据 + 版本指针 + 暂存区）
         id                 VARCHAR(64)  PRIMARY KEY
         owner_id           VARCHAR(64)  INDEX            归属用户（多用户隔离的过滤列）
         name               VARCHAR(128)                  同归属下唯一
         status             VARCHAR(16)  DEFAULT 'draft'  draft / published
-        current_version    INTEGER      DEFAULT 0        最近保存的版本号
+        current_version    INTEGER      DEFAULT 0        最近提交的版本号
         published_version  INTEGER      DEFAULT 0        已发布版本号（0 = 没发布过）
+        draft_graph_json   TEXT         DEFAULT ''       暂存区图（编辑中，未提交）
+        draft_updated_at   FLOAT        DEFAULT 0        暂存区最近保存时间
+        current_ref        VARCHAR(16)  DEFAULT 'draft'  当前指针 draft / version
         created_at / updated_at        FLOAT             Unix 秒
         UNIQUE(owner_id, name)
 
@@ -30,7 +33,7 @@ from __future__ import annotations
 import time
 from uuid import uuid4
 
-from sqlalchemy import Column, Text, UniqueConstraint
+from sqlalchemy import Column, Text, UniqueConstraint, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.sql import func
@@ -74,6 +77,13 @@ class WorkflowDefinitionTable(SQLModel, table=True):
     status: str = Field(default="draft", max_length=16)
     current_version: int = Field(default=0)
     published_version: int = Field(default=0)
+    #: 暂存区图原文（空串 = 没暂存过）；新老库都按可空 / 缺省 '' 建
+    draft_graph_json: str = Field(
+        default="", sa_column=Column(Text(), nullable=False, server_default="")
+    )
+    draft_updated_at: float = Field(default=0.0)
+    #: 编辑器当前指向：draft（暂存区）/ version（已提交版本）
+    current_ref: str = Field(default="draft", max_length=16)
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
 
@@ -103,6 +113,9 @@ def _definition_to_record(row: WorkflowDefinitionTable) -> WorkflowDefinitionRec
         status=row.status,
         current_version=int(row.current_version),
         published_version=int(row.published_version),
+        draft_graph_json=row.draft_graph_json or "",
+        draft_updated_at=float(row.draft_updated_at or 0.0),
+        current_ref=row.current_ref or "draft",
         created_at=float(row.created_at),
         updated_at=float(row.updated_at),
     )
@@ -138,10 +151,29 @@ class SqlWorkflowStore:
         )
 
     # ------------------------------------------------------------------ 启动
+    #: 老库增量补列：列名 -> ALTER TABLE ADD COLUMN 的列定义（sqlite / mariadb 都认）。
+    #: ``create_all`` 不会改已有表，暂存系统这三列对 2026-09 之前建的库属于增量。
+    _DEFINITION_ADDED_COLUMNS: dict[str, str] = {
+        "draft_graph_json": "TEXT NOT NULL DEFAULT ''",
+        "draft_updated_at": "FLOAT DEFAULT 0",
+        "current_ref": "VARCHAR(16) DEFAULT 'draft'",
+    }
+
+    def _migrate_definition_columns(self, conn: object) -> None:
+        """给已存在的 ``workflow_definitions`` 表幂等补新增列（新库 create_all 已建齐）。"""
+        inspector = inspect(conn)
+        existing = {col["name"] for col in inspector.get_columns("workflow_definitions")}
+        for name, ddl in self._DEFINITION_ADDED_COLUMNS.items():
+            if name not in existing:
+                conn.execute(
+                    text(f"ALTER TABLE workflow_definitions ADD COLUMN {name} {ddl}")
+                )
+
     async def ensure_schema(self) -> None:
-        """建表（幂等）：DDL 按方言生成，已有的表跳过。"""
+        """建表（幂等）：DDL 按方言生成，已有的表跳过；再补老库缺失的增量列。"""
         async with self._engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
+            await conn.run_sync(self._migrate_definition_columns)
 
     # ------------------------------------------------------------------ 定义
     async def create(self, owner_id: str, name: str) -> WorkflowDefinitionRecord:
@@ -206,6 +238,27 @@ class SqlWorkflowStore:
                 owner = current.owner_id if current is not None else ""
             raise WorkflowNameConflict(owner, name) from exc
 
+    async def save_draft(
+        self, workflow_id: str, graph_json: str
+    ) -> WorkflowDefinitionRecord | None:
+        """把图存进**暂存区**（覆盖式，不校验内容、不产生版本）。
+
+        暂存后把当前指针切到 ``draft``：编辑器再打开默认看暂存这份。
+        不存在返回 None，由上层报 404。
+        """
+        async with self._sessions() as session:
+            row = await session.get(WorkflowDefinitionTable, workflow_id)
+            if row is None:
+                return None
+            now = time.time()
+            row.draft_graph_json = graph_json
+            row.draft_updated_at = now
+            row.current_ref = "draft"
+            row.updated_at = now
+            session.add(row)
+            await session.commit()
+            return _definition_to_record(row)
+
     async def delete(self, workflow_id: str) -> bool:
         """删定义及其**全部版本**（一个事务）；删过了 / 不存在返回 False。"""
         async with self._sessions() as session:
@@ -238,6 +291,9 @@ class SqlWorkflowStore:
           （前端连点保存、图没动，不产生垃圾版本）；
         * 否则在一个事务里取 ``max(version)+1`` 插快照，并把定义的
           ``current_version`` 指针挪过去，返回 ``(新版本, True)``。
+
+        两种情况都会把当前指针 ``current_ref`` 切到 ``version``：提交之后编辑器默认
+        打开最新提交版本（而不是暂存区）。
         """
         async with self._sessions() as session:
             latest = (
@@ -248,13 +304,18 @@ class SqlWorkflowStore:
                     .limit(1)
                 )
             ).first()
-            if latest is not None and latest.checksum == checksum:
-                return _version_to_record(latest), False
-
             definition_row = await session.get(WorkflowDefinitionTable, definition.id)
             if definition_row is None:
                 # 定义在并发中已被删：不插版本，交给上层按「不存在」处理
                 raise WorkflowError(f"工作流不存在：{definition.id}")
+
+            if latest is not None and latest.checksum == checksum:
+                # 内容未变不新增版本，但这次动作仍是「提交」：指针切到版本侧
+                definition_row.current_ref = "version"
+                definition_row.updated_at = time.time()
+                session.add(definition_row)
+                await session.commit()
+                return _version_to_record(latest), False
 
             next_version = (latest.version + 1) if latest is not None else 1
             row = WorkflowVersionTable(
@@ -269,6 +330,7 @@ class SqlWorkflowStore:
             )
             session.add(row)
             definition_row.current_version = next_version
+            definition_row.current_ref = "version"
             definition_row.updated_at = time.time()
             session.add(definition_row)
             await session.commit()

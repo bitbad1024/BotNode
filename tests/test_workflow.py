@@ -658,6 +658,68 @@ def test_checksum_stable_under_key_order_and_spacing() -> None:
     assert json_loads(first)["nodes"][0]["id"] == "s"
 
 
+def test_checksum_ignores_node_positions_but_snapshot_keeps_them() -> None:
+    """挪动节点坐标不改变摘要（不产生新版本），但规范快照里坐标仍然保留。"""
+    base = {"nodes": [node("s", "start"), node("e", "end")], "edges": [edge("s", "e")]}
+    moved: dict[str, object] = {
+        "nodes": [
+            {**node("s", "start"), "x": 120, "y": 240},
+            {**node("e", "end"), "x": 480, "y": 96},
+        ],
+        "edges": [edge("s", "e")],
+    }
+    assert graph_checksum(moved) == graph_checksum(base)
+
+    snapshot = json_loads(canonical_graph_json(moved))
+    assert snapshot["nodes"][0]["x"] == 120
+    assert snapshot["nodes"][0]["y"] == 240
+    # 再挪一次：摘要依旧相同（坐标字段不进 hash）
+    moved_again = {
+        "nodes": [
+            {**node("s", "start"), "x": 1, "y": 1},
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "e")],
+    }
+    assert graph_checksum(moved_again) == graph_checksum(base)
+
+
+def test_edge_ports_round_trip_and_affect_checksum() -> None:
+    """边的端口字段（驼峰 / 下划线两种写法）都能解析，且属于图内容、参与摘要。"""
+    camel = {
+        "nodes": [node("s", "start"), node("e", "end")],
+        "edges": [{"source": "s", "target": "e", "sourcePort": "trigger",
+                   "targetPort": "trigger"}],
+    }
+    snake = {
+        "nodes": [node("s", "start"), node("e", "end")],
+        "edges": [{"source": "s", "target": "e", "source_port": "trigger",
+                   "target_port": "trigger"}],
+    }
+    camel_g = WorkflowGraph.model_validate(camel)
+    snake_g = WorkflowGraph.model_validate(snake)
+    assert camel_g.edges[0].source_port == "trigger"
+    assert snake_g.edges[0].source_port == "trigger"
+    assert graph_checksum(camel_g) == graph_checksum(snake_g)
+
+    no_ports = linear_graph()
+    assert graph_checksum(camel_g) != graph_checksum(no_ports)
+
+
+def test_draft_graph_is_lenient() -> None:
+    """暂存图允许空节点列表 / 缺字段 / 额外 UI 数据（提交版本时才严格校验）。"""
+    from nacho.workflow import DraftGraph
+
+    draft = DraftGraph.model_validate({"nodes": [], "edges": []})
+    assert draft.nodes == [] and draft.edges == []
+    half = DraftGraph.model_validate(
+        {"nodes": [{"id": "n1"}], "edges": [{"source": "n1"}], "viewport": {"zoom": 1.5}}
+    )
+    assert half.nodes[0].type == ""
+    assert half.edges[0].target == ""
+    assert half.model_dump()["viewport"] == {"zoom": 1.5}
+
+
 def json_loads(text: str) -> dict[str, object]:
     """测试用小工具（放文件尾部避免遮蔽标准库导入位置）。"""
     import json
@@ -715,6 +777,10 @@ async def test_store_version_increment_dedup_and_publish(
     )
     assert created_first and first.version == 1
 
+    # 提交后当前指针切到 version
+    pointed = await store.get(definition.id)
+    assert pointed is not None and pointed.current_ref == "version"
+
     # 内容没变：命中最新版本，不新增
     again, created_again = await store.add_version(
         definition,
@@ -722,6 +788,9 @@ async def test_store_version_increment_dedup_and_publish(
         checksum=graph_checksum(graph),
     )
     assert not created_again and again.version == 1
+    # 命中已有版本也算一次「提交」：指针仍是 version
+    pointed_again = await store.get(definition.id)
+    assert pointed_again is not None and pointed_again.current_ref == "version"
 
     # 改了：新版本 2，定义指针跟着挪
     graph_v2 = {"nodes": [node("s", "start"), node("m", "task"), node("e", "end")],
@@ -759,6 +828,43 @@ async def test_store_delete_cascades_versions(store: SqlWorkflowStore) -> None:
     assert await store.get(definition.id) is None
     assert await store.list_versions(definition.id) == []
     assert await store.delete(definition.id) is False  # 再删一次
+
+
+async def test_store_draft_save_overwrites_and_switches_pointer(
+    store: SqlWorkflowStore,
+) -> None:
+    """暂存覆盖式写图、指针切 draft；提交版本后指针切 version；暂存内容原样可读。"""
+    from nacho.workflow import canonical_draft_json
+
+    definition = await store.create("u-admin", "暂存流")
+    # 新建默认指针 draft，没暂存过
+    assert definition.current_ref == "draft"
+    assert definition.draft_graph_json == "" and definition.draft_updated_at == 0.0
+
+    # 半张图也能暂存（不校验）
+    half = {"nodes": [{"id": "s", "type": "start"}], "edges": []}
+    saved = await store.save_draft(definition.id, canonical_draft_json(half))
+    assert saved is not None and saved.current_ref == "draft"
+    draft = saved.draft_graph()
+    assert draft is not None and draft.nodes[0].id == "s"
+    assert saved.draft_updated_at > 0
+
+    # 提交版本：指针切到 version，暂存内容不受影响
+    version, created = await store.add_version(
+        saved,
+        graph_json=canonical_graph_json(linear_graph()),
+        checksum=graph_checksum(linear_graph()),
+    )
+    assert created and version.version == 1
+    committed = await store.get(definition.id)
+    assert committed is not None and committed.current_ref == "version"
+
+    # 再暂存：指针切回 draft，暂存被覆盖
+    redraft = await store.save_draft(definition.id, canonical_draft_json(half))
+    assert redraft is not None and redraft.current_ref == "draft"
+
+    # 不存在的工作流暂存返回 None
+    assert await store.save_draft("not-exist", canonical_draft_json(half)) is None
 
 
 # --------------------------------------------------------------------------- HTTP 接口
@@ -848,6 +954,127 @@ async def test_api_create_validate_save_publish_full_chain() -> None:
         )
         assert removed.status_code == 204
         assert (await client.get(f"/api/workflows/{workflow_id}", headers=auth(token))).status_code == 404
+
+
+async def test_api_draft_stage_then_commit_then_publish() -> None:
+    """暂存链路：空暂存 → 半张图可暂存（含坐标 / 端口）→ 指针随动作切换 → 提交 → 发布。"""
+    async with api_client(api_app()) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "暂存链路流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+
+        # 初始：暂存区为空，指针默认 draft
+        empty_draft = await client.get(
+            f"/api/workflows/{workflow_id}/draft", headers=auth(token)
+        )
+        assert empty_draft.status_code == 200
+        assert empty_draft.json()["data"]["graph"] is None
+        assert (await client.get(f"/api/workflows/{workflow_id}", headers=auth(token))) \
+            .json()["data"]["current_ref"] == "draft"
+
+        # 半张图（只有 start、带坐标）也能暂存，不校验；坐标原样回来
+        half = {"nodes": [{"id": "s", "type": "start", "x": 12.5, "y": 34}], "edges": []}
+        put = await client.put(
+            f"/api/workflows/{workflow_id}/draft",
+            headers=auth(token),
+            json={"graph": half},
+        )
+        assert put.status_code == 200, put.text
+        assert put.json()["data"]["current_ref"] == "draft"
+        assert put.json()["data"]["draft_updated_at"] > 0
+
+        got_draft = await client.get(
+            f"/api/workflows/{workflow_id}/draft", headers=auth(token)
+        )
+        nodes = got_draft.json()["data"]["graph"]["nodes"]
+        assert nodes[0]["id"] == "s" and nodes[0]["x"] == 12.5 and nodes[0]["y"] == 34
+
+        # 图形态不合法（nodes 不是数组）-> 422，不写库
+        bad = await client.put(
+            f"/api/workflows/{workflow_id}/draft",
+            headers=auth(token),
+            json={"graph": {"nodes": "oops"}},
+        )
+        assert bad.status_code == 422
+
+        # 提交合法版本后：指针切到 version
+        graph_with_ports = {
+            "nodes": [node("s", "start"), node("e", "end")],
+            "edges": [{"source": "s", "target": "e", "sourcePort": "trigger",
+                       "targetPort": "trigger"}],
+        }
+        committed = await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": graph_with_ports},
+        )
+        assert committed.status_code == 201, committed.text
+        detail = await client.get(f"/api/workflows/{workflow_id}", headers=auth(token))
+        assert detail.json()["data"]["current_ref"] == "version"
+
+        # 版本快照里带回了端口字段（下划线形态）
+        versions = await client.get(
+            f"/api/workflows/{workflow_id}/versions", headers=auth(token)
+        )
+        snap_edge = versions.json()["data"][0]["graph"]["edges"][0]
+        assert snap_edge["source_port"] == "trigger"
+        assert snap_edge["target_port"] == "trigger"
+
+        # 再暂存：指针切回 draft；发布只挪指针、200
+        redraft = await client.put(
+            f"/api/workflows/{workflow_id}/draft",
+            headers=auth(token),
+            json={"graph": half},
+        )
+        assert redraft.status_code == 200
+        assert redraft.json()["data"]["current_ref"] == "draft"
+        published = await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+        assert published.status_code == 200
+        assert published.json()["data"]["status"] == "published"
+        # 发布不改变当前查看指针（仍指向暂存区）
+        assert published.json()["data"]["current_ref"] == "draft"
+
+
+async def test_load_published_workflows_registers_crons() -> None:
+    """启动载入：只跑已发布工作流，时间触发 start 登记到调度器；草稿 / 未发布不载入。"""
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    time_graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    published_def = await store.create("u-admin", "定时流")
+    await store.add_version(
+        published_def,
+        graph_json=canonical_graph_json(time_graph),
+        checksum=graph_checksum(time_graph),
+    )
+    assert await store.publish(published_def.id, 1) is not None
+
+    # 只有版本、没发布的工作流不该被载入（消息触发也不会登记任务）
+    draft_def = await store.create("u-admin", "草稿流")
+    await store.add_version(
+        draft_def,
+        graph_json=canonical_graph_json(linear_graph()),
+        checksum=graph_checksum(linear_graph()),
+    )
+
+    scheduler = TaskManager()
+    try:
+        loaded = await load_published_workflows(store, scheduler)
+        assert loaded == 1
+        assert scheduler.get("wf-s") is not None
+    finally:
+        await engine.dispose()
 
 
 async def test_api_owner_isolation_between_users() -> None:

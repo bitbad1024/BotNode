@@ -76,6 +76,7 @@ from nacho.core.scheduler import (
 )
 from nacho.db import SqlLogStore
 from nacho.workflow import SqlWorkflowStore
+from nacho.workflow.runtime import load_published_workflows
 from nacho.onebot import (
     ONEBOT_LOGGER_NAME,
     OneBotConnection,
@@ -343,6 +344,10 @@ async def _main(argv: Sequence[str] | None = None) -> None:
 
         # 启动定时任务调度器：工作流的 time-trigger 节点靠它到点触发
         await scheduler.start()
+
+        # 把所有已发布工作流载入调度器（时间触发的开始节点在此登记 cron）。
+        # 发布接口只挪指针、不执行图，触发配置随启动统一生效。
+        await load_published_workflows(workflow_store, scheduler)
 
         # 等停机：OneBot 起监听并一直跑，主协程就停在这一行（端口被占等当场报错退出）。
         # 服务都在后台任务里，不需要再手搓一个"业务循环"；Ctrl+C 取消本协程同样走到下面收尾。
