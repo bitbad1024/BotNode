@@ -34,6 +34,12 @@ nacho/api/
 │   │   ├── dependencies.py   get_onebot / CurrentUserDep
 │   │   ├── requests.py       IssueTokenRequest
 │   │   └── responses.py      ClientData / TokenData / IssuedTokenData…
+│   ├── workflow/     工作流管理（实现在 nacho.workflow，按协议取用，不 import 实现）
+│   │   ├── router.py         定义增删查改 / 暂存 / 版本 / 发布 / 入库前校验
+│   │   ├── protocols.py      WorkflowStoreLike（结构化协议）
+│   │   ├── dependencies.py   get_workflow_store / get_in_scope / owner_filter_of
+│   │   ├── requests.py       请求 schema
+│   │   └── responses.py      WorkflowData / WorkflowVersionData / 校验报告…
 │   └── log/          运行日志检索（GET /logs）
 │       ├── router.py         条件原样透传给日志系统的 search
 │       ├── dependencies.py   get_app_logger
@@ -64,8 +70,8 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | 文件 | 作用 |
 |---|---|
 | `nacho/api/__init__.py` | 接口层总览 + 公开导出（`create_app`、`ApiOptions`、各业务服务、错误体系、日志接入点）。分层约定写在模块 docstring 里。 |
-| `nacho/api/app.py` | 唯一装配入口 `create_app()`：建 `FastAPI` → 装访问日志中间件 → 注册异常处理器 → 挂路由并把各业务服务挂到 `app.state` 供注入。不传 `user_store`/`hasher`/`tokens` 也能跑（走默认实现）。 |
-| `nacho/api/options.py` | 接口层选项 `ApiOptions`（对应配置 `[api]`）。**不读配置文件**，靠 `from_mapping` 普通映射解耦；含 `DEFAULT_PREFIX`（`/api`）、`DEFAULT_TOKEN_TTL`（3600s）。 |
+| `nacho/api/app.py` | 唯一装配入口 `create_app()`：建 `FastAPI` → 装访问日志中间件 → 注册异常处理器 → 挂路由并把各业务服务挂到 `app.state` 供注入。不传 `user_store` / `hasher` / `session_store` / `workflow_store` 也能跑（走默认实现）；`onebot` 不传时那组接口回 503。跨包的两块（OneBot / 工作流）只认协议，工作流的默认实现**按需 import**。 |
+| `nacho/api/options.py` | 接口层选项 `ApiOptions`（对应配置 `[api]`）。**不读配置文件**，靠 `from_mapping` 普通映射解耦；含 `DEFAULT_PREFIX`（`/api`）、`DEFAULT_TOKEN_TTL`（7200s，访问令牌滑动有效期）、`DEFAULT_REMEMBER_TTL`（30 天，「记住设备」的长期有效期）。 |
 | `nacho/api/logging.py` | 日志接入点：`api`（业务日志）/`api.access`（访问日志）两个 logger 名；`attach_api_logging()` 挂载文件出口。 |
 
 ---
@@ -97,9 +103,10 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/__init__.py` | 入口层总览，导出 `auth_router`、`onebot_router`、`log_router`。 |
-| `api/auth/__init__.py` | 鉴权入口汇总（登录 / 当前用户两个接口）。 |
+| `api/__init__.py` | 入口层总览，导出 `auth_router`、`onebot_router`、`workflow_router`、`log_router`。 |
+| `api/auth/__init__.py` | 鉴权入口汇总（注册 / 登录 / 当前用户 / 登录设备）。 |
 | `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销）。 |
+| `api/workflow/__init__.py` | 工作流管理入口汇总（`WorkflowStoreLike` / `workflow_router`）。 |
 | `api/log/__init__.py` | 运行日志入口汇总（`LogData` / `log_router`）。 |
 
 ### 3.2 api/auth/ —— 鉴权入口
@@ -146,7 +153,23 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
 
-### 3.4 api/log/ —— 运行日志检索
+### 3.4 api/workflow/ —— 工作流管理入口
+
+> 工作流是**另一块业务**：图形 / 校验 / 落库的实现都在 `nacho.workflow`，接口层只认一份能力
+> 协议 `WorkflowStoreLike`（见 `protocols.py`），装配时由主程序挂到 `app.state.workflow_store`。
+> 与 OneBot 那组同一个路子，区别是**数据对象仍用 `nacho.workflow` 的模型**
+> （`WorkflowDefinitionRecord` / `WorkflowVersionRecord`）：那是两边的**契约**（字段语义、
+> JSON 形状），不是实现，再复制一层 DTO 只会多两处要对齐。
+
+| 文件 | 作用 |
+|---|---|
+| `api/workflow/router.py` | **HTTP 入口**：`POST <prefix>/workflows/validate`（只校验不入库，画布里随时试）、定义增删查改、`PUT/GET /{id}/draft`（暂存区）、`POST/GET /{id}/versions`（提交一个版本 / 版本历史）、`POST /{id}/publish`（发布）。校验不过是**业务结果**：HTTP 200 + `{valid:false, stage, errors}`（前端按节点画红点），请求格式错才走全局 422；`valid=false` 时**不写任何数据**。 |
+| `api/workflow/protocols.py` | `WorkflowStoreLike`：接口层用到的那部分存储能力（定义增删查改 + 暂存 / 版本 / 发布 + 启动兜底建表）。默认实现 `nacho.workflow.SqlWorkflowStore` 结构化满足它。 |
+| `api/workflow/dependencies.py` | 路由注入件：`get_workflow_store`（从 `app.state` 取）、`get_in_scope`（按 id 取 + 归属把关，**越界与不存在同为 404**，不拿 id 试探别人的东西）、`is_admin` / `owner_filter_of`（普通用户只看自己，管理员可跨归属）。 |
+| `api/workflow/requests.py` | 请求体：新建 / 改名 / 暂存 / 提交版本 / 发布。 |
+| `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData` / `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`。 |
+
+### 3.5 api/log/ —— 运行日志检索
 
 > 把「查历史日志」做成一个 HTTP 接口。**查询本身不在这里实现**：条件原样递给日志系统的
 > `BaseLogger.search()`，它再扇出到各出口 —— 落库那份就是一条 SQL（`WHERE` / `ORDER BY` /
@@ -204,9 +227,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `services/auth/models.py` | 业务层 I/O（不认识 HTTP）：`Credentials`（凭据输入）、`LoginResult`（签发结果）。 |
-| `services/auth/protocols.py` | 能力协议（只声明不实现）：`TokenService`（issue / parse）、`TokenClaims`（令牌里的东西，所有实现必须产出同一形状）。 |
-| `services/auth/security.py` | 默认实现 `HmacTokenService`：HMAC-SHA256 不透明令牌（非 JWT）；`resolve_secret` 管缺省密钥。 |
+| `services/auth/models.py` | 业务层 I/O（不认识 HTTP）：`Credentials`（凭据输入）、`LoginResult`（签发结果）、`CurrentUser`（当前登录者 + 资料）。 |
 | `services/auth/service.py` | **业务编排** `AuthService`：`register`（开新账号：查重 → 哈希 → 落库，账号被占抛 409）与 `login`（查人 → 比密码 → 查停用 → 开会话发令牌）；以及 `current_user`（令牌 → 查人）。依赖走 `services.user` 与本模块协议，换库 / 换算法 / 换令牌形式都不用改这里。 |
 
 ---
