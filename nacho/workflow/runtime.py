@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from nacho.core.logger import get_logger
+from nacho.core.logger import BaseLogger, get_logger
 from nacho.core.scheduler import TaskManager
 
 from .executor import NodeExecutionContext, SimpleWorkflowRunner
@@ -21,7 +21,16 @@ from .executor import NodeExecutionContext, SimpleWorkflowRunner
 if TYPE_CHECKING:
     from .store import SqlWorkflowStore
 
-_logger = get_logger("workflow.runtime")
+
+def _log() -> BaseLogger:
+    """取本模块的日志实例：**用到才取**，不要在模块级取。
+
+    模块级 ``_logger = get_logger(...)`` 是**导入即执行**的：谁先 import 这个模块，谁就顺手把
+    进程默认日志核心按默认参数建出来（那时配置还没读），于是 ``[logging]`` 里的颜色 / 级别被
+    定死之后再也传不进去 —— 入口后面那次 ``configure(console_color=True)`` 只会撞上
+    「已存在核心」被丢掉（见 :mod:`nacho.core.logger.manager`）。用到才取，核心由启动顺序建。
+    """
+    return get_logger("workflow.runtime")
 
 
 def make_trigger(
@@ -51,7 +60,7 @@ async def run_published_workflow(
     """加载指定版本的图并执行（发布时调用一次，让时间触发的开始节点登记到调度器）。"""
     record = await store.get_version(workflow_id, version)
     if record is None:
-        _logger.warning(
+        _log().warning(
             "工作流版本不存在，跳过执行",
             workflow_id=workflow_id,
             version=version,
@@ -65,14 +74,14 @@ async def run_published_workflow(
     runner = SimpleWorkflowRunner()
     try:
         await runner.run(graph, ctx)
-        _logger.info(
+        _log().info(
             "工作流执行完成",
             workflow_id=workflow_id,
             version=version,
             node_count=len(graph.nodes),
         )
     except Exception as exc:  # noqa: BLE001 — 执行引擎异常不能让发布接口挂掉
-        _logger.error(
+        _log().error(
             "工作流执行失败",
             workflow_id=workflow_id,
             version=version,
@@ -103,12 +112,12 @@ async def load_published_workflows(
             )
             loaded += 1
         except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
-            _logger.error(
+            _log().error(
                 "启动载入已发布工作流失败",
                 workflow_id=definition.id,
                 version=definition.published_version,
                 error=str(exc),
             )
     if loaded:
-        _logger.info("已发布工作流启动载入完成", count=loaded)
+        _log().info("已发布工作流启动载入完成", count=loaded)
     return loaded
