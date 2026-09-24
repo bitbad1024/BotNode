@@ -18,7 +18,8 @@
     async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
         ...
 
-完整指南（含类型白名单、可选依赖与测试写法）见 :file:`nacho/workflow/MODULES.md` 第 5 节。
+完整指南（注册规格、必填 / 默认值、孤儿节点、可选依赖与测试写法）见
+:file:`nacho/workflow/MODULES.md` 第 5 节。
 """
 from __future__ import annotations
 
@@ -53,18 +54,24 @@ from .store import (
     WorkflowVersionTable,
 )
 from .validator import (
-    NODE_TYPES,
     AcceptAllExpressions,
     DryRunner,
     ExpressionSyntaxChecker,
+    apply_config_defaults,
     validate_graph,
     validate_with_dry_run,
 )
 from .executor import SimpleWorkflowRunner
 from .nodes import (
+    ConfigField,
+    NodeConfigValidator,
     NodeExecutionContext,
     NodeExecutor,
+    NodeRole,
+    NodeSpec,
+    declare_node_type,
     get_executor,
+    get_spec,
     load_node_modules,
     register_executor,
     register_node,
@@ -90,7 +97,7 @@ __all__ = [
     "canonical_draft_json",
     "graph_checksum",
     # 校验
-    "NODE_TYPES",
+    "apply_config_defaults",
     "STAGE_STRUCTURE",
     "STAGE_TOPOLOGY",
     "STAGE_SEMANTIC",
@@ -103,10 +110,16 @@ __all__ = [
     # 节点：契约 + 注册表（写自己的节点用这些）
     "NodeExecutor",
     "NodeExecutionContext",
+    "NodeSpec",
+    "NodeRole",
+    "NodeConfigValidator",
+    "ConfigField",
     "render_variables",
     "register_executor",
     "register_node",
+    "declare_node_type",
     "get_executor",
+    "get_spec",
     "registered_types",
     "load_node_modules",
     # 运行器

@@ -1,11 +1,17 @@
-"""写一个节点要用到的东西：执行函数的形状 + 它的运行时上下文 + 模板渲染。
+"""写一个节点要用到的东西：执行函数的形状 + 它的运行时上下文 + 模板渲染 + 注册规格。
 
 **这一份是对外契约**：别人写自己的节点时只从这里（以及 :mod:`.registry`）import，
 不需要碰框架里别的文件::
 
-    from nacho.workflow.nodes import NodeExecutionContext, register_node, render_variables
+    from nacho.workflow.nodes import (
+        NodeExecutionContext, ConfigField, register_node, render_variables,
+    )
 
-    @register_node("dingtalk")
+    @register_node(
+        "dingtalk",
+        # 必填字段：缺失 / 空串在校验阶段直接报错
+        fields=[ConfigField("text", "消息内容", required=True)],
+    )
     async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
         text = render_variables(str(node.config.get("text", "")), ctx.variables)
         ctx.logger.info("发钉钉消息", node_id=node.id, text=text)
@@ -13,20 +19,74 @@
 
 函数签名就是 :data:`NodeExecutor`：收「节点 + 上下文」，返回**本节点产出的变量**（会被
 合并进 ``ctx.variables``，下游用 ``{{名字}}`` 引用）。
+
+**校验什么由注册方自己说了算**：必填字段 / 默认值通过 :class:`ConfigField` 声明，
+表格化覆盖不了的规则（枚举、条件必填）写一个 :data:`NodeConfigValidator` 挂上来，
+不用改校验器框架代码。
 """
 from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from nacho.core.logger import BaseLogger, get_logger
 from nacho.core.scheduler import TaskManager
 
-from ..models import WorkflowNode
+from ..models import ValidationIssue, WorkflowNode
 
 #: 节点执行函数：(节点, 上下文) -> 该节点的输出变量 dict
 NodeExecutor = Callable[[WorkflowNode, "NodeExecutionContext"], Awaitable[dict[str, Any]]]
+
+#: 节点在图中的拓扑角色：start=唯一入口 / end=终点 / normal=普通节点
+NodeRole = Literal["start", "end", "normal"]
+
+#: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
+NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
+
+#: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
+MISSING_DEFAULT: Any = object()
+
+
+@dataclass(frozen=True)
+class ConfigField:
+    """节点 ``config`` 里的一个字段声明：必填规则与默认值在注册时定死。
+
+    * ``required=True``：缺失 / None / 空白字符串 → 校验直接报 ``MISSING_CONFIG``；
+    * 给了 ``default``：缺失（键不存在或值为 None）时由
+      :func:`nacho.workflow.validator.apply_config_defaults` 在保存版本时填默认值；
+    * 两个都不给：纯可选字段，校验器不碰。
+    """
+
+    name: str
+    label: str = ""
+    required: bool = False
+    default: Any = MISSING_DEFAULT
+
+
+@dataclass(frozen=True)
+class NodeSpec:
+    """一种节点类型的完整注册规格：执行器 + 配置字段规则 + 拓扑约束。
+
+    :param node_type: 类型名（节点 JSON 的 ``type``）；
+    :param executor: 执行函数；声明了但执行器还没实现时为 None（跑到它才报暂无执行器）；
+    :param fields: :class:`ConfigField` 清单，必填 / 默认值都从这里推导；
+    :param validator: 自定义配置校验器（枚举、条件必填这类表格盖不住的规则）；
+    :param role: 拓扑角色，start 全图唯一、end 至少一个可达；
+    :param min_outgoing: 出边条数下限（gateway 分流要 ≥2）；
+    :param max_outgoing: 出边条数上限（end 为 0），None 不限；
+    :param expression_field: 该字段内容要交图级表达式语法检查器过一遍（expression 节点用）。
+    """
+
+    node_type: str
+    executor: NodeExecutor | None = None
+    fields: tuple[ConfigField, ...] = ()
+    validator: NodeConfigValidator | None = None
+    role: NodeRole = "normal"
+    min_outgoing: int = 0
+    max_outgoing: int | None = None
+    expression_field: str | None = None
 
 #: 配置字符串里的变量引用：``{{ name }}``
 _VARIABLE_RE: re.Pattern[str] = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")

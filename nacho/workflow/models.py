@@ -15,20 +15,9 @@ from typing import Any, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------- 图
-#: 支持的节点类型；新增一个类型要动三处：这里、validator 的 NODE_TYPES 与 REQUIRED_CONFIG
-#: （校验白名单），执行函数写在 nacho.workflow.nodes 下（一类一个文件，见那个包）
-NodeType = Literal[
-    "start",       # 开始节点：config.trigger 决定触发方式——time（cron 定时）/ message（消息）
-    "end",
-    "gateway",
-    "approval",
-    "expression",
-    "http",
-    "condition",
-    "task",
-    "log",          # 写日志输出
-    "test",         # 测试 / 调试节点：回显配置内容，供画布联调用
-]
+#: 节点类型不在这里做字面量枚举：合法类型 = 节点注册表里已登记的类型
+#: （见 :mod:`nacho.workflow.nodes.registry`）。新增类型在自己的模块里注册即可，
+#: 必填字段 / 默认值 / 专属校验都在注册时声明，不用改模型与校验器。
 
 #: 工作流状态：草稿（可继续改）/ 已发布（published_version 指的那份可被执行器取用）
 WorkflowStatus = Literal["draft", "published"]
@@ -42,8 +31,9 @@ class WorkflowNode(BaseModel):
     """画布上的一个节点。
 
     :param id: 节点 ID，**一张图内全局唯一**（边的 source/target 指的就是它）；
-    :param type: 节点类型，取值见 :data:`NodeType`；
-    :param config: 节点配置（各类型要什么由校验器的配置完整性表把）；
+    :param type: 节点类型，取值为节点注册表中已登记的类型（见
+        :mod:`nacho.workflow.nodes.registry`）；
+    :param config: 节点配置（各类型要什么由注册规格里的字段声明把）；
     :param outputs: 本节点声明的输出变量名清单——下游用 ``{{名字}}`` 引用的凭据；
     :param x/y: 画布坐标（UI 字段）：**随图持久化**，但不参与 :func:`graph_checksum`
         ——只挪动节点位置不产生新版本。

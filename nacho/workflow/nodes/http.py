@@ -25,19 +25,43 @@ config:
 """
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
-from ..models import WorkflowNode
-from .base import NodeExecutionContext, render_variables
+from ..models import ValidationIssue, WorkflowNode
+from .base import ConfigField, NodeExecutionContext, render_variables
 from .registry import register_node
 
-#: 允许的请求方法（大写）。校验器也用这一份，见 validator 的 INVALID_HTTP_METHOD
+#: 允许的请求方法（大写）。校验规则与执行器认同这一份
 HTTP_METHODS: frozenset[str] = frozenset(
     {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 )
 
 #: 缺省超时（秒）
 DEFAULT_TIMEOUT: float = 10.0
+
+#: {{变量}}：method 写成模板时运行期才渲染得出，静态校验放行
+_VARIABLE_RE = re.compile(r"\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
+
+
+def validate_http_node(node: WorkflowNode) -> list[ValidationIssue]:
+    """method 拼错在校验阶段就拦住；写成 ``{{变量}}`` 的放行（运行期才知道）。"""
+    method = node.config.get("method")
+    if (
+        isinstance(method, str)
+        and method.strip()
+        and _VARIABLE_RE.search(method) is None
+        and method.strip().upper() not in HTTP_METHODS
+    ):
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_HTTP_METHOD",
+                message=f"http 节点 {node.id} 的方法 {method!r} 不合法",
+                suggestion=f"可选方法：{', '.join(sorted(HTTP_METHODS))}",
+            )
+        ]
+    return []
 
 
 def _import_httpx() -> Any:
@@ -74,7 +98,15 @@ def _timeout_of(raw: object) -> float | None:
     return DEFAULT_TIMEOUT
 
 
-@register_node("http")
+@register_node(
+    "http",
+    fields=[
+        ConfigField("url", "请求地址", required=True),
+        ConfigField("method", "请求方法", required=True),
+        ConfigField("timeout", "超时秒数", default=DEFAULT_TIMEOUT),
+    ],
+    validator=validate_http_node,
+)
 async def exec_http(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """HTTP 请求节点：按配置发一次请求，返回 ``http_status`` / ``http_body``。"""
     method = render_variables(str(node.config.get("method", "")), ctx.variables).strip().upper()
