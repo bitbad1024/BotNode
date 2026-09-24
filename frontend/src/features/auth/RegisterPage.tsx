@@ -1,42 +1,43 @@
-/** 登录页：全屏居中的一张高质感卡片（样式自包含）。 */
-import { useEffect, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useLocation, Navigate } from 'react-router-dom'
-import { login } from './authApi'
+/** 注册页：与登录页同一张卡（样式直接复用 LoginPage.module.css）。 */
+import { useState, type FormEvent } from 'react'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { register } from './authApi'
 import { ApiRequestError } from '../../lib/http'
 import { useAuth } from './authStore'
-import { useToast } from '../../common/Toast'
 import { ThemeToggle } from '../../common/theme'
-import { IconUser, IconLock, IconEye, IconEyeOff, IconAlert, IconCheck } from '../../common/icons'
 import {
-  SHOW_DEMO_ACCOUNTS,
-  DEMO_ACCOUNTS,
-  backendUrl,
-} from '../../config/env'
-import { FIELD_LABELS, accountPattern } from './formRules'
+  IconUser,
+  IconLock,
+  IconEye,
+  IconEyeOff,
+  IconAlert,
+  IconEdit,
+} from '../../common/icons'
+import { backendUrl } from '../../config/env'
+import {
+  FIELD_LABELS,
+  NICKNAME_MAX_LENGTH,
+  NICKNAME_MIN_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  accountPattern,
+} from './formRules'
 import styles from './LoginPage.module.css'
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const navigate = useNavigate()
-  const location = useLocation()
-  const { dispatch, isAuthenticated } = useAuth()
-  const { pushToast } = useToast()
+  const { isAuthenticated } = useAuth()
 
-  /** 从注册页跳过来时带着账号（justRegistered 只为了提示一句） */
-  const justRegistered =
-    (location.state as { justRegistered?: boolean })?.justRegistered ?? false
-  useEffect(() => {
-    if (justRegistered) pushToast('success', '注册成功，请用刚注册的账号登录')
-  }, [justRegistered, pushToast])
-
-  const [account, setAccount] = useState(
-    (location.state as { account?: string })?.account ?? '',
-  )
+  const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
-  const [remember, setRemember] = useState(false)
+  const [nickname, setNickname] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [touchedA, setTouchedA] = useState(false)
   const [touchedP, setTouchedP] = useState(false)
+  const [touchedN, setTouchedN] = useState(false)
+  /** 后端说这个账号已经有人了：输入框一并标红，改账号时清掉 */
+  const [accountTaken, setAccountTaken] = useState(false)
   const [error, setError] = useState<{
     title: string
     detail: string
@@ -45,45 +46,36 @@ export default function LoginPage() {
 
   if (isAuthenticated) return <Navigate to="/" replace />
 
-  const accountInvalid = touchedA && account.length > 0 && !accountPattern.test(account)
+  const accountInvalid =
+    (touchedA && account.length > 0 && !accountPattern.test(account)) || accountTaken
   const passwordInvalid =
-    touchedP && password.length > 0 && (password.length < 8 || password.length > 128)
-  const canSubmit = !loading && accountPattern.test(account) && password.length >= 8
-
-  function fillDemo(a: string, p: string) {
-    setAccount(a)
-    setPassword(p)
-    setTouchedA(true)
-    setTouchedP(true)
-    setError(null)
-  }
+    touchedP &&
+    password.length > 0 &&
+    (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH)
+  const nicknameInvalid =
+    touchedN &&
+    (nickname.trim().length < NICKNAME_MIN_LENGTH ||
+      nickname.trim().length > NICKNAME_MAX_LENGTH)
+  const canSubmit =
+    !loading &&
+    accountPattern.test(account) &&
+    password.length >= PASSWORD_MIN_LENGTH &&
+    password.length <= PASSWORD_MAX_LENGTH &&
+    nickname.trim().length >= NICKNAME_MIN_LENGTH &&
+    nickname.trim().length <= NICKNAME_MAX_LENGTH
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setTouchedA(true)
     setTouchedP(true)
-    if (!accountPattern.test(account) || password.length < 8) return
+    setTouchedN(true)
+    if (!canSubmit) return
     setLoading(true)
     setError(null)
     try {
-      const { data } = await login(account.trim(), password, remember)
-      dispatch({
-        type: 'SET_SESSION',
-        token: data.token,
-        tokenHash: data.token_hash,
-        user: data.user,
-        expiresInSeconds: data.expires_in,
-        remembered: remember,
-        deviceName: data.device_name,
-      })
-      if (data.reused) {
-        pushToast('info', '已复用这台设备上的现有登录')
-      } else if (data.device_name) {
-        pushToast('success', `已在新设备登录：${data.device_name}`)
-      }
-      const from =
-        (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/'
-      navigate(from, { replace: true })
+      const { data } = await register(account.trim(), password, nickname.trim())
+      // 注册不返回令牌：带着账号去登录页预填，让用户自己登一次
+      navigate('/login', { state: { account: data.account, justRegistered: true } })
     } catch (err) {
       if (err instanceof ApiRequestError) {
         const d = err.details[0]
@@ -91,8 +83,9 @@ export default function LoginPage() {
           ? `${FIELD_LABELS[d.field] ?? d.field}：${d.message}`
           : err.message
         setError({ title: err.message, detail, traceId: err.traceId })
+        if (err.code === 'ACCOUNT_ALREADY_EXISTS') setAccountTaken(true)
       } else {
-        setError({ title: '登录失败', detail: '未知错误，请稍后再试', traceId: '-' })
+        setError({ title: '注册失败', detail: '未知错误，请稍后再试', traceId: '-' })
       }
     } finally {
       setLoading(false)
@@ -113,8 +106,8 @@ export default function LoginPage() {
         </div>
 
         <div className={styles.head}>
-          <h1 className={styles.title}>欢迎回来</h1>
-          <p className={styles.subtitle}>登录以继续使用 nacho 机器人框架控制台</p>
+          <h1 className={styles.title}>创建账号</h1>
+          <p className={styles.subtitle}>注册后用同样的账号密码登录即可</p>
         </div>
 
         <form className={styles.form} onSubmit={onSubmit} noValidate>
@@ -136,7 +129,7 @@ export default function LoginPage() {
           )}
 
           <div className={styles.field}>
-            <label className={styles.label} htmlFor="login-account">
+            <label className={styles.label} htmlFor="register-account">
               账号
             </label>
             <div className={`${styles.control} ${accountInvalid ? styles.invalid : ''}`}>
@@ -144,19 +137,22 @@ export default function LoginPage() {
                 <IconUser size={18} />
               </span>
               <input
-                id="login-account"
+                id="register-account"
                 type="text"
                 autoComplete="username"
-                placeholder="请输入账号"
+                placeholder="3-32 位字母、数字、下划线、点、短横线"
                 value={account}
-                onChange={(e) => setAccount(e.target.value)}
+                onChange={(e) => {
+                  setAccount(e.target.value)
+                  setAccountTaken(false)
+                }}
                 onBlur={() => setTouchedA(true)}
               />
             </div>
           </div>
 
           <div className={styles.field}>
-            <label className={styles.label} htmlFor="login-password">
+            <label className={styles.label} htmlFor="register-password">
               密码
             </label>
             <div className={`${styles.control} ${passwordInvalid ? styles.invalid : ''}`}>
@@ -164,10 +160,10 @@ export default function LoginPage() {
                 <IconLock size={18} />
               </span>
               <input
-                id="login-password"
+                id="register-password"
                 type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                placeholder="请输入密码"
+                autoComplete="new-password"
+                placeholder={`${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} 位`}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onBlur={() => setTouchedP(true)}
@@ -183,56 +179,41 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <label className={styles.rememberRow}>
-            <input
-              type="checkbox"
-              className={styles.rememberBox}
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />
-            <span className={styles.rememberMark} aria-hidden="true">
-              <IconCheck size={12} />
-            </span>
-            <span className={styles.rememberText}>
-              记住这台设备
-              <i>30 天免登录；不勾则关闭浏览器即失效（2 小时）</i>
-            </span>
-          </label>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="register-nickname">
+              昵称
+            </label>
+            <div className={`${styles.control} ${nicknameInvalid ? styles.invalid : ''}`}>
+              <span className={styles.controlIcon}>
+                <IconEdit size={18} />
+              </span>
+              <input
+                id="register-nickname"
+                type="text"
+                autoComplete="nickname"
+                placeholder={`展示用，最多 ${NICKNAME_MAX_LENGTH} 个字符`}
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+                onBlur={() => setTouchedN(true)}
+              />
+            </div>
+          </div>
 
           <button className={styles.submit} type="submit" disabled={!canSubmit}>
             {loading ? (
               <span className={styles.submitInner}>
                 <span className="spinner" />
-                正在验证…
+                正在注册…
               </span>
             ) : (
-              '登 录'
+              '注 册'
             )}
           </button>
         </form>
 
         <div className={styles.alt}>
-          还没有账号？<Link to="/register">注册一个</Link>
+          已经有账号了？<Link to="/login">去登录</Link>
         </div>
-
-        {SHOW_DEMO_ACCOUNTS && DEMO_ACCOUNTS.length > 0 && (
-          <div className={styles.demo}>
-            <div className={styles.demoLabel}>演示账号 · 点击填充</div>
-            <div className={styles.demoList}>
-              {DEMO_ACCOUNTS.map((d) => (
-                <button
-                  key={d.account}
-                  type="button"
-                  className={styles.demoChip}
-                  onClick={() => fillDemo(d.account, d.password)}
-                >
-                  <b>{d.account}</b>
-                  <i>{d.password}</i>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         <div className={styles.footer}>
           <a href={backendUrl('/docs')} target="_blank" rel="noopener">

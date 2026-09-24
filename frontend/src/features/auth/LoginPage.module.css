@@ -384,6 +384,22 @@
   color: var(--lp-faint);
 }
 
+/* 表单下方的另一条路：登录 ↔ 注册 */
+.alt {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--lp-faint);
+}
+.alt a {
+  color: var(--lp-brand);
+  font-weight: 600;
+}
+.alt a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .footer {
   margin-top: 24px;
   display: flex;
