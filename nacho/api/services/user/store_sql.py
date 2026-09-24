@@ -137,14 +137,9 @@ class SqlUserStore:
         """新增一个账号（注册那一笔写入）；账号已被占用抛 :class:`AccountAlreadyExistsError`。
 
         ``id`` 按 ``u-<账号>`` 生成（与 :meth:`seed_demo` 同一套：账号本身唯一，id 自然唯一）。
-        密码只进哈希 —— 明文到不了这一层。
-
-        唯一约束才是「同账号只能注册一次」的最终裁判：并发下两个请求同时注册同一个账号，服务层
-        先查的那一遍拦不住，由库抛 ``IntegrityError``，这里翻成那个 409 的异常。
-
-        不用手动 rollback：冲突是在 **flush** 阶段炸的，SQLAlchemy 抛异常之前已经把事务回滚了
-        （``Session._flush`` 的 except 分支），这里再回滚一次是空转；异常立刻抛出这个块，
-        ``async with`` 退出时 ``close()``，连接归还连接池时池也会 rollback。
+        密码只进哈希 —— 明文到不了这一层。写库撞上 ``account`` 的唯一约束（并发下两个请求同时
+        注册同一个账号）时，把数据库的 ``IntegrityError`` 翻成那个 409 的异常：调用方不必先查
+        一遍再写，查了也拦不住并发。
         """
         async with self._sessions() as session:
             row = UserTable(
@@ -158,8 +153,7 @@ class SqlUserStore:
                 await session.commit()
             except IntegrityError as exc:
                 raise AccountAlreadyExistsError() from exc
-            # 提交成功后才转记录（会话是 expire_on_commit=False，读属性不会再查一次库）
-            return _to_record(row)
+        return _to_record(row)
 
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:
