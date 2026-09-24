@@ -448,6 +448,39 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+/* 常量节点：配置面板里一行一个「名字 -> 值」 */
+.constRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.constRow .input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 12.5px;
+}
+.ghostBtn {
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ghostBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.constHint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 5px;
+  line-height: 1.45;
+}
 .inspectorEmpty {
   color: var(--text-3);
   font-size: 13px;

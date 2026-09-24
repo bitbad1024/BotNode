@@ -23,6 +23,7 @@ nacho/workflow/
 │   ├── end.py           内置：end（图终点）
 │   ├── log.py           内置：log（按级别写业务日志）
 │   ├── test.py          内置：test（回显，画布联调用）
+│   ├── constant.py      内置：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
 │   ├── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
 │   └── time_trigger.py  兼容：旧版 time-trigger 类型（历史版本快照），行为同 start 的时间触发
@@ -95,9 +96,14 @@ store ──────────────► models
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | —— |
 | `log.py` | 按级别写业务日志（支持 `{{变量}}`） | **`message`**、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | 回显，画布联调 | `echo`（缺省用节点 id，运行期兜底） |
+| `constant.py` | **常量**：config 里每一个键就是一个常量（键名 = 变量名），执行时原样产出，下游连线后用 `{{名字}}` 读 | 一组「名字 -> 值」，直接平铺在 config 上；至少要有一个，键名必须能当变量名（自注册校验器） |
 | `http.py` | 发一次 HTTP 请求 | **`url`**、**`method`**（枚举由自注册校验器把）、`timeout`（缺省 10，注册默认值）、`headers`、`body` |
 | `declared.py` | 占位声明 gateway / approval / expression / condition / task：规则可校验、执行器未实现 | approval 的 **`assignee`**、expression 的 **`expression`**、condition 的 **`condition`** |
 | `time_trigger.py` | 兼容：旧版 `time-trigger` 类型（历史版本快照），行为同 `start` 的时间触发 | `cron`（复用 start 的时间校验器） |
+
+> **字面量尽量走常量节点**：地址、模板、固定文案这类字符串写在 `constant` 节点上，谁要用就连
+> 一根线过来用 `{{名字}}` 读 —— 别把同一串值复制进每个节点的 config（改一次要翻整张图）。常量节点
+> 必须在 start 可达的主流程里（孤儿不执行，它的变量也就没人声明）。
 
 **注册表是进程级、内存里的一张表**（`registry._SPECS`，类型名 → `NodeSpec`），不落库、没有配置文件：
 
