@@ -34,6 +34,19 @@ export function login(account: string, password: string, remember: boolean) {
   >('/auth/login', { account, password, remember })
 }
 
+/**
+ * POST /auth/register：注册一个新账号（201），返回账号资料。
+ *
+ * **不发令牌**：注册完要走一次正常登录 —— 令牌与会话只有登录一个出口。
+ * 账号已被注册时后端回 409（code = ACCOUNT_ALREADY_EXISTS），由 http 层解成 ApiRequestError。
+ */
+export function register(account: string, password: string, nickname: string) {
+  return http.post<
+    UserProfile,
+    { account: string; password: string; nickname: string }
+  >('/auth/register', { account, password, nickname })
+}
+
 /** GET /auth/me：用当前令牌换取用户资料。 */
 export function fetchProfile() {
   return http.get<UserProfile>('/auth/me')
