@@ -42,7 +42,7 @@ def validate_start_node(node: WorkflowNode) -> list[ValidationIssue]:
 
 
 def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
-    """``trigger=time`` 的配置：cron 必填且合法（旧版 time-trigger 节点也复用它）。"""
+    """``trigger=time`` 的配置：cron 必填且合法。"""
     cron = node.config.get("cron")
     if not isinstance(cron, str) or not cron.strip():
         return [
@@ -91,8 +91,7 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
     """把整条流程按 cron 登记到调度器（``trigger=time`` 的行为）。
 
     调度器没注入时只记日志、不实际登记（测试 / 离线场景）；登记的 task_id 固定为
-    ``wf-<node.id>``，重复执行会先移除再登记（幂等）。旧版 ``time-trigger`` 节点的兼容
-    执行器（见 :mod:`.time_trigger`）也复用这里。
+    ``wf-<node.id>``，重复执行会先移除再登记（幂等）。
     """
     cron = str(node.config.get("cron", "")).strip()
     name = str(node.config.get("name", node.id))

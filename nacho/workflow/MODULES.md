@@ -14,7 +14,7 @@
 ```
 nacho/workflow/
 ├── models.py        图（节点 / 边）、校验报告、落库记录、规范 JSON / 摘要
-├── validator.py     入库前校验：结构 → 拓扑 → 语义（④ Dry Run 留协议位）
+├── validator.py     入库前校验：结构 → 拓扑 → 语义（④ Dry Run 只有阶段名，未接）
 ├── store.py         落库：定义 / 版本两张表（SQLModel + AsyncSession），按归属隔离
 ├── nodes/           ★ 节点执行器：一类节点一个文件 + 注册表（**写自己的节点看这里**）
 │   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / NodeExecutionContext
@@ -25,8 +25,8 @@ nacho/workflow/
 │   ├── test.py          内置：test（回显，画布联调用）
 │   ├── constant.py      内置：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
-│   ├── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
-│   └── time_trigger.py  兼容：旧版 time-trigger 类型（历史版本快照），行为同 start 的时间触发
+│   └── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
+├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点（校验器与运行器共用同一份）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行（SimpleWorkflowRunner）
 └── runtime.py       运行时：加载已发布版本的图并执行（时间触发的 start 到点后走它）
 ```
@@ -60,14 +60,14 @@ store ──────────────► models
 > **`outputs` 是「声明」不是「产出」**：它只用来让校验器知道「下游的 `{{名字}}` 有没有人声明」。
 > 节点真正产出什么，由执行函数**返回的 dict** 决定（见第 5.2 节）——两者要对得上。
 
-## 2. validator.py —— 入库前四阶段
+## 2. validator.py —— 入库前三个阶段（④ Dry Run 还没接）
 
 | 阶段 | 查什么 | 典型错误码 |
 |---|---|---|
 | ① 结构 | 能不能解析成图、节点 id 唯一、边端点存在、主流程上的类型都已注册（孤儿类型不查） | `UNKNOWN_NODE_TYPE` |
 | ② 拓扑 | **只看 start 可达的主流程**：start 唯一、至少一个可达 end、无环（Kahn）、注册的出入边约束（gateway≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
 | ③ 语义 | 注册字段必填、节点自注册校验器（trigger/cron、log level、http method）、变量作用域、表达式语法；**全部只查主流程节点** | `MISSING_CONFIG` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
-| ④ Dry Run | 预留协议位（`DryRunner` / `ExpressionSyntaxChecker`），当前默认全放行 | —— |
+| ④ Dry Run | **还没接**：只留了阶段名常量 `STAGE_DRY_RUN`，等执行引擎就位再加 | —— |
 
 > **短路**：某一阶段出错就不再往后跑 —— 结构都不对，拓扑 / 语义无从谈起。
 > 类型专属规则不在校验器里写分支：每个节点在注册时挂自己的校验器（第 5.6 节）。
@@ -81,7 +81,7 @@ store ──────────────► models
 |---|---|
 | `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针），`UNIQUE(owner_id, name)` |
 | `WorkflowVersionTable` | `workflow_versions`：每次保存一张**不可变**图快照，`UNIQUE(workflow_id, version)` |
-| `SqlWorkflowStore` | 读写实现：`AsyncSession`，不写一行 SQL；按 `owner_id` 隔离 |
+| `SqlWorkflowStore` | 读写实现：查询走 `AsyncSession`（不手写 SQL；`ensure_schema` 里那一句 `ALTER TABLE` 是给老库补列的迁移，属例外）；按 `owner_id` 隔离 |
 | `WorkflowError` / `WorkflowNameConflict` | 存储层错误（消息直接给人看） |
 
 引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），本模块不建引擎、不读配置。
@@ -99,7 +99,6 @@ store ──────────────► models
 | `constant.py` | **常量**：config 里每一个键就是一个常量（键名 = 变量名），执行时原样产出，下游连线后用 `{{名字}}` 读 | 一组「名字 -> 值」，直接平铺在 config 上；至少要有一个，键名必须能当变量名（自注册校验器） |
 | `http.py` | 发一次 HTTP 请求 | **`url`**、**`method`**（枚举由自注册校验器把）、`timeout`（缺省 10，注册默认值）、`headers`、`body` |
 | `declared.py` | 占位声明 gateway / approval / expression / condition / task：规则可校验、执行器未实现 | approval 的 **`assignee`**、expression 的 **`expression`**、condition 的 **`condition`** |
-| `time_trigger.py` | 兼容：旧版 `time-trigger` 类型（历史版本快照），行为同 `start` 的时间触发 | `cron`（复用 start 的时间校验器） |
 
 > **字面量尽量走常量节点**：地址、模板、固定文案这类字符串写在 `constant` 节点上，谁要用就连
 > 一根线过来用 `{{名字}}` 读 —— 别把同一串值复制进每个节点的 config（改一次要翻整张图）。常量节点
@@ -312,5 +311,6 @@ async def test_my_node_outputs(...) -> None:
 | 通用的图层面校验（新的拓扑规则 / 新阶段） | `validator.py`（只放跨类型、与具体节点无关的规则） |
 | 图 / 记录上要加字段 | `models.py`（协议）+ `store.py`（表结构） |
 | 新的 HTTP 接口 | `nacho/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
-| 新的执行语义（并发 / 分支 / 重试） | `executor.py` 的 `WorkflowRunner` 协议位 |
+| 新的执行语义（并发 / 分支 / 重试） | `executor.py`（现在的 `SimpleWorkflowRunner` 是串行版；换引擎就换这个类，调用方只认 `run()`） |
+| 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
 | 发布 / 触发链路 | `runtime.py`（`make_trigger` / `run_published_workflow`） |

@@ -108,7 +108,9 @@ def render_variables(template: str, variables: dict[str, Any]) -> str:
 class NodeExecutionContext:
     """节点运行时上下文：上游输出变量 + 日志 + 调度器。
 
-    :param variables: 累积的变量上下文（上游节点的 outputs 合并进来）；
+    ``variables`` 是**属性**不是入参：构造时为空，随节点执行不断合并上游产出（要预置变量
+    直接写 ``ctx.variables["x"] = ...``，测试里常这么干）。
+
     :param logger: 业务日志实例（log 节点写这里）；
     :param scheduler: 调度器（时间触发的 start 节点把流程图登记到这里）；
     :param run: 触发整条流程的回调，cron 到点时调用。

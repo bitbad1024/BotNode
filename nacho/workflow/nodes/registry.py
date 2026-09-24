@@ -34,11 +34,6 @@ from .base import (
 _SPECS: dict[str, NodeSpec] = {}
 
 
-def register_spec(spec: NodeSpec) -> None:
-    """登记 / 覆盖一份完整规格（重复注册覆盖，方便测试换实现）。"""
-    _SPECS[spec.node_type] = spec
-
-
 def register_executor(
     node_type: str,
     executor: NodeExecutor,

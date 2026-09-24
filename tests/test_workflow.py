@@ -576,30 +576,6 @@ async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() 
 
 
 @pytest.mark.asyncio
-async def test_executor_legacy_time_trigger_node_still_registers() -> None:
-    """旧版 time-trigger 节点（历史版本快照）仍能登记调度器，不需要重新发布。"""
-    from nacho.core.scheduler import TaskManager
-
-    scheduler = TaskManager()
-
-    async def run_workflow() -> None:
-        return None
-
-    graph = WorkflowGraph.model_validate(
-        {
-            "nodes": [
-                node("t", "time-trigger", cron="*/5 * * * *"),
-                node("e", "end"),
-            ],
-            "edges": [edge("t", "e")],
-        }
-    )
-    ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow)
-    await SimpleWorkflowRunner().run(graph, ctx)
-    assert scheduler.get("wf-t") is not None
-
-
-@pytest.mark.asyncio
 async def test_executor_unsupported_node_type_raises() -> None:
     """没注册执行器的节点类型跑图时抛 NotImplementedError。"""
     graph = WorkflowGraph.model_validate(
@@ -868,10 +844,10 @@ def test_constant_is_only_readable_downstream() -> None:
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "time-trigger", "http", "constant"):
+    for node_type in ("start", "end", "log", "test", "http", "constant"):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
-        "start", "end", "log", "test", "time-trigger", "http", "constant",
+        "start", "end", "log", "test", "http", "constant",
         # 占位声明：类型可校验 / 可保存，执行器还没实现
         "gateway", "approval", "expression", "condition", "task",
     }

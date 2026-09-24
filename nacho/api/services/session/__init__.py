@@ -13,7 +13,7 @@ id）又当缓存键。缓存是"会话还活着"的凭据（闲置过期只活�
 """
 from __future__ import annotations
 
-from .client import describe_client, detect_browser, detect_device_type, detect_os
+from .client import describe_client
 from .errors import TokenHashCollisionError
 from .models import (
     DEVICE_DESKTOP,
@@ -40,9 +40,6 @@ __all__ = [
     "DEVICE_UNKNOWN",
     # 设备信息解析
     "describe_client",
-    "detect_browser",
-    "detect_os",
-    "detect_device_type",
     # 存储
     "SessionStore",
     "SqlSessionStore",

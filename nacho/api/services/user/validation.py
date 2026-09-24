@@ -5,7 +5,7 @@
 * **字段级**：账号、密码长什么样，写在这里用 ``Annotated`` 类型别名收口，请求模型直接
   引用（登录见 :mod:`nacho.api.api.auth.requests`），pydantic 负责在解析请求体时跑它们；
 * **消息级**：请求体整体缺字段、类型不对，由 FastAPI 的 ``RequestValidationError``
-  接住，交给 :func:`nacho.api.to_error_details` 翻成统一的错误结构。
+  接住，由接口层的异常处理器（:mod:`nacho.api.common.errors.handlers`）翻成统一的错误结构。
 
 规则本身放在这里是为了让「注册」「改资料」以后能复用同一份 —— 用户对账号 / 密码的要求
 在哪都应该是同一套。

@@ -46,6 +46,7 @@ from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
 from .api import auth_router, log_router, onebot_router, workflow_router
 from .api.onebot.protocols import OneBotLike
+from .api.workflow.protocols import WorkflowStoreLike
 from .services.auth import AuthService
 from .services.session import SessionService, SqlSessionStore
 from .services.session.protocols import SessionStore
@@ -53,7 +54,6 @@ from .services.user.protocols import PasswordHasher, UserStore
 from .services.user.security import Pbkdf2PasswordHasher
 from .services.user.store_sql import SqlUserStore
 from .options import ApiOptions
-from nacho.workflow import SqlWorkflowStore
 
 
 def create_app(
@@ -64,7 +64,7 @@ def create_app(
     db: AsyncEngine | None = None,
     session_store: SessionStore | None = None,
     onebot: OneBotLike | None = None,
-    workflow_store: SqlWorkflowStore | None = None,
+    workflow_store: WorkflowStoreLike | None = None,
     title: str = "nacho",
     version: str = __version__,
     logger: BaseLogger | None = None,
@@ -80,8 +80,12 @@ def create_app(
         :class:`~nacho.api.services.user.store_sql.SqlUserStore`（查 ``users`` 表）与
         :class:`~nacho.api.services.session.store_sql.SqlSessionStore`（查 ``auth_sessions`` 表），
         没传就兜底挂一块**内存 sqlite**——**不接数据库也能直接跑起来**；
-    :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``）；传了 ``<prefix>/onebot/*``
-        那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，没传时这些接口回 503；
+    :param workflow_store: 工作流存储（默认实现 ``nacho.workflow.SqlWorkflowStore``，这里只认
+        :class:`~nacho.api.api.workflow.protocols.WorkflowStoreLike` 那份能力协议）；传了
+        ``<prefix>/workflows/*`` 那组接口才可用，没传时这些接口回 503；
+    :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``，只认 ``OneBotLike`` 协议）；
+        传了 ``<prefix>/onebot/*`` 那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，
+        没传时这些接口回 503；
     :param title / version: OpenAPI 文档上的标题与版本；
     :param logger: 业务日志实例（也是 ``<prefix>/logs`` 检索用的那个），默认 ``api`` 那个。
     """
@@ -116,10 +120,16 @@ def create_app(
         remember_ttl=chosen.remember_ttl,
         logger=log,
     )
-    # 工作流存储（定义 + 版本双表）：显式传的优先，否则落库版挂同一块库，开箱即跑
-    workflows_store: SqlWorkflowStore = (
-        workflow_store if workflow_store is not None else SqlWorkflowStore(backing)
-    )
+    # 工作流存储（定义 + 版本双表）：显式传的优先，否则落库版挂同一块库，开箱即跑。
+    # 默认实现**按需 import**：本模块只认 WorkflowStoreLike 协议、不认识 nacho.workflow 的实现，
+    # 注入自己存储的调用方（或只想跑登录的场合）不必把工作流那包拉进来。
+    workflows_store: WorkflowStoreLike
+    if workflow_store is not None:
+        workflows_store = workflow_store
+    else:
+        from nacho.workflow import SqlWorkflowStore  # 兜底实现：只在没传存储时用
+
+        workflows_store = SqlWorkflowStore(backing)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:

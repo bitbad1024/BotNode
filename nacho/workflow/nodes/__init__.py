@@ -9,7 +9,6 @@
       test.py            内置节点：test（回显，画布联调用）
       constant.py        内置节点：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
-      time_trigger.py    兼容：旧版 time-trigger 类型（历史版本快照），行为同 start 的时间触发
       declared.py        占位：gateway / approval / expression / condition / task（规则已登记、
                          执行器未实现，图能保存；跑到它们时运行器报「暂无执行器」）
 
@@ -65,12 +64,10 @@ from .registry import (
     load_node_modules,
     register_executor,
     register_node,
-    register_spec,
     registered_types,
 )
 from .start import START_TRIGGERS, exec_start, validate_start_node
 from .test import exec_test
-from .time_trigger import exec_legacy_time_trigger
 
 __all__ = [
     # 契约（写节点用这些）
@@ -83,7 +80,6 @@ __all__ = [
     "MISSING_DEFAULT",
     "render_variables",
     # 注册表
-    "register_spec",
     "register_executor",
     "register_node",
     "declare_node_type",
@@ -103,6 +99,4 @@ __all__ = [
     "exec_test",
     "exec_http",
     "HTTP_METHODS",
-    # 兼容旧版 time-trigger 类型（历史版本快照），新图请用 start + trigger=time
-    "exec_legacy_time_trigger",
 ]

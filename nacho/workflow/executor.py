@@ -11,50 +11,27 @@
   登记到 :class:`~nacho.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；
   ``message``（缺省）被动等消息接入，发布 / 试跑时只写一条开始日志。
 
-节点那一套（``NodeExecutionContext`` / ``register_executor`` / ``get_executor`` 等）在这里
-**原样再导出**一份：老代码 ``from nacho.workflow.executor import get_executor`` 照旧能用，
-新代码建议直接从 :mod:`nacho.workflow.nodes` 取。
+图的公共算法（出边索引 / 可达集合 / 入口节点）在 :mod:`nacho.workflow.graph`，与校验器
+共用同一份口径。
+
+这里只再导出 ``SimpleWorkflowRunner`` / ``NodeExecutionContext`` / ``get_executor`` 三个：
+老代码 ``from nacho.workflow.executor import ...`` 的写法还能用，新代码直接从
+:mod:`nacho.workflow` 取。
 """
 from __future__ import annotations
 
 from collections import deque
-from typing import Protocol, runtime_checkable
 
-from .models import WorkflowGraph, WorkflowNode
-from .nodes import (
-    NodeExecutionContext,
-    NodeExecutor,
-    get_executor,
-    get_spec,
-    load_node_modules,
-    register_executor,
-    register_node,
-    registered_types,
-    render_variables,
-)
+from .graph import entry_id, out_targets, reachable_from
+from .models import WorkflowGraph
+from .nodes import NodeExecutionContext, get_executor
 
 __all__ = [
-    # 运行器
-    "WorkflowRunner",
-    "SimpleWorkflowRunner",
-    # 节点契约与注册表（再导出，见模块文档）
-    "NodeExecutor",
+    # 老 import 路径留的门（新代码从 nacho.workflow 取）
     "NodeExecutionContext",
+    "SimpleWorkflowRunner",
     "get_executor",
-    "load_node_modules",
-    "register_executor",
-    "register_node",
-    "registered_types",
-    "render_variables",
 ]
-
-
-@runtime_checkable
-class WorkflowRunner(Protocol):
-    """整张流程图的运行器协议（将来换成真正的执行引擎时只换这一处）。"""
-
-    async def run(self, graph: WorkflowGraph, ctx: NodeExecutionContext) -> None:
-        ...
 
 
 class SimpleWorkflowRunner:
@@ -70,13 +47,11 @@ class SimpleWorkflowRunner:
 
     async def run(self, graph: WorkflowGraph, ctx: NodeExecutionContext) -> None:
         by_id = {node.id: node for node in graph.nodes}
-        out_edges: dict[str, list[str]] = {node.id: [] for node in graph.nodes}
-        for edge in graph.edges:
-            out_edges[edge.source].append(edge.target)
+        out_edges = out_targets(graph)
 
-        entry = self._entry_id(graph.nodes)
+        entry = entry_id(graph)
         runnable = (
-            self._reachable_ids(out_edges, entry)
+            reachable_from(out_edges, entry)
             if entry is not None
             else set(by_id)  # 没有 start（测试图 / 最早期快照）：退回跑全部，沿用历史行为
         )
@@ -113,30 +88,3 @@ class SimpleWorkflowRunner:
         if len(ran) != len(runnable):
             missing = [nid for nid in runnable if nid not in ran]
             raise RuntimeError(f"工作流执行未完成，剩余节点：{missing}")
-
-    @staticmethod
-    def _entry_id(nodes: list[WorkflowNode]) -> str | None:
-        """找入口：注册角色为 start 的节点；没有时退回 type 字面量为 start 的旧图。"""
-        for node in nodes:
-            spec = get_spec(node.type)
-            if spec is not None and spec.role == "start":
-                return node.id
-        for node in nodes:
-            if node.type == "start":
-                return node.id
-        return None
-
-    @staticmethod
-    def _reachable_ids(out_edges: dict[str, list[str]], start_id: str) -> set[str]:
-        """从入口沿出边可达的节点集合（含入口自己）。"""
-        reachable: set[str] = set()
-        queue: deque[str] = deque([start_id])
-        while queue:
-            current = queue.popleft()
-            if current in reachable:
-                continue
-            reachable.add(current)
-            for target in out_edges.get(current, ()):
-                if target not in reachable:
-                    queue.append(target)
-        return reachable
