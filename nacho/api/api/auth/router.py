@@ -1,5 +1,6 @@
 """鉴权入口的 HTTP 路由。
 
+    POST   <prefix>/auth/register       注册新账号（账号 + 密码 + 昵称），不签发令牌
     POST   <prefix>/auth/login          账号 + 密码换令牌（可勾「记住设备」、可复用旧令牌）
     GET    <prefix>/auth/me             拿令牌换当前用户
     GET    <prefix>/auth/sessions              我开着的登录（登录设备列表）
@@ -20,6 +21,9 @@
 
 因为认证靠 Cookie，这里把 Cookie 设成 ``SameSite=Lax``：跨站的 POST / DELETE 不会带上它，
 省掉大部分 CSRF 面（单机内网控制台够用；真要对公网再上 CSRF token）。
+
+注册与登录刻意不同：注册**会**明说「账号已被注册」（409），前端据此提示换一个账号；注册成功回
+201 + 资料（**不含令牌**），前端带着账号跳登录页再走一次登录 —— 令牌 / 会话只有登录一个出口。
 """
 from __future__ import annotations
 
@@ -38,7 +42,7 @@ from .dependencies import (
     ClientDep,
     CurrentUserDep,
 )
-from .requests import LoginRequest
+from .requests import LoginRequest, RegisterRequest
 from .responses import (
     LoginData,
     RevokeAllData,
@@ -109,6 +113,38 @@ def _login_data(result: LoginResult) -> LoginData:
         device_name=session.device_name if session is not None else "",
         reused=result.reused,
     )
+
+
+@router.post(
+    "/register",
+    response_model=ApiResponse[UserProfile],
+    status_code=status.HTTP_201_CREATED,
+    summary="注册",
+    responses={
+        status.HTTP_409_CONFLICT: {"model": ErrorResponse, "description": "账号已被注册"},
+        HttpStatus.UNPROCESSABLE_ENTITY: {
+            "model": ErrorResponse,
+            "description": "请求参数不合法",
+        },
+    },
+)
+async def register(
+    payload: RegisterRequest, request: Request, service: AuthServiceDep
+) -> ApiResponse[UserProfile]:
+    """注册一个新账号：账号 + 密码 + 昵称。
+
+    成功回 201 + 账号资料（**不签发令牌** —— 前端拿 ``account`` 跳登录页再登一次）。
+    账号已被占用回 409 ``ACCOUNT_ALREADY_EXISTS``；请求体没过校验（账号字符集 / 长度、密码长度、
+    昵称长度）由异常处理器回 422，进不到这里。
+    """
+    trace_id: str = trace_id_of(request)
+    profile: UserProfile = await service.register(
+        account=payload.account,
+        password=payload.password.get_secret_value(),
+        nickname=payload.nickname,
+        trace_id=trace_id,
+    )
+    return ApiResponse[UserProfile](data=profile, trace_id=trace_id)
 
 
 @router.post(

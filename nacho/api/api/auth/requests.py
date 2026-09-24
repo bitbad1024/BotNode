@@ -10,7 +10,7 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ...services.user.validation import Account, Password
+from ...services.user.validation import Account, Nickname, Password
 
 
 class LoginRequest(BaseModel):
@@ -40,6 +40,25 @@ class LoginRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         json_schema_extra={
             "example": {"account": "admin", "password": "nacho-admin", "remember": True}
+        },
+        frozen=True,
+    )
+
+
+class RegisterRequest(BaseModel):
+    """注册请求：账号 + 密码 + 昵称。
+
+    规则同样来自 :mod:`nacho.api.services.user.validation`（账号 3-32 位字符集、密码 8-128 位、
+    昵称 1-32 个字符），这里只声明「这个字段用哪条规则」。密码是 ``SecretStr``，不进日志。
+    """
+
+    account: Account = Field(description="登录账号（3-32 位字母、数字、下划线、点、短横线）")
+    password: Password = Field(description="登录密码（8-128 位）")
+    nickname: Nickname = Field(description="昵称（1-32 个字符，展示用）")
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra={
+            "example": {"account": "nacho", "password": "nacho-1234", "nickname": "Nacho"}
         },
         frozen=True,
     )
