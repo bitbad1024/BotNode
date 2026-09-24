@@ -24,6 +24,7 @@ from sqlmodel import select  # noqa: E402
 from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
 from nacho.api import (  # noqa: E402
+    AccountAlreadyExistsError,
     ApiOptions,
     ApiResponse,
     LoginData,
@@ -195,6 +196,23 @@ async def test_account_is_unique(tmp_path: Path) -> None:
             with pytest.raises(IntegrityError):
                 await session.commit()
             await session.rollback()
+
+
+async def test_add_inserts_row_and_rejects_duplicate(tmp_path: Path) -> None:
+    """add 落一条新账号；同账号再 add 抛「已被注册」（唯一约束翻成 409 那个异常，不是 IntegrityError）。"""
+    async with opened_store(tmp_path) as (store, engine):
+        await store.ensure_schema()
+        record = await store.add(account="newbie", password_hash="hash", nickname="新来的")
+        assert (record.id, record.account, record.nickname) == ("u-newbie", "newbie", "新来的")
+        assert record.roles == () and record.disabled is False
+        assert await store.get_by_account("newbie") == record  # 确实落库了，不只是内存里的对象
+        rows = await rows_of(engine)  # 表里真的多了一行（不是只在会话里挂着）
+        assert [(row.id, row.account, row.nickname) for row in rows] == [
+            ("u-newbie", "newbie", "新来的")
+        ]
+
+        with pytest.raises(AccountAlreadyExistsError):
+            await store.add(account="newbie", password_hash="another-hash")
 
 
 # --------------------------------------------------------------------------- 接入 create_app
