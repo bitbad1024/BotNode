@@ -775,13 +775,103 @@ def test_http_method_is_checked_at_validation() -> None:
     assert validate_graph(graph_with("GET")).valid
 
 
+# ------------------------------------------------------------- ④-C 常量节点
+async def test_constant_node_outputs_its_values_as_variables() -> None:
+    """config 里每一个键就是一个常量：键名作变量名，值原样产出。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node(
+                    "c",
+                    "constant",
+                    base_url="https://api.example.com",
+                    greeting="你好",
+                    _outputs=["base_url", "greeting"],
+                ),
+            ],
+            "edges": [],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert ctx.variables["base_url"] == "https://api.example.com"
+    assert ctx.variables["greeting"] == "你好"
+
+
+async def test_constant_value_may_reference_upstream_variable() -> None:
+    """常量值也走同一套 ``{{变量}}`` 渲染 —— 与别处口径一致（引用不到在保存时就报）。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start", _outputs=["owner"]),
+                node("c", "constant", who="{{owner}} 的机器人", _outputs=["who"]),
+            ],
+            "edges": [edge("s", "c")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    ctx.variables["owner"] = "nacho"
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert ctx.variables["who"] == "nacho 的机器人"
+
+
+def test_constant_node_needs_at_least_one_constant() -> None:
+    """一个常量都没写：MISSING_CONFIG。"""
+    graph = {
+        "nodes": [node("s", "start"), node("c", "constant"), node("e", "end")],
+        "edges": [edge("s", "c"), edge("c", "e")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert any(i.node_id == "c" and i.code == "MISSING_CONFIG" for i in report.errors)
+
+
+def test_constant_name_must_work_as_a_variable() -> None:
+    """键名当不了变量名（下游 ``{{名字}}`` 引用不到）：INVALID_CONSTANT_NAME。"""
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            {"id": "c", "type": "constant", "config": {"bad-name": "x"}, "outputs": []},
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "c"), edge("c", "e")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid
+    assert any(
+        issue.node_id == "c" and issue.code == "INVALID_CONSTANT_NAME"
+        for issue in report.errors
+    )
+
+
+def test_constant_is_only_readable_downstream() -> None:
+    """常量沿边往下传：连上了才引用得到；常量节点没接进主流程就没人声明它的变量。"""
+    nodes = [
+        node("s", "start"),
+        node("c", "constant", base_url="https://api.example.com", _outputs=["base_url"]),
+        node("l", "log", message="GET {{base_url}}"),
+        node("e", "end"),
+    ]
+    connected = {"nodes": nodes, "edges": [edge("s", "c"), edge("c", "l"), edge("l", "e")]}
+    assert validate_graph(connected).valid
+
+    # 常量节点成了孤儿：它不执行，base_url 也就没有节点声明
+    orphan = {"nodes": nodes, "edges": [edge("s", "l"), edge("l", "e")]}
+    report = validate_graph(orphan)
+    assert not report.valid
+    assert any(
+        issue.node_id == "l" and issue.code == "VARIABLE_NOT_DECLARED"
+        for issue in report.errors
+    )
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "time-trigger", "http"):
+    for node_type in ("start", "end", "log", "test", "time-trigger", "http", "constant"):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
-        "start", "end", "log", "test", "time-trigger", "http",
+        "start", "end", "log", "test", "time-trigger", "http", "constant",
         # 占位声明：类型可校验 / 可保存，执行器还没实现
         "gateway", "approval", "expression", "condition", "task",
     }
