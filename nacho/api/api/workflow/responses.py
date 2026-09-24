@@ -57,6 +57,10 @@ class WorkflowData(_Frozen):
     status: str
     current_version: int
     published_version: int
+    #: 暂存区最近保存时间（0 = 没暂存过）
+    draft_updated_at: float = 0.0
+    #: 编辑器当前指向：draft（暂存区）/ version（已提交版本）
+    current_ref: str = "draft"
     created_at: float
     updated_at: float
 
@@ -69,8 +73,25 @@ class WorkflowData(_Frozen):
             status=record.status,
             current_version=record.current_version,
             published_version=record.published_version,
+            draft_updated_at=record.draft_updated_at,
+            current_ref=record.current_ref,
             created_at=record.created_at,
             updated_at=record.updated_at,
+        )
+
+
+class WorkflowDraftData(_Frozen):
+    """暂存区内容：没暂存过时 ``graph`` 为 None、``updated_at`` 为 0。"""
+
+    graph: dict[str, Any] | None = None
+    updated_at: float = 0.0
+
+    @classmethod
+    def from_record(cls, record: WorkflowDefinitionRecord) -> WorkflowDraftData:
+        draft = record.draft_graph()
+        return cls(
+            graph=draft.model_dump(mode="json") if draft is not None else None,
+            updated_at=record.draft_updated_at,
         )
 
 

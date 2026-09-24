@@ -12,7 +12,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------- 图
 #: 支持的节点类型；新增一个类型要动三处：这里、validator 的 NODE_TYPES 与 REQUIRED_CONFIG
@@ -33,6 +33,10 @@ NodeType = Literal[
 #: 工作流状态：草稿（可继续改）/ 已发布（published_version 指的那份可被执行器取用）
 WorkflowStatus = Literal["draft", "published"]
 
+#: 编辑器打开时「当前看哪份图」的指针：暂存区 / 已提交版本
+#: 默认 draft；暂存保存后仍指向 draft，提交版本后切到 version
+CurrentRef = Literal["draft", "version"]
+
 
 class WorkflowNode(BaseModel):
     """画布上的一个节点。
@@ -40,7 +44,9 @@ class WorkflowNode(BaseModel):
     :param id: 节点 ID，**一张图内全局唯一**（边的 source/target 指的就是它）；
     :param type: 节点类型，取值见 :data:`NodeType`；
     :param config: 节点配置（各类型要什么由校验器的配置完整性表把）；
-    :param outputs: 本节点声明的输出变量名清单——下游用 ``{{名字}}`` 引用的凭据。
+    :param outputs: 本节点声明的输出变量名清单——下游用 ``{{名字}}`` 引用的凭据；
+    :param x/y: 画布坐标（UI 字段）：**随图持久化**，但不参与 :func:`graph_checksum`
+        ——只挪动节点位置不产生新版本。
 
     不标 frozen：config 是 dict，pydantic 给 frozen 模型生成的 ``__hash__`` 会把全部字段
     值拿去 hash，dict 不可哈希会让「把节点放进集合」类操作直接炸；图模型按可解析数据对待即可。
@@ -52,15 +58,31 @@ class WorkflowNode(BaseModel):
     type: str
     config: dict[str, Any] = Field(default_factory=dict)
     outputs: list[str] = Field(default_factory=list)
+    #: 画布横坐标（前端布局用，缺省 None = 没存过位置）
+    x: float | None = None
+    #: 画布纵坐标
+    y: float | None = None
 
 
 class WorkflowEdge(BaseModel):
-    """一条有向边：``source`` 的输出流向 ``target``（也是变量作用域的传播方向）。"""
+    """一条有向边：``source`` 的输出流向 ``target``（也是变量作用域的传播方向）。
+
+    ``source_port`` / ``target_port`` 记录两端具体连的是哪个端口（trigger / message 等），
+    入参同时认前端的驼峰写法 ``sourcePort`` / ``targetPort``。
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     source: str = Field(min_length=1, max_length=64)
     target: str = Field(min_length=1, max_length=64)
+    source_port: str = Field(
+        default="",
+        validation_alias=AliasChoices("source_port", "sourcePort"),
+    )
+    target_port: str = Field(
+        default="",
+        validation_alias=AliasChoices("target_port", "targetPort"),
+    )
 
 
 class WorkflowGraph(BaseModel):
@@ -68,6 +90,46 @@ class WorkflowGraph(BaseModel):
 
     nodes: list[WorkflowNode] = Field(min_length=1)
     edges: list[WorkflowEdge] = Field(default_factory=list)
+
+
+class DraftNode(BaseModel):
+    """暂存区节点：**编辑到一半的图也能存**——不做任何内容约束，额外字段（前端 UI
+    数据等）一并保留；提交版本时才过 :class:`WorkflowGraph` 的完整校验。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
+    type: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    outputs: list[str] = Field(default_factory=list)
+    x: float | None = None
+    y: float | None = None
+
+
+class DraftEdge(BaseModel):
+    """暂存区边：同样宽松，端口字段驼峰 / 下划线写法都认。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    source: str = ""
+    target: str = ""
+    source_port: str = Field(
+        default="",
+        validation_alias=AliasChoices("source_port", "sourcePort"),
+    )
+    target_port: str = Field(
+        default="",
+        validation_alias=AliasChoices("target_port", "targetPort"),
+    )
+
+
+class DraftGraph(BaseModel):
+    """暂存区图：允许 0 节点（新建还没拖节点也能存），顶层额外字段保留。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    nodes: list[DraftNode] = Field(default_factory=list)
+    edges: list[DraftEdge] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- 校验结果
@@ -118,7 +180,7 @@ class ValidationReport(BaseModel):
 
 # --------------------------------------------------------------------------- 落库记录
 class WorkflowDefinitionRecord(BaseModel):
-    """工作流**定义**：一个工作流一行（元数据 + 当前 / 已发布版本指针）。"""
+    """工作流**定义**：一个工作流一行（元数据 + 当前 / 已发布版本指针 + 暂存区）。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -127,12 +189,24 @@ class WorkflowDefinitionRecord(BaseModel):
     owner_id: str
     name: str
     status: WorkflowStatus = "draft"
-    #: 最近一次保存的版本号；还没保存过图就是 0
+    #: 最近一次提交的版本号；还没提交过图就是 0
     current_version: int = 0
     #: 已发布的版本号；从没发布过就是 0
     published_version: int = 0
+    #: 暂存区图原文（规范 JSON 字符串）；从没暂存过是空串
+    draft_graph_json: str = ""
+    #: 暂存区最近保存时间（Unix 秒；0 = 没暂存过）
+    draft_updated_at: float = 0.0
+    #: 编辑器当前指向：暂存区 / 已提交版本（暂存后指 draft，提交后指 version）
+    current_ref: CurrentRef = "draft"
     created_at: float
     updated_at: float
+
+    def draft_graph(self) -> DraftGraph | None:
+        """暂存区原文解析回 :class:`DraftGraph`；没暂存过返回 None。"""
+        if not self.draft_graph_json:
+            return None
+        return DraftGraph.model_validate(json.loads(self.draft_graph_json))
 
 
 class WorkflowVersionRecord(BaseModel):
@@ -158,11 +232,16 @@ class WorkflowVersionRecord(BaseModel):
 
 
 # --------------------------------------------------------------------------- JSON / 摘要
+#: 不参与内容摘要的「纯 UI 字段」：节点坐标只影响布局，挪动节点不算图内容变更
+_CHECKSUM_IGNORED_NODE_FIELDS: frozenset[str] = frozenset({"x", "y"})
+
+
 def canonical_graph_json(graph: WorkflowGraph | dict[str, Any]) -> str:
-    """把图序列化成**规范** JSON：键排序、无多余空白——checksum 与去重的基准。
+    """把图序列化成**规范** JSON：键排序、无多余空白——快照存储的基准。
 
     传入 dict 时先过一遍 :class:`WorkflowGraph`（丢未知字段、统一形态），
-    保证「同一张图不同写法」（键顺序、空格）算出同一个摘要。
+    保证「同一张图不同写法」（键顺序、空格）归一。节点坐标 x/y **保留**在快照里
+    （打开旧版本也要还原布局），但不参与 :func:`graph_checksum`。
     """
     normalized = graph if isinstance(graph, WorkflowGraph) else WorkflowGraph.model_validate(graph)
     # 当前 pydantic 的 model_dump_json 不认 sort_keys，统一 dump 成 dict 再走标准库；
@@ -172,7 +251,28 @@ def canonical_graph_json(graph: WorkflowGraph | dict[str, Any]) -> str:
     )
 
 
+def canonical_draft_json(raw: dict[str, Any]) -> str:
+    """把暂存图序列化成规范 JSON。
+
+    与 :func:`canonical_graph_json` 的区别：走宽松的 :class:`DraftGraph`——
+    编辑到一半（空节点列表、缺字段、前端额外 UI 数据）也能存，提交版本时才严格校验。
+    """
+    normalized = DraftGraph.model_validate(raw)
+    return json.dumps(
+        normalized.model_dump(mode="json"), sort_keys=True, ensure_ascii=False
+    )
+
+
 def graph_checksum(graph: WorkflowGraph | dict[str, Any]) -> str:
-    """图内容的 sha256（64 位十六进制）；版本去重 / 变更比对用它。"""
-    payload = canonical_graph_json(graph)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    """图内容的 sha256（64 位十六进制）；版本去重 / 变更比对用它。
+
+    摘要前剔除节点坐标等纯 UI 字段（:data:`_CHECKSUM_IGNORED_NODE_FIELDS`）：
+    只挪节点位置、不改连线 / 配置时摘要不变，不产生垃圾版本。
+    """
+    normalized = graph if isinstance(graph, WorkflowGraph) else WorkflowGraph.model_validate(graph)
+    payload = normalized.model_dump(mode="json")
+    for node in payload.get("nodes", []):
+        for field in _CHECKSUM_IGNORED_NODE_FIELDS:
+            node.pop(field, None)
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()

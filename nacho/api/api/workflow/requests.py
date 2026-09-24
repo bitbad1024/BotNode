@@ -27,10 +27,16 @@ class RenameWorkflowRequest(_Mutable):
 
 
 class SaveVersionRequest(_Mutable):
-    """保存一个版本：图 + 备注。入库前先过校验流水线，不过不写库。"""
+    """提交一个版本：图 + 备注。入库前先过校验流水线，不过不写库。"""
 
     graph: dict[str, Any] = Field(description="画布图：{nodes, edges}")
     note: str = Field(default="", max_length=NOTE_MAX_LENGTH)
+
+
+class SaveDraftRequest(_Mutable):
+    """暂存：把编辑中的图存进暂存区。**不做校验**（半张图也能存），提交版本时才校验。"""
+
+    graph: dict[str, Any] = Field(description="画布图：{nodes, edges}（允许编辑到一半）")
 
 
 class ValidateRequest(_Mutable):
