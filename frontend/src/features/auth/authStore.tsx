@@ -16,12 +16,16 @@ interface PersistedSession {
   token: string
   user: UserProfile | null
   expiresAt: number
+  tokenHash?: string
+  deviceName?: string
+  remembered?: boolean
 }
 
 export interface AuthState {
   token: string
   user: UserProfile | null
   expiresAt: number
+  tokenHash?: string
   deviceName?: string
   remembered?: boolean
 }
@@ -32,6 +36,9 @@ type AuthAction =
       token: string
       user: UserProfile
       expiresInSeconds: number
+      tokenHash?: string
+      deviceName?: string
+      remembered?: boolean
     }
   | { type: 'SET_USER'; user: UserProfile }
   | { type: 'CLEAR' }
@@ -46,6 +53,9 @@ function loadSession(): AuthState {
       token: parsed.token,
       user: parsed.user ?? null,
       expiresAt: parsed.expiresAt ?? 0,
+      tokenHash: parsed.tokenHash,
+      deviceName: parsed.deviceName,
+      remembered: parsed.remembered,
     }
   } catch {
     return { token: '', user: null, expiresAt: 0 }
@@ -61,6 +71,9 @@ function persist(state: AuthState) {
     token: state.token,
     user: state.user,
     expiresAt: state.expiresAt,
+    tokenHash: state.tokenHash,
+    deviceName: state.deviceName,
+    remembered: state.remembered,
   }
   localStorage.setItem(SESSION_KEY, JSON.stringify(snapshot))
 }
@@ -71,8 +84,13 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'SET_SESSION':
       next = {
         token: action.token,
+        tokenHash: action.tokenHash,
         user: action.user,
-        expiresAt: Date.now() + action.expiresInSeconds * 1000,
+        // 0 = 服务端宣告「不过期」（长期会话 / 记住设备），别算成「现在就过期」
+        expiresAt:
+          action.expiresInSeconds > 0 ? Date.now() + action.expiresInSeconds * 1000 : 0,
+        deviceName: action.deviceName,
+        remembered: action.remembered,
       }
       break
     case 'SET_USER':
