@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from .app import create_app
 from .common.errors import (
+    AccountAlreadyExistsError,
     AccountDisabledError,
     ApiError,
     ErrorCode,
@@ -73,7 +74,7 @@ from .logging import (
 )
 from .api import auth_router, log_router, onebot_router
 from .api.auth.dependencies import SESSION_COOKIE
-from .api.auth.requests import LoginRequest
+from .api.auth.requests import LoginRequest, RegisterRequest
 from .api.auth.responses import (
     LoginData,
     RevokeAllData,
@@ -102,9 +103,12 @@ from .services.session import (
 from .services.user import (
     ACCOUNT_MAX_LENGTH,
     ACCOUNT_MIN_LENGTH,
+    NICKNAME_MAX_LENGTH,
+    NICKNAME_MIN_LENGTH,
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
     Account,
+    Nickname,
     Password,
     PasswordHasher,
     Pbkdf2PasswordHasher,
@@ -147,6 +151,7 @@ __all__ = [
     "ValidationError",
     "InvalidCredentialsError",
     "AccountDisabledError",
+    "AccountAlreadyExistsError",
     "UnauthorizedError",
     "TokenInvalidError",
     "TokenExpiredError",
@@ -163,12 +168,16 @@ __all__ = [
     "Pbkdf2PasswordHasher",
     "Account",
     "Password",
+    "Nickname",
     "ACCOUNT_MIN_LENGTH",
     "ACCOUNT_MAX_LENGTH",
     "PASSWORD_MIN_LENGTH",
     "PASSWORD_MAX_LENGTH",
+    "NICKNAME_MIN_LENGTH",
+    "NICKNAME_MAX_LENGTH",
     # 鉴权模块
     "LoginRequest",
+    "RegisterRequest",
     "LoginData",
     "SESSION_COOKIE",
     "SessionData",

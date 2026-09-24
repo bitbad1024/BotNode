@@ -12,8 +12,8 @@
     disabled       BOOLEAN      NOT NULL DEFAULT FALSE
 
 ``roles`` 在库里是 JSON 字符串，进出都转成 ``tuple[str, ...]``；其余字段直接对应
-:class:`~nacho.api.services.user.models.UserRecord`。本类只负责「查」（外加建表 / 种演示账号），
-没有增删改接口——真要管账号，照同一份协议另接即可。
+:class:`~nacho.api.services.user.models.UserRecord`。本类负责「查」与「注册那一笔新增」（外加
+建表 / 种演示账号）——改资料 / 停用 / 删除还没有：真要管账号，照同一份协议另接即可。
 
 引擎由外部注入（:class:`AsyncEngine`）：本模块不建引擎、不读配置，连接参数归入口层管；
 会话按「一次查询一个会话」开，用完即关。
@@ -25,10 +25,12 @@ from collections.abc import Iterable
 from typing import cast
 
 from sqlalchemy import Column, Text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ...common.errors import AccountAlreadyExistsError
 from .demo import DEMO_USERS
 from .models import UserRecord
 from .protocols import PasswordHasher
@@ -127,6 +129,31 @@ class SqlUserStore:
                 )
             await session.commit()
             return len(DEMO_USERS)
+
+    # ------------------------------------------------------------------ 新增
+    async def add(
+        self, *, account: str, password_hash: str, nickname: str = ""
+    ) -> UserRecord:
+        """新增一个账号（注册那一笔写入）；账号已被占用抛 :class:`AccountAlreadyExistsError`。
+
+        ``id`` 按 ``u-<账号>`` 生成（与 :meth:`seed_demo` 同一套：账号本身唯一，id 自然唯一）。
+        密码只进哈希 —— 明文到不了这一层。写库撞上 ``account`` 的唯一约束（并发下两个请求同时
+        注册同一个账号）时，把数据库的 ``IntegrityError`` 翻成那个 409 的异常：调用方不必先查
+        一遍再写，查了也拦不住并发。
+        """
+        async with self._sessions() as session:
+            row = UserTable(
+                id=f"u-{account}",
+                account=account,
+                password_hash=password_hash,
+                nickname=nickname,
+            )
+            session.add(row)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                raise AccountAlreadyExistsError() from exc
+        return _to_record(row)
 
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:

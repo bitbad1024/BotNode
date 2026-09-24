@@ -15,7 +15,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import override
+from typing import ClassVar, override
 
 import pytest
 
@@ -30,6 +30,7 @@ from config import ConfigError, Settings  # noqa: E402
 from nacho.api import (  # noqa: E402
     ACCESS_LOGGER_NAME,
     API_LOGGER_NAME,
+    AccountAlreadyExistsError,
     ApiOptions,
     ApiResponse,
     AuthService,
@@ -39,6 +40,7 @@ from nacho.api import (  # noqa: E402
     LogData,
     LoginData,
     LoginRequest,
+    RegisterRequest,
     SESSION_COOKIE,
     ClientInfo,
     PasswordHasher,
@@ -68,6 +70,7 @@ ADMIN = {"account": "admin", "password": "nacho-admin"}
 #: 第二个账号：测「不是本人的令牌不复用」要用两个人
 ROBOT = {"account": "robot", "password": "nacho-robot"}
 LOGIN_PATH = "/api/auth/login"
+REGISTER_PATH = "/api/auth/register"
 
 #: 测试用的哈希迭代次数。默认 20 万次是**生产该有的值**（单次约 67ms，专门用来拖慢离线爆破），
 #: 但这份钱不该让每个用例重付一遍 —— 这里降到 1000 次，爆破成本由 :class:`Pbkdf2PasswordHasher`
@@ -223,6 +226,106 @@ class TestLogin:
             )
         assert response.status_code == 403
         assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED
+
+
+# --------------------------------------------------------------------------- 注册
+class TestRegister:
+    """注册：新建账号（201 + 资料、不发令牌）/ 账号已被注册（409）/ 参数不合法（422）。"""
+
+    #: 一个没被占用的账号（每个用例各自起一个内存库，互不打扰）
+    NEW: ClassVar[dict[str, str]] = {
+        "account": "newbie",
+        "password": "nacho-newbie",
+        "nickname": "新来的",
+    }
+
+    async def test_success_returns_profile_without_token(self) -> None:
+        async with client_for(app_with()) as client:
+            response = await client.post(REGISTER_PATH, json=self.NEW)
+        assert response.status_code == 201
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"]["account"] == "newbie"
+        assert body["data"]["nickname"] == "新来的"
+        assert body["data"]["roles"] == []
+        # 注册不发令牌、也不种 Cookie：令牌与会话只有登录一个出口
+        assert "token" not in body["data"]
+        assert SESSION_COOKIE not in response.headers.get("set-cookie", "")
+
+    async def test_success_response_never_carries_password(self) -> None:
+        async with client_for(app_with()) as client:
+            body = (await client.post(REGISTER_PATH, json=self.NEW)).json()
+        assert "nacho-newbie" not in json.dumps(body, ensure_ascii=False)
+        assert "password" not in json.dumps(body)
+
+    async def test_registered_account_can_login_right_away(self) -> None:
+        """注册出来的账号立刻能登录：密码确实被哈希后存进去了。"""
+        async with client_for(app_with()) as client:
+            created = await client.post(REGISTER_PATH, json=self.NEW)
+            response = await client.post(
+                LOGIN_PATH, json={"account": "newbie", "password": "nacho-newbie"}
+            )
+        assert created.status_code == 201
+        assert response.status_code == 200
+        assert response.json()["data"]["user"]["account"] == "newbie"
+
+    async def test_duplicate_account_is_409(self) -> None:
+        """第二次注册同一个账号：409 + ACCOUNT_ALREADY_EXISTS（注册必须说清是哪种失败）。"""
+        async with client_for(app_with()) as client:
+            first = await client.post(REGISTER_PATH, json=self.NEW)
+            second = await client.post(REGISTER_PATH, json=self.NEW)
+        assert first.status_code == 201
+        assert second.status_code == 409
+        assert second.json()["error"]["code"] == ErrorCode.ACCOUNT_ALREADY_EXISTS
+
+    async def test_demo_account_counts_as_taken(self) -> None:
+        """演示账号（admin）已经在库里，注册它同样是 409。"""
+        async with client_for(app_with()) as client:
+            response = await client.post(
+                REGISTER_PATH,
+                json={
+                    "account": "admin",
+                    "password": "nacho-another",
+                    "nickname": "冒牌管理员",
+                },
+            )
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_ALREADY_EXISTS
+
+    async def test_bad_input_reports_every_field(self) -> None:
+        """账号字符集 / 密码长度 / 昵称长度各自报自己的字段，客户端才好逐个改。"""
+        async with client_for(app_with()) as client:
+            response = await client.post(
+                REGISTER_PATH,
+                json={"account": "a b", "password": "short", "nickname": ""},
+            )
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["code"] == ErrorCode.VALIDATION_ERROR
+        assert sorted(detail["field"] for detail in error["details"]) == [
+            "body.account",
+            "body.nickname",
+            "body.password",
+        ]
+
+    async def test_missing_nickname_is_422(self) -> None:
+        """昵称必填（请求契约如此；前端表单也会先拦一道）。"""
+        async with client_for(app_with()) as client:
+            response = await client.post(
+                REGISTER_PATH, json={"account": "newbie", "password": "nacho-newbie"}
+            )
+        assert response.status_code == 422
+        assert [detail["field"] for detail in response.json()["error"]["details"]] == [
+            "body.nickname"
+        ]
+
+    def test_register_request_keeps_password_secret(self) -> None:
+        """密码是 ``SecretStr``：从请求体（JSON）解析出来也打印不出明文。"""
+        request = RegisterRequest.model_validate(
+            {"account": "newbie", "password": "nacho-newbie", "nickname": "新来的"}
+        )
+        assert "nacho-newbie" not in repr(request)
+        assert request.nickname == "新来的"
 
 
 # ----------------------------------------------------------------------- 输入校验
@@ -569,6 +672,21 @@ class TestSecurity:
             await service.login(
                 Credentials(account="admin", password="wrong-password"),
                 client=ClientInfo(),
+            )
+
+    async def test_service_register_raises_account_already_exists(self) -> None:
+        """服务层同样只抛异常：重复注册是 409 那个，不是数据库的冲突错误。"""
+        service = AuthService(
+            await memory_user_store(Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)),
+            sessions=SessionService(await memory_session_store()),
+        )
+        profile = await service.register(
+            account="newbie", password="nacho-newbie", nickname="新来的"
+        )
+        assert profile.account == "newbie"
+        with pytest.raises(AccountAlreadyExistsError):
+            await service.register(
+                account="newbie", password="nacho-newbie", nickname="新来的"
             )
 
 

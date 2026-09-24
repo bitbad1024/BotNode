@@ -1,4 +1,4 @@
-"""鉴权的业务编排：查人 -> 比密码 -> 查停用 -> 开会话（并发令牌）。
+"""鉴权的业务编排：开新账号（注册）与登录 —— 查人 -> 比密码 -> 查停用 -> 开会话（并发令牌）。
 
 令牌不是 JWT、也不能自证：签发时把访问令牌绑进缓存（``令牌摘要 -> 用户 id``），
 每次用令牌就是拿它去缓存里换会话，顺手滑动续期；会话/设备与长期令牌摘要落在
@@ -15,18 +15,23 @@ from __future__ import annotations
 
 from nacho.core.logger import BaseLogger
 
-from ...common.errors import AccountDisabledError, InvalidCredentialsError, UnauthorizedError
+from ...common.errors import (
+    AccountAlreadyExistsError,
+    AccountDisabledError,
+    InvalidCredentialsError,
+    UnauthorizedError,
+)
 from ...logging import API_LOGGER_NAME, api_logger
 from ..session.models import ClientInfo, IssuedSession, SessionRecord
 from ..session.service import SessionService
-from ..user.models import profile_of
+from ..user.models import UserProfile, profile_of
 from ..user.protocols import PasswordHasher, UserStore
 from ..user.security import Pbkdf2PasswordHasher
 from .models import Credentials, CurrentUser, LoginResult
 
 
 class AuthService:
-    """登录服务：把「用户存储 / 密码哈希 / 会话」三份能力串成一次登录。"""
+    """登录与注册服务：把「用户存储 / 密码哈希 / 会话」三份能力串成一次登录，外加开新账号。"""
 
     def __init__(
         self,
@@ -122,6 +127,53 @@ class AuthService:
             session=issued.session,
             reused=reused,
         )
+
+    # ------------------------------------------------------------------ 注册
+    async def register(
+        self,
+        *,
+        account: str,
+        password: str,
+        nickname: str = "",
+        trace_id: str = "-",
+    ) -> UserProfile:
+        """注册一个新账号，返回它的对外资料；账号已被占用抛 409 的 :class:`ApiError`。
+
+        与登录刻意相反：注册**要**说清「这个账号有人了」——前端得据此提示换一个。
+
+        密码只在 :meth:`~nacho.api.services.user.protocols.PasswordHasher.hash` 里出现一次，
+        不进日志、不落明文。先查一遍再写，是为了常规路径给个明确答案、并且**不必为注定失败的
+        请求白算一次哈希**（PBKDF2 不便宜）；真正的兜底在落库那步的唯一约束上：并发下两个请求
+        同时注册同一个账号，由它拦下并翻成同一个异常。
+
+        :param nickname: 显示名（可留空；前端展示时自己回落到账号）。
+        """
+        if await self._store.get_by_account(account) is not None:
+            self._log().warning(
+                "注册失败", account=account, reason="账号已被注册", trace_id=trace_id
+            )
+            raise AccountAlreadyExistsError()
+        try:
+            user = await self._store.add(
+                account=account,
+                password_hash=self._hasher.hash(password),
+                nickname=nickname,
+            )
+        except AccountAlreadyExistsError:
+            # 刚查过又被别人抢注（并发）：补一条日志，异常原样往外抛——调用方只认这一种
+            self._log().warning(
+                "注册失败", account=account, reason="账号已被注册", trace_id=trace_id
+            )
+            raise
+        self._log().info(
+            "注册成功",
+            owner_id=user.id,  # 审计事件归属本人：新账号在 /logs 里也查得到自己这条
+            account=account,
+            user_id=user.id,
+            nickname=user.nickname,
+            trace_id=trace_id,
+        )
+        return profile_of(user)
 
     # ------------------------------------------------------------------ 认令牌
     async def current_user(self, token: str, *, trace_id: str = "-") -> CurrentUser:

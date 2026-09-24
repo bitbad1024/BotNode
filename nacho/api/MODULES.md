@@ -23,10 +23,10 @@ nacho/api/
 │   └── encoding.py       base64 编解码
 ├── api/              ★ 入口层：只管「对外怎么说」，认识 FastAPI
 │   ├── auth/
-│   │   ├── router.py         POST /auth/login、POST /auth/refresh、GET /auth/me
+│   │   ├── router.py         POST /auth/register、POST /auth/login、GET /auth/me
 │   │   │                     GET/DELETE /auth/sessions（登录设备与吊销）
 │   │   ├── dependencies.py   get_auth_service / bearer_scheme
-│   │   ├── requests.py       LoginRequest（请求 schema）
+│   │   ├── requests.py       LoginRequest / RegisterRequest（请求 schema）
 │   │   └── responses.py      LoginData（响应 schema）
 │   ├── onebot/       OneBot 管理（服务本身在 nacho.onebot，按协议取用，不 import）
 │   │   ├── router.py         在线列表 / 踢人 / 令牌签发与吊销
@@ -80,7 +80,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `common/models.py` | 响应壳：`ApiResponse` / `ErrorResponse` / `ErrorPayload` / `ErrorDetail`，以及 `DEFAULT_TRACE_ID`。不知道 `data` 里装的是什么。 |
 | `common/errors/__init__.py` | 汇总导出错误体系。 |
 | `common/errors/codes.py` | 错误码与 HTTP 状态：`ErrorCode` / `HttpStatus`。 |
-| `common/errors/exceptions.py` | 异常类型：`ApiError` 及其子类（`ValidationError`、`InvalidCredentialsError`、`AccountDisabledError`、`UnauthorizedError`、`TokenInvalidError`、`TokenExpiredError`、`InternalError`）。状态码挂在异常上。 |
+| `common/errors/exceptions.py` | 异常类型：`ApiError` 及其子类（`ValidationError`、`InvalidCredentialsError`、`AccountDisabledError`、`AccountAlreadyExistsError`、`UnauthorizedError`、`TokenInvalidError`、`TokenExpiredError`、`InternalError`）。状态码挂在异常上。 |
 | `common/errors/handlers.py` | `register_exception_handlers` / `to_error_details`：把异常翻成统一的 `ErrorResponse` 形状。 |
 | `common/middlewares/__init__.py` | 汇总导出中间件。 |
 | `common/middlewares/request_log.py` | `RequestLogMiddleware`：每次请求生成编号、写访问日志一行（方法 / 路径 / 状态码 / 耗时 / trace_id）。 |
@@ -106,9 +106,9 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/auth/router.py` | **HTTP 入口**：`POST <prefix>/auth/login`（账号+密码换令牌）、`GET <prefix>/auth/me`（令牌换当前用户资料）、`GET/DELETE <prefix>/auth/sessions[/{token_hash}]`（登录设备列表 / 吊销一条）。自身不含业务判断，只翻译请求 / 装配响应。 |
+| `api/auth/router.py` | **HTTP 入口**：`POST <prefix>/auth/register`（注册新账号，201 + 资料、**不发令牌**）、`POST <prefix>/auth/login`（账号+密码换令牌）、`GET <prefix>/auth/me`（令牌换当前用户资料）、`GET/DELETE <prefix>/auth/sessions[/{token_hash}]`（登录设备列表 / 吊销一条）。自身不含业务判断，只翻译请求 / 装配响应。 |
 | `api/auth/dependencies.py` | 路由注入件：`get_auth_service`（从 `app.state` 取服务）、`bearer_scheme`/`BearerDep`/`AuthServiceDep`。 |
-| `api/auth/requests.py` | 请求体 `LoginRequest`，字段复用 `services.user.validation` 的 `Account` / `Password`。 |
+| `api/auth/requests.py` | 请求体 `RegisterRequest`（注册：账号 + 密码 + 昵称）、`LoginRequest`（登录），字段复用 `services.user.validation` 的 `Account` / `Password` / `Nickname`。 |
 | `api/auth/responses.py` | 响应体 `LoginData`（令牌 + 有效期 + 用户资料）、`SessionData` / `RevokeSessionData`（设备列表与吊销），用户资料复用 `UserProfile`。 |
 
 > **对外那个 id 叫 `token_hash`，不叫 `session_id`**：它就是**令牌摘要**（`sha256(令牌明文)`），
@@ -194,10 +194,10 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | 文件 | 作用 |
 |---|---|
 | `services/user/models.py` | `UserRecord`（内部形状，**带 `password_hash`**）/ `UserProfile`（对外资料，**无密码字段**）/ `profile_of`（两者转换，显式决定露不露字段）。 |
-| `services/user/validation.py` | 账号 / 密码规则：`Account` / `Password`（pydantic `AfterValidator`，`SecretStr` 包密码）。登录、将来注册 / 改资料共用。 |
-| `services/user/protocols.py` | 能力协议（只声明不实现）：`UserStore`（按账号 / 按 id 查人，异步）、`PasswordHasher`（hash / verify）。 |
+| `services/user/validation.py` | 账号 / 密码 / 昵称规则：`Account` / `Password` / `Nickname`（pydantic `AfterValidator`，`SecretStr` 包密码）。登录、注册共用一份，「改资料」将来也用它。 |
+| `services/user/protocols.py` | 能力协议（只声明不实现）：`UserStore`（按账号 / 按 id 查人，外加注册那一笔 `add`，异步）、`PasswordHasher`（hash / verify）。 |
 | `services/user/security.py` | 默认实现 `Pbkdf2PasswordHasher`：PBKDF2-SHA256，串自带算法 / 迭代 / 盐 / 摘要，定长比对。 |
-| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`seed_demo` 空表种演示账号（`admin` / `robot` / `guest` 已停用）。 |
+| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`add` 新增一个账号（注册用，撞 `account` 唯一约束时翻成 `AccountAlreadyExistsError`，不把数据库异常漏出去）、`seed_demo` 空表种演示账号（`admin` / `robot` / `guest` 已停用）。 |
 | `services/user/demo.py` | 演示账号 `DEMO_USERS` 的单一来源（`seed_demo` 用），改账号只改一处。 |
 
 ### 4.3 services/auth/ —— 鉴权业务
@@ -207,7 +207,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `services/auth/models.py` | 业务层 I/O（不认识 HTTP）：`Credentials`（凭据输入）、`LoginResult`（签发结果）。 |
 | `services/auth/protocols.py` | 能力协议（只声明不实现）：`TokenService`（issue / parse）、`TokenClaims`（令牌里的东西，所有实现必须产出同一形状）。 |
 | `services/auth/security.py` | 默认实现 `HmacTokenService`：HMAC-SHA256 不透明令牌（非 JWT）；`resolve_secret` 管缺省密钥。 |
-| `services/auth/service.py` | **业务编排** `AuthService`：查人 → 比密码 → 查停用 → 签令牌；以及 `current_user`（令牌 → 查人）。依赖走 `services.user` 与本模块协议，换库 / 换算法 / 换令牌形式都不用改这里。 |
+| `services/auth/service.py` | **业务编排** `AuthService`：`register`（开新账号：查重 → 哈希 → 落库，账号被占抛 409）与 `login`（查人 → 比密码 → 查停用 → 开会话发令牌）；以及 `current_user`（令牌 → 查人）。依赖走 `services.user` 与本模块协议，换库 / 换算法 / 换令牌形式都不用改这里。 |
 
 ---
 

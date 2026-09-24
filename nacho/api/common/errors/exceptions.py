@@ -95,6 +95,21 @@ class AccountDisabledError(ApiError):
         )
 
 
+class AccountAlreadyExistsError(ApiError):
+    """注册时账号已被占用（409）：账号是唯一的，同一个账号只能注册一次。
+
+    与 :class:`InvalidCredentialsError` 的「不告诉对方账号存不存在」不同：注册**必须**说清楚
+    是哪一种失败，否则前端没法给「换个账号」的提示。
+    """
+
+    def __init__(self, message: str = "账号已被注册") -> None:
+        super().__init__(
+            ErrorCode.ACCOUNT_ALREADY_EXISTS,
+            message,
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
+
 class UnauthorizedError(ApiError):
     """没带令牌 / 令牌用不了（401）。"""
 
