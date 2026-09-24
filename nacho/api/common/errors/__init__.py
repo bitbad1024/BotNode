@@ -40,7 +40,7 @@ from .exceptions import (
     UnauthorizedError,
     ValidationError,
 )
-from .handlers import register_exception_handlers, to_error_details
+from .handlers import register_exception_handlers
 
 __all__ = [
     "ErrorCode",
@@ -55,5 +55,4 @@ __all__ = [
     "TokenExpiredError",
     "InternalError",
     "register_exception_handlers",
-    "to_error_details",
 ]

@@ -59,7 +59,6 @@ from .common.errors import (
     UnauthorizedError,
     ValidationError,
     register_exception_handlers,
-    to_error_details,
 )
 from .common.middlewares import RequestLogMiddleware
 from .common.models import ApiResponse, ErrorDetail, ErrorPayload, ErrorResponse
@@ -157,7 +156,6 @@ __all__ = [
     "TokenExpiredError",
     "InternalError",
     "register_exception_handlers",
-    "to_error_details",
     # 用户模块
     "UserRecord",
     "UserProfile",

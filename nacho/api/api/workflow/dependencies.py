@@ -17,7 +17,9 @@ from ...services.auth.models import CurrentUser
 from ..auth.dependencies import CurrentUserDep
 from fastapi import status as http_status
 
-from nacho.workflow import SqlWorkflowStore, WorkflowDefinitionRecord
+from nacho.workflow import WorkflowDefinitionRecord
+
+from .protocols import WorkflowStoreLike
 
 #: 管理员角色名（与演示账号约定一致）
 ADMIN_ROLE: str = "admin"
@@ -26,21 +28,21 @@ ADMIN_ROLE: str = "admin"
 class _AppState(Protocol):
     """挂在 ``app.state`` 上、本模块要用到的东西（由 :func:`nacho.api.create_app` 写入）。"""
 
-    workflow_store: SqlWorkflowStore
+    workflow_store: WorkflowStoreLike
 
 
 class _App(Protocol):
     state: _AppState
 
 
-def get_workflow_store(request: Request) -> SqlWorkflowStore:
-    """取工作流存储：装配时挂在 ``app.state.workflow_store`` 上。"""
+def get_workflow_store(request: Request) -> WorkflowStoreLike:
+    """取工作流存储：装配时挂在 ``app.state.workflow_store`` 上（只认协议，见 :mod:`.protocols`）。"""
     app = cast("_App", request.app)
     return app.state.workflow_store
 
 
 #: 依赖简写：路由函数里写 ``store: WorkflowStoreDep`` 即可
-WorkflowStoreDep = Annotated[SqlWorkflowStore, Depends(get_workflow_store)]
+WorkflowStoreDep = Annotated[WorkflowStoreLike, Depends(get_workflow_store)]
 
 
 def is_admin(user: CurrentUser) -> bool:
@@ -49,7 +51,7 @@ def is_admin(user: CurrentUser) -> bool:
 
 
 async def get_in_scope(
-    store: SqlWorkflowStore, user: CurrentUser, workflow_id: str
+    store: WorkflowStoreLike, user: CurrentUser, workflow_id: str
 ) -> WorkflowDefinitionRecord:
     """按 id 取工作流并做归属把关；不存在 / 越界统一 **404**（不泄露存在性）。"""
     record = await store.get(workflow_id)

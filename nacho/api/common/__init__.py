@@ -27,7 +27,6 @@ from .errors import (
     UnauthorizedError,
     ValidationError,
     register_exception_handlers,
-    to_error_details,
 )
 from .middlewares import RequestLogMiddleware
 from .models import (
@@ -57,7 +56,6 @@ __all__ = [
     "TokenExpiredError",
     "InternalError",
     "register_exception_handlers",
-    "to_error_details",
     # 中间件
     "RequestLogMiddleware",
     # 路由通用依赖
