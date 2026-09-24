@@ -159,10 +159,20 @@ const NODE_TYPES: Record<string, NodeTypeDef> = {
     outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
     constants: ['assignee'],
   },
+  constant: {
+    type: 'constant', label: '常量', color: '#eab308', defaults: {},
+    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
+    outputs: [
+      { id: 'trigger', type: 'trigger', label: '触发' },
+      { id: 'message', type: 'message', label: '值' },
+    ],
+    // 常量就是 config 本身：键名在 nodeDef 里按 config 动态取，卡片上每个常量一个标签
+    constants: [],
+  },
 }
 
 const PALETTE_ORDER: string[] = [
-  'start', 'end', 'log', 'test', 'task',
+  'start', 'end', 'constant', 'log', 'test', 'task',
   'http', 'condition', 'expression', 'gateway', 'approval',
 ]
 
@@ -198,6 +208,10 @@ const START_MESSAGE_DEF: NodeTypeDef = {
 function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
   if (type === 'start') {
     return config?.trigger === 'time' ? START_TIME_DEF : START_MESSAGE_DEF
+  }
+  if (type === 'constant') {
+    // 常量节点的常量就是 config 本身：几个键就在卡片上显示几条（高度跟着长）
+    return { ...NODE_TYPES.constant, constants: Object.keys(config ?? {}) }
   }
   return NODE_TYPES[type] ?? {
     type: type as NodeType, label: type, color: '#64748b', defaults: {},
@@ -538,6 +552,48 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       nodes: g.nodes.map((n) =>
         n.id === id ? { ...n, config: { ...n.config, [key]: value } } : n,
       ),
+    }))
+  }, [])
+
+  // ---- 常量节点：一行一个「名字 -> 值」，名字同步进 outputs（下游 {{名字}} 引用靠它）----
+  const addConstant = useCallback((id: string) => {
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => {
+        if (n.id !== id) return n
+        let index = 1
+        while (`name_${index}` in n.config) index += 1
+        const config = { ...n.config, [`name_${index}`]: '' }
+        return { ...n, config, outputs: Object.keys(config) }
+      }),
+    }))
+  }, [])
+
+  const renameConstant = useCallback((id: string, from: string, to: string) => {
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => {
+        if (n.id !== id) return n
+        const config: Record<string, unknown> = {}
+        for (const [key, value] of Object.entries(n.config)) {
+          config[key === from ? to : key] = value
+        }
+        return { ...n, config, outputs: Object.keys(config) }
+      }),
+    }))
+  }, [])
+
+  const removeConstant = useCallback((id: string, name: string) => {
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => {
+        if (n.id !== id) return n
+        const config: Record<string, unknown> = {}
+        for (const [key, value] of Object.entries(n.config)) {
+          if (key !== name) config[key] = value
+        }
+        return { ...n, config, outputs: Object.keys(config) }
+      }),
     }))
   }, [])
 
@@ -1181,9 +1237,49 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   </select>
                 </div>
               )}
-              {Object.entries(selectedNode.config)
-                .filter(([key]) => key !== 'trigger')
-                .map(([key, value]) => (
+              {selectedNode.type === 'constant' && (
+                <div className={styles.field}>
+                  <label className={styles.label}>常量（名字 → 值）</label>
+                  {Object.entries(selectedNode.config).map(([name, value], index) => (
+                    <div className={styles.constRow} key={index}>
+                      <input
+                        className={styles.input}
+                        value={name}
+                        placeholder="名字"
+                        onChange={(e) => renameConstant(selectedNode.id, name, e.target.value)}
+                      />
+                      <input
+                        className={styles.input}
+                        value={String(value ?? '')}
+                        placeholder="值"
+                        onChange={(e) => updateConfig(selectedNode.id, name, e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className={styles.iconBtn}
+                        aria-label={`删除常量 ${name}`}
+                        onClick={() => removeConstant(selectedNode.id, name)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className={styles.ghostBtn}
+                    onClick={() => addConstant(selectedNode.id)}
+                  >
+                    + 加一个常量
+                  </button>
+                  <div className={styles.constHint}>
+                    下游写 {'{{名字}}'} 读取；要连了线才读得到。名字会同步进「输出变量」
+                  </div>
+                </div>
+              )}
+              {selectedNode.type !== 'constant' &&
+                Object.entries(selectedNode.config)
+                  .filter(([key]) => key !== 'trigger')
+                  .map(([key, value]) => (
                 <div className={styles.field} key={key}>
                   <label className={styles.label}>{key}</label>
                   {key === 'method' ? (

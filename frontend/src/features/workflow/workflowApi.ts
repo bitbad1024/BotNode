@@ -13,6 +13,7 @@ export type NodeType =
   | 'task'
   | 'log'
   | 'test'
+  | 'constant'
 
 export interface WorkflowNode {
   id: string
