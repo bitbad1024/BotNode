@@ -3,7 +3,7 @@
 > 本文件是 `nacho/workflow/` 下**逐文件 → 作用**的速查索引。详细的「为什么」写在每个 `.py` 的
 > 模块 docstring 里（`:mod:` 交叉引用），本文件只做「一眼定位」。
 >
-> **要写自己的节点，直接跳第 5 节**（完整指南：契约、注册、白名单、可选依赖、测试写法）。
+> **要写自己的节点，直接跳第 5 节**（完整指南：契约、注册即校验、可选依赖、测试写法）。
 >
 > 同步规则：新增 / 重命名 / 删除文件时，记得更新这里。
 
@@ -17,15 +17,16 @@ nacho/workflow/
 ├── validator.py     入库前校验：结构 → 拓扑 → 语义（④ Dry Run 留协议位）
 ├── store.py         落库：定义 / 版本两张表（SQLModel + AsyncSession），按归属隔离
 ├── nodes/           ★ 节点执行器：一类节点一个文件 + 注册表（**写自己的节点看这里**）
-│   ├── base.py          契约：NodeExecutor / NodeExecutionContext / render_variables
-│   ├── registry.py      注册表：register_executor / @register_node / get_executor / load_node_modules
+│   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / NodeExecutionContext
+│   ├── registry.py      注册表：register_node / declare_node_type / get_spec / load_node_modules
 │   ├── start.py         内置：start（图起点；trigger=time 时按 cron 登记调度器）
 │   ├── end.py           内置：end（图终点）
 │   ├── log.py           内置：log（按级别写业务日志）
 │   ├── test.py          内置：test（回显，画布联调用）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
+│   ├── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
 │   └── time_trigger.py  兼容：旧版 time-trigger 类型（历史版本快照），行为同 start 的时间触发
-├── executor.py      运行器：按拓扑顺序把图跑起来（SimpleWorkflowRunner）
+├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行（SimpleWorkflowRunner）
 └── runtime.py       运行时：加载已发布版本的图并执行（时间触发的 start 到点后走它）
 ```
 
@@ -33,7 +34,7 @@ nacho/workflow/
 
 ```
 executor / runtime ──► nodes ──► models
-validator ──────────► nodes.http      （只为拿 method 白名单）
+validator ──────────► nodes.registry / nodes.base（读注册规格：角色、字段、校验器）
 store ──────────────► models
 ```
 
@@ -47,8 +48,7 @@ store ──────────────► models
 
 | 名字 | 作用 |
 |---|---|
-| `NodeType` | 节点类型的字面量白名单（**新增类型要在这里登记**，见第 5.6 节） |
-| `WorkflowNode` | 一个节点：`id`（图内唯一）/ `type` / `config` / `outputs`（声明的输出变量名） |
+| `WorkflowNode` | 一个节点：`id`（图内唯一）/ `type`（合法值 = 注册表里已登记的类型）/ `config` / `outputs`（声明的输出变量名） |
 | `WorkflowEdge` | 一条有向边：`source` → `target`（也是变量作用域的传播方向） |
 | `WorkflowGraph` | 一张图：`nodes` + `edges`，入库前校验与版本快照装的都是它 |
 | `ValidationIssue` / `ValidationReport` | 校验结果：`node_id` + `code` + 人话 + 建议；失败会带上卡在哪个 `stage` |
@@ -63,13 +63,16 @@ store ──────────────► models
 
 | 阶段 | 查什么 | 典型错误码 |
 |---|---|---|
-| ① 结构 | 能不能解析成图、节点 id 唯一、类型在白名单里 | `UNKNOWN_NODE_TYPE` |
-| ② 拓扑 | 有起点 / 有终点、无环（Kahn）、没有只进不出这类悬空结构 | `CYCLE_DETECTED` 等 |
-| ③ 语义 | 必填 config、变量作用域（`{{x}}` 得有前置节点声明）、表达式语法、类型专属配置 | `MISSING_CONFIG` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
+| ① 结构 | 能不能解析成图、节点 id 唯一、边端点存在、主流程上的类型都已注册（孤儿类型不查） | `UNKNOWN_NODE_TYPE` |
+| ② 拓扑 | **只看 start 可达的主流程**：start 唯一、至少一个可达 end、无环（Kahn）、注册的出入边约束（gateway≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
+| ③ 语义 | 注册字段必填、节点自注册校验器（trigger/cron、log level、http method）、变量作用域、表达式语法；**全部只查主流程节点** | `MISSING_CONFIG` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
 | ④ Dry Run | 预留协议位（`DryRunner` / `ExpressionSyntaxChecker`），当前默认全放行 | —— |
 
 > **短路**：某一阶段出错就不再往后跑 —— 结构都不对，拓扑 / 语义无从谈起。
-> 类型专属校验集中在 `_type_specific()`，加一条规则就加一个 `elif node.type == ...` 分支。
+> 类型专属规则不在校验器里写分支：每个节点在注册时挂自己的校验器（第 5.6 节）。
+>
+> **孤儿节点永远合法**：从 start 不可达的节点（散点、独立小图、内部带环的组件）不产生
+> 任何错误、不参与语义检查，运行器也不执行它们——「用不到，但确实可以保存」。
 
 ## 3. store.py —— 落库
 
@@ -86,25 +89,28 @@ store ──────────────► models
 
 | 文件 | 作用 | config（必填项加粗） |
 |---|---|---|
-| `base.py` | **契约**：`NodeExecutor` 类型、`NodeExecutionContext`、`render_variables` | —— |
-| `registry.py` | **注册表**：`register_executor` / `@register_node` / `get_executor` / `registered_types` / `load_node_modules` | —— |
-| `start.py` | 图起点；`trigger=time` 时把整条流程按 cron 登记到调度器 | `trigger`（缺省 `message`）、`cron`（time 触发必填）、`name` |
-| `end.py` | 图终点：写一条完成日志 | —— |
-| `log.py` | 按级别写业务日志（支持 `{{变量}}`） | **`message`**、`level`（缺省 INFO） |
-| `test.py` | 回显，画布联调 | `echo`（缺省用节点 id） |
-| `time_trigger.py` | 兼容：旧版 `time-trigger` 类型（历史版本快照），行为同 `start` 的时间触发 | 同 `start` |
-| `http.py` | 发一次 HTTP 请求，产出 `http_status` / `http_body` | **`url`**、**`method`**、`headers`、`body`、`timeout` |
+| `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `NodeExecutionContext` / `render_variables` | —— |
+| `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— |
+| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
+| `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | —— |
+| `log.py` | 按级别写业务日志（支持 `{{变量}}`） | **`message`**、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
+| `test.py` | 回显，画布联调 | `echo`（缺省用节点 id，运行期兜底） |
+| `http.py` | 发一次 HTTP 请求 | **`url`**、**`method`**（枚举由自注册校验器把）、`timeout`（缺省 10，注册默认值）、`headers`、`body` |
+| `declared.py` | 占位声明 gateway / approval / expression / condition / task：规则可校验、执行器未实现 | approval 的 **`assignee`**、expression 的 **`expression`**、condition 的 **`condition`** |
+| `time_trigger.py` | 兼容：旧版 `time-trigger` 类型（历史版本快照），行为同 `start` 的时间触发 | `cron`（复用 start 的时间校验器） |
 
-**注册表是进程级、内存里的一张表**（`registry._EXECUTORS`，类型名 → 执行函数），不落库、没有配置文件：
+**注册表是进程级、内存里的一张表**（`registry._SPECS`，类型名 → `NodeSpec`），不落库、没有配置文件：
 
 ```python
-_EXECUTORS: dict[str, NodeExecutor] = {}
+_SPECS: dict[str, NodeSpec] = {}
 
-def register_executor(node_type: str, executor: NodeExecutor) -> None: ...   # 重复注册 = 覆盖
-def register_node(node_type: str) -> Callable[[NodeExecutor], NodeExecutor]: ...  # 装饰器写法
-def get_executor(node_type: str) -> NodeExecutor | None: ...                 # 没注册给 None
-def registered_types() -> tuple[str, ...]: ...                              # 排查「注册上没有」
-def load_node_modules(*module_names: str) -> list[str]: ...                 # 装外部模块
+def register_node(node_type, *, fields=(), validator=None, role="normal",
+                  min_outgoing=0, max_outgoing=None, expression_field=None): ...  # 装饰器
+def declare_node_type(node_type, *, fields=(), ...): ...   # 只登记规则、执行器留空
+def get_spec(node_type) -> NodeSpec | None: ...            # 校验器读的就是它
+def get_executor(node_type) -> NodeExecutor | None: ...    # 没注册（或只声明）给 None
+def registered_types() -> tuple[str, ...]: ...             # 排查「注册上没有」
+def load_node_modules(*module_names) -> list[str]: ...     # 装外部模块
 ```
 
 包一被 import，各节点模块就自己登记一次（`nodes/__init__.py` 逐个 import 内置节点）。
@@ -117,9 +123,18 @@ def load_node_modules(*module_names: str) -> list[str]: ...                 # �
 ```python
 # ① 新建一个模块（照 nacho/workflow/nodes/log.py 的样子；一个节点一个文件）
 #    my_pkg/nodes/dingtalk.py
-from nacho.workflow.nodes import NodeExecutionContext, register_node, render_variables
+from nacho.workflow.nodes import (
+    ConfigField, NodeExecutionContext, register_node, render_variables,
+)
 
-@register_node("dingtalk")                     # ② 当场注册：类型名 -> 这个函数
+@register_node(
+    "dingtalk",
+    # ② 当场注册：执行函数 + 校验规则一起声明，校验器 / 模型 / 前端框架代码都不用动
+    fields=[
+        ConfigField("text", "消息内容", required=True),   # 缺失 → MISSING_CONFIG
+        ConfigField("format", "格式", default="text"),    # 缺失 → 保存时自动补 text
+    ],
+)
 async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
     text = render_variables(str(node.config.get("text", "")), ctx.variables)
     ctx.logger.info("发钉钉消息", node_id=node.id, text=text)
@@ -189,24 +204,51 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 跑图的失败长这样（`executor.py`）：执行函数一抛，`SimpleWorkflowRunner.run` 就中断，
 日志里那条异常带着堆栈 —— 比「跑完了但什么都没发生」好查得多。
 
-### 5.6 校验那一关：类型白名单（当前的硬约束）
+### 5.6 校验那一关：注册什么，就校验什么
 
-写完执行函数只是**执行**那一半；要让图能存下来、能跑，还得登记类型。当前要动**四处**：
+校验器（`validator.py`）**没有任何具体节点类型的知识**：它只从注册表读每个类型的
+`NodeSpec`，按规格办事。新增类型不用动 `validator.py` / `models.py` 一行。
 
-| 位置 | 不登记会怎样 |
-|---|---|
-| `nacho/workflow/models.py` 的 `NodeType`（pydantic `Literal`） | 图**根本解析不出来**（提交就 422） |
-| `nacho/workflow/validator.py` 的 `NODE_TYPES` | 校验报 `UNKNOWN_NODE_TYPE` |
-| `nacho/workflow/validator.py` 的 `REQUIRED_CONFIG` | 不强制 config 必填项（可选：想让某个字段必填就登记） |
-| 前端 `features/workflow/WorkflowEditor.tsx` 的 `NODE_TYPES` + `workflowApi.ts` 的 `NodeType` | 画布上没有这个节点可选 |
+**① config 字段分两类，在注册处声明**（`fields=[ConfigField(...)]`）：
 
-> 这是当前实现里唯一「必须改框架文件」的地方（类型白名单还没从注册表推导）。
-> 打算做成「白名单 = 内置 ∪ 已注册执行器」的话，从 `validator.NODE_TYPES` 与
-> `models.WorkflowNode.type` 那两处入手。
+| 字段类别 | 写法 | 缺失时 |
+|---|---|---|
+| 不可缺失字段 | `ConfigField("url", required=True)` | 主流程上的节点直接报 `MISSING_CONFIG`（`None` / 空串也算缺失） |
+| 默认值字段 | `ConfigField("level", default="INFO")` | 校验前先补默认值（自定义校验器看到的是补全后的 config）；保存版本时写进快照 |
 
-顺带把**类型专属校验**补上（可选但推荐）：`validator._type_specific()` 里加一个分支，
-配置写错就能在**保存时**报出来，而不是等跑起来。`http` 的 `INVALID_HTTP_METHOD` 就是这么加的
-（和执行器认同一份 `HTTP_METHODS`）。
+未声明的字段一律不查，原样留在 config 里。
+
+**② 类型专属规则挂自定义校验器**（普通必填 / 默认表达不了的，比如枚举、跨字段条件）：
+
+```python
+def validate_dingtalk(node: WorkflowNode) -> list[ValidationIssue]:
+    if node.config.get("format") not in ("text", "markdown"):
+        return [ValidationIssue(node_id=node.id, code="BAD_FORMAT",
+                                message="format 只认 text/markdown")]
+    return []
+
+@register_node("dingtalk", fields=[...], validator=validate_dingtalk)
+async def exec_dingtalk(node, ctx): ...
+```
+
+校验器收到的是**补完默认值**的节点，只负责返回 issue 列表（空列表 = 通过），
+错误码自定义（照 `http.py` 的 `INVALID_HTTP_METHOD`、`start.py` 的 `INVALID_CRON` 抄）。
+
+**③ 拓扑角色与出入边约束也在注册处声明**：`role="start"|"end"|"normal"`、
+`min_outgoing` / `max_outgoing`、`expression_field`（指定哪个字段按表达式做语法检查）。
+`gateway` 用 `min_outgoing=2` 表达「至少两个分支」，`end` 用 `max_outgoing=0` 表达「不能有出边」，
+都是通用约束，没有特判代码。
+
+**④ 只声明、不实现：`declare_node_type`**。执行器还没写、但希望类型已经能进画布、
+能保存、能被校验时，只登记规格（`nodes/declared.py` 里的 gateway / approval 等就是占位）。
+这种类型真被主流程跑到时，运行器按老规矩报「暂无执行器」。
+
+**⑤ 孤儿节点**：从 start 不可达的节点**一律放行**——类型未注册、config 缺失、自带环都不报错，
+保存可以、运行不跑。所以字段规则只对主流程（start 可达）上的节点生效。
+
+**⑥ 前端**：节点在画布上的图标 / 名称 / 配置表单仍是前端自己的清单
+（`WorkflowEditor.tsx` 的 `NODE_TYPES`、`workflowApi.ts` 的 `NodeType`，后者已是
+`NodeType | string` 不挡新类型）；后端不再需要同步任何白名单。
 
 ### 5.7 带可选依赖的节点（照 `http.py` 抄）
 
@@ -230,7 +272,7 @@ def _import_httpx() -> Any:
 ```python
 @pytest.mark.asyncio
 async def test_my_node_outputs(...) -> None:
-    node = WorkflowNode.model_construct(          # 非白名单类型用 model_construct 造节点
+    node = WorkflowNode(                          # type 已是自由字符串，正常构造即可
         id="d1", type="dingtalk", config={"text": "hi {{name}}"}, outputs=["dingtalk_text"]
     )
     ctx = NodeExecutionContext()
@@ -246,9 +288,11 @@ async def test_my_node_outputs(...) -> None:
 
 ### 5.9 上线前自查
 
-- [ ] 执行函数注册上了（`get_executor("类型") is not None`）
-- [ ] 白名单四处登记齐了（`NodeType` / `NODE_TYPES` / `REQUIRED_CONFIG` / 前端两处）
-- [ ] 类型专属校验（可选）：配置写错在保存时就报
+- [ ] 类型在模块里注册上了（`get_spec("类型") is not None`；有执行函数再查 `get_executor`）
+- [ ] config 字段规则在注册处声明齐了：必填的 `required=True`，有缺省的给 `default`
+- [ ] 类型专属校验（可选）：注册时挂 `validator`，配置写错在保存时就报
+- [ ] 需要的拓扑约束：`role` / `min_outgoing` / `max_outgoing` / `expression_field`
+- [ ] 前端画布清单（`WorkflowEditor.tsx`）加了入口；`workflowApi.ts` 无需改动
 - [ ] `outputs` 与实际返回的 key 一致，名字带节点前缀
 - [ ] 环境问题会抛、业务结果会返回（第 5.5 节）
 - [ ] 有单测，且外部依赖是打桩的
@@ -257,8 +301,9 @@ async def test_my_node_outputs(...) -> None:
 
 | 要加的东西 | 放哪 |
 |---|---|
-| 新节点类型 | `nodes/<类型>.py`（一类一个文件，`@register_node` 注册）+ 四处白名单（第 5.6 节） |
-| 节点类型专属的校验规则 | `validator.py` 的 `_type_specific()` |
+| 新节点类型 | `nodes/<类型>.py`（一类一个文件，`@register_node` 一次声明执行器 + 字段 + 校验规则，第 5.6 节）；只有规则没有执行器用 `declare_node_type` |
+| 节点类型专属的校验规则 | 该节点模块里写校验函数，注册时挂 `validator=`（不动 `validator.py`） |
+| 通用的图层面校验（新的拓扑规则 / 新阶段） | `validator.py`（只放跨类型、与具体节点无关的规则） |
 | 图 / 记录上要加字段 | `models.py`（协议）+ `store.py`（表结构） |
 | 新的 HTTP 接口 | `nacho/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 分支 / 重试） | `executor.py` 的 `WorkflowRunner` 协议位 |

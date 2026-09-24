@@ -8,17 +8,74 @@ config:
 ``time`` 不自己"到点执行"：把整条流程图登记到
 :class:`~nacho.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；``message`` 被动
 等消息接入（消息源留待后续），发布 / 试跑时只写一条开始日志。
+
+校验规则（trigger 枚举 / time 时 cron 必填且合法）在 :func:`validate_start_node` 里，
+随注册一起挂进注册表，校验器框架代码不认识具体类型。
 """
 from __future__ import annotations
 
 from typing import Any
 
-from ..models import WorkflowNode
-from .base import NodeExecutionContext
+from ..models import ValidationIssue, WorkflowNode
+from .base import ConfigField, NodeExecutionContext
 from .registry import register_node
 
+#: start 节点的触发方式：time = cron 定时触发（需配 cron）；message = 消息触发（缺省）
+START_TRIGGERS: frozenset[str] = frozenset({"time", "message"})
 
-@register_node("start")
+
+def validate_start_node(node: WorkflowNode) -> list[ValidationIssue]:
+    """start 配置校验：trigger 只能是 time/message（缺省 message）；time 时 cron 必填且合法。"""
+    trigger = node.config.get("trigger", "message")
+    if not isinstance(trigger, str) or trigger not in START_TRIGGERS:
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_TRIGGER",
+                message=f"start 节点 {node.id} 的触发方式 {trigger!r} 不合法",
+                suggestion="config.trigger 只能是 time（定时）或 message（消息）",
+            )
+        ]
+    if trigger != "time":
+        return []
+    return validate_time_cron(node)
+
+
+def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
+    """``trigger=time`` 的配置：cron 必填且合法（旧版 time-trigger 节点也复用它）。"""
+    cron = node.config.get("cron")
+    if not isinstance(cron, str) or not cron.strip():
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="MISSING_CONFIG",
+                message=f"start 节点 {node.id} 选择了时间触发，但缺少必填配置 cron（cron 表达式）",
+                suggestion="在 config.cron 中补充 5/6 段 cron 表达式，如 */5 * * * *",
+            )
+        ]
+
+    from nacho.core.scheduler import CronExpr, CronError  # 局部导入避免循环依赖
+
+    try:
+        CronExpr.parse(cron.strip())
+    except CronError as exc:
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_CRON",
+                message=f"start 节点 {node.id} 的 cron 表达式不合法：{exc}",
+                suggestion="cron 用 5 段（分 时 日 月 周）或 6 段（秒 分 时 日 月 周），如 */5 * * * *",
+            )
+        ]
+    return []
+
+
+@register_node(
+    "start",
+    role="start",
+    fields=[ConfigField("trigger", "触发方式", default="message")],
+    validator=validate_start_node,
+)
 async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """开始节点：按 ``config.trigger`` 分流。"""
     trigger = str(node.config.get("trigger", "message"))

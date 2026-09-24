@@ -32,6 +32,7 @@ from nacho.core.scheduler import scheduler
 from nacho.workflow.runtime import run_published_workflow
 from nacho.workflow import (
     WorkflowNameConflict,
+    apply_config_defaults,
     canonical_graph_json,
     graph_checksum,
     validate_graph,
@@ -221,10 +222,13 @@ async def save_version(
             status_code=status.HTTP_200_OK,
         )
 
+    # 校验过了再按各节点注册的默认值补全 config（trigger/level/timeout 之类），
+    # 落库快照与摘要都以补全后的图为准——缺什么运行期不用再猜
+    normalized = apply_config_defaults(payload.graph)
     version, created = await store.add_version(
         record,
-        graph_json=canonical_graph_json(payload.graph),
-        checksum=graph_checksum(payload.graph),
+        graph_json=canonical_graph_json(normalized),
+        checksum=graph_checksum(normalized),
         note=payload.note,
     )
     latest = await store.get(record.id)

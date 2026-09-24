@@ -26,12 +26,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E40
 
 from nacho.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
 from nacho.workflow import (  # noqa: E402
+    ConfigField,
     NodeExecutionContext,
     SimpleWorkflowRunner,
     SqlWorkflowStore,
+    ValidationIssue,
     WorkflowGraph,
     WorkflowNameConflict,
     WorkflowNode,
+    apply_config_defaults,
     canonical_graph_json,
     graph_checksum,
     load_node_modules,
@@ -131,14 +134,54 @@ def test_topology_detects_cycle() -> None:
     assert any(issue.code == "CYCLE_DETECTED" for issue in report.errors)
 
 
-def test_topology_detects_orphan_and_self_loop() -> None:
-    graph = {
+def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None:
+    """孤儿节点（不可达）及其自环 / 环 / 缺配置一律放行；主路径上的自环仍要拦。"""
+    with_orphan = {
         "nodes": [node("s", "start"), node("e", "end"), node("lonely", "task")],
         "edges": [edge("s", "e"), edge("lonely", "lonely")],
     }
-    codes = {issue.code for issue in validate_graph(graph).errors}
-    assert "ORPHAN_NODE" in codes
+    assert validate_graph(with_orphan).valid  # 孤儿自环不影响主流程
+
+    # 孤儿组件内部成环 + 是个没配 url 的 http：照样允许保存
+    orphan_mess = {
+        "nodes": [
+            node("s", "start"),
+            node("e", "end"),
+            node("o1", "http"),  # 缺必填 url/method，但不可达
+            node("o2", "task"),
+        ],
+        "edges": [
+            edge("s", "e"),
+            edge("o1", "o2"),
+            edge("o2", "o1"),  # 孤儿环
+        ],
+    }
+    assert validate_graph(orphan_mess).valid
+
+    # 未注册类型的孤儿也放行（插件没装 / 先画了再说）
+    orphan_unknown = {
+        "nodes": [node("s", "start"), node("e", "end"), node("x", "火星节点")],
+        "edges": [edge("s", "e")],
+    }
+    assert validate_graph(orphan_unknown).valid
+
+    # 主路径自环仍报错
+    main_self_loop = {
+        "nodes": [node("s", "start"), node("e", "end")],
+        "edges": [edge("s", "e"), edge("s", "s")],
+    }
+    codes = {issue.code for issue in validate_graph(main_self_loop).errors}
     assert "SELF_LOOP" in codes
+
+
+def test_topology_end_must_be_reachable_from_start() -> None:
+    """end 存在但没接进主流程（另一个孤儿）不算数，报 END_MISSING。"""
+    graph = {
+        "nodes": [node("s", "start"), node("e", "end"), node("x", "task")],
+        "edges": [edge("s", "x")],  # end 孤立
+    }
+    codes = {issue.code for issue in validate_graph(graph).errors}
+    assert "END_MISSING" in codes
 
 
 def test_topology_gateway_needs_two_branches() -> None:
@@ -302,6 +345,92 @@ def test_semantic_test_node_passes_without_config() -> None:
     assert validate_graph(g).valid
 
 
+# ------------------------------------------------------------------- ③-E 注册驱动的校验
+def test_validation_rules_are_driven_by_registration_not_validator_code() -> None:
+    """新增类型只在注册处声明规则：必填 / 默认值 / 自定义校验器全部生效，不碰 validator。"""
+
+    def validate_ping(n: WorkflowNode) -> list[ValidationIssue]:
+        if str(n.config.get("mode", "")) not in {"sync", "async"}:
+            return [
+                ValidationIssue(
+                    node_id=n.id, code="BAD_PING_MODE", message="mode 只能是 sync/async"
+                )
+            ]
+        return []
+
+    @register_node(
+        "reg-ping",
+        fields=[
+            ConfigField("url", "地址", required=True),
+            ConfigField("mode", "模式", default="sync"),
+        ],
+        validator=validate_ping,
+    )
+    async def exec_ping(n: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        return {}
+
+    # 未接进主流程时什么都不查；接进主流程后规则全生效
+    base_nodes = [node("s", "start"), node("p", "reg-ping"), node("e", "end")]
+
+    missing = {"nodes": base_nodes, "edges": [edge("s", "p"), edge("p", "e")]}
+    report = validate_graph(missing)
+    assert report.stage == STAGE_SEMANTIC
+    assert any(
+        i.node_id == "p" and i.code == "MISSING_CONFIG" for i in report.errors
+    )
+
+    bad_mode = {
+        "nodes": [
+            node("s", "start"),
+            node("p", "reg-ping", url="https://x", mode="weird"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "p"), edge("p", "e")],
+    }
+    codes = {i.code for i in validate_graph(bad_mode).errors}
+    assert "BAD_PING_MODE" in codes
+
+    good = {
+        "nodes": [
+            node("s", "start"),
+            node("p", "reg-ping", url="https://x"),  # mode 缺，默认 sync，校验器放行
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "p"), edge("p", "e")],
+    }
+    assert validate_graph(good).valid
+
+    # 同类型作为孤儿：缺 url + mode 非法，照样通过
+    orphan = {
+        "nodes": [node("s", "start"), node("e", "end"), node("p2", "reg-ping")],
+        "edges": [edge("s", "e")],
+    }
+    assert validate_graph(orphan).valid
+    _ = exec_ping  # 装饰器返回原函数，保留引用仅为表明这一点
+
+
+def test_apply_config_defaults_fills_registered_defaults() -> None:
+    """保存版本前的默认值补全：trigger/level/timeout 缺失就填，给了值不覆盖。"""
+    raw = {
+        "nodes": [
+            node("s", "start"),  # trigger 缺
+            node("l", "log", message="hi"),  # level 缺
+            node("h", "http", url="https://x", method="GET", timeout=3),  # timeout 给了
+            node("t", "test"),  # 没有默认值字段
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "l"), edge("l", "h"), edge("h", "t"), edge("t", "e")],
+    }
+    graph = apply_config_defaults(raw)
+    configs = {n.id: n.config for n in graph.nodes}
+    assert configs["s"]["trigger"] == "message"
+    assert configs["l"]["level"] == "INFO"
+    assert configs["h"]["timeout"] == 3  # 显式值不被覆盖
+    assert "echo" not in configs["t"]
+    # 原 dict 不被修改
+    assert "trigger" not in raw["nodes"][0]["config"]
+
+
 # --------------------------------------------------------------------------- ④ 节点执行器
 @pytest.mark.asyncio
 async def test_executor_start_end_log_test_run() -> None:
@@ -324,6 +453,61 @@ async def test_executor_start_end_log_test_run() -> None:
     assert ctx.variables["log_message"] == "echo was: hello nacho"
     # 日志收集器按顺序记了四个节点
     assert any("hello nacho" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_skips_orphan_nodes_entirely() -> None:
+    """孤儿节点不执行：没执行器的孤儿不拖垮主流程，有执行器的孤儿副作用也不发生。"""
+
+    ran: list[str] = []
+
+    @register_node("orphan-marker")
+    async def exec_marker(n: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(n.id)
+        return {"orphan_var": True}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("e", "end"),
+                node("m", "orphan-marker"),  # 可达性外的有执行器孤儿：不该跑
+                node("ghost", "gateway"),  # 无执行器的孤儿：旧实现这里会直接炸
+            ],
+            "edges": [edge("s", "e")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不因孤儿缺执行器而抛错
+    assert ran == []  # 孤儿副作用没发生
+    assert "orphan_var" not in ctx.variables
+
+
+@pytest.mark.asyncio
+async def test_executor_orphan_edge_into_main_path_does_not_block() -> None:
+    """孤儿有条边指向主流程节点时，入度只算主流程内部，主节点不会被永不执行的孤儿卡死。"""
+
+    ran: list[str] = []
+
+    @register_node("orphan-feeder")
+    async def exec_feeder(n: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(n.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("e", "end"),
+                node("o", "orphan-feeder"),  # 不可达，但有一条 o -> e 的入边
+            ],
+            # 主流程 s -> e；孤儿 -> e 是从可达域外伸进来的边
+            "edges": [edge("s", "e"), edge("o", "e")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 旧实现这里会卡在 e 的入度上
+    assert ran == []  # 孤儿依旧不执行
 
 
 @pytest.mark.asyncio
@@ -594,9 +778,30 @@ def test_http_method_is_checked_at_validation() -> None:
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "time-trigger"):
+    for node_type in ("start", "end", "log", "test", "time-trigger", "http"):
         assert get_executor(node_type) is not None
-    assert set(registered_types()) >= {"start", "end", "log", "test", "time-trigger"}
+    assert set(registered_types()) >= {
+        "start", "end", "log", "test", "time-trigger", "http",
+        # 占位声明：类型可校验 / 可保存，执行器还没实现
+        "gateway", "approval", "expression", "condition", "task",
+    }
+
+
+def test_declared_types_have_rules_but_no_executor() -> None:
+    """declare_node_type：规则在（必填字段生效），执行器留空（跑到才报暂无执行器）。"""
+    from nacho.workflow import get_spec
+
+    assert get_spec("gateway").min_outgoing == 2
+    assert get_spec("end").max_outgoing == 0
+    assert get_spec("expression").expression_field == "expression"
+    assert get_executor("approval") is None  # 只有声明
+
+    graph = {
+        "nodes": [node("s", "start"), node("a", "approval"), node("e", "end")],
+        "edges": [edge("s", "a"), edge("a", "e")],
+    }
+    codes = {i.code for i in validate_graph(graph).errors}
+    assert "MISSING_CONFIG" in codes  # assignee 必填规则来自注册声明
 
 
 def test_register_node_decorator_registers_and_returns_the_function() -> None:
@@ -623,8 +828,8 @@ def test_load_node_modules_is_idempotent_and_loud_on_failure() -> None:
 async def test_custom_node_type_runs_end_to_end() -> None:
     """自写的节点类型：注册进注册表后，运行器按类型就能取到并跑出变量。
 
-    这里直接构造图 —— **类型白名单**（``models.NodeType`` / ``validator.NODE_TYPES``）是校验
-    那一关的事，本条验的是「注册表 + 运行器」这条链路。
+    这里直接构造图（不经过校验）：本条验的是「注册表 + 运行器」这条链路。
+    校验那一关的合法性同样查注册表（见 test_validation_rules_are_driven_by_registration_*）。
     """
 
     @register_node("my-upper")
