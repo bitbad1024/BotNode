@@ -65,7 +65,6 @@ from .registry import (
     load_node_modules,
     register_executor,
     register_node,
-    register_spec,
     registered_types,
 )
 from .start import START_TRIGGERS, exec_start, validate_start_node
@@ -83,7 +82,6 @@ __all__ = [
     "MISSING_DEFAULT",
     "render_variables",
     # 注册表
-    "register_spec",
     "register_executor",
     "register_node",
     "declare_node_type",

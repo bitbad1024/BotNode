@@ -1,10 +1,10 @@
-"""工作流 JSON 入库前的校验流水线：结构 → 拓扑 → 语义（→ 可选 Dry Run）。
+"""工作流 JSON 入库前的校验流水线：结构 → 拓扑 → 语义（→ 将来还有 Dry Run）。
 
-一句话：**结构对不对 → 走不走得通 → 跑不跑得动 → 试不试一遍 → 入库**。
+一句话：**结构对不对 → 走不走得通 → 跑不跑得动 →（试不试一遍）→ 入库**。
 
-前三个阶段由 :func:`validate_graph` 同步跑完，阶段间**短路**：前一阶段没过，后面不跑
-（结构都不对，拓扑 / 语义无从谈起）。第四阶段 Dry Run（mock 输入走执行引擎）是
-:class:`DryRunner` 协议位，执行引擎就位后由 :func:`validate_with_dry_run` 挂上。
+三个阶段由 :func:`validate_graph` 同步跑完，阶段间**短路**：前一阶段没过，后面不跑
+（结构都不对，拓扑 / 语义无从谈起）。第四阶段 Dry Run（mock 输入走一遍执行引擎）目前
+只留了阶段名常量 ``STAGE_DRY_RUN``，协议与实现都还没接 —— 执行引擎就位后再加。
 
 错误收集口径：一个阶段内把错误**收齐**再返回（前端一次性把所有红点画出来，而不是
 挤牙膏），所以阶段内部的检查不互相打断；阶段之间才短路。
@@ -26,14 +26,13 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
+from .graph import out_targets, reachable_from, start_ids
 from .models import (
-    STAGE_DRY_RUN,
     STAGE_SEMANTIC,
     STAGE_STRUCTURE,
     STAGE_TOPOLOGY,
     ValidationIssue,
     ValidationReport,
-    WorkflowEdge,
     WorkflowGraph,
     WorkflowNode,
 )
@@ -62,18 +61,6 @@ class AcceptAllExpressions:
 
     def check(self, node_id: str, expression: str) -> ValidationIssue | None:
         return None
-
-
-@runtime_checkable
-class DryRunner(Protocol):
-    """Dry Run（④）的协议位：拿 mock 输入走一遍执行引擎，不调外部服务、不落业务库。
-
-    执行引擎就位后实现它；跑出来的问题（类型错误 / 空值 / 死分支 / 运行时异常）
-    以 :class:`ValidationIssue` 列表返回，空列表 = 试跑通过。
-    """
-
-    async def run(self, graph: WorkflowGraph, mock_inputs: dict[str, Any]) -> list[ValidationIssue]:
-        ...
 
 
 # --------------------------------------------------------------------------- 入口
@@ -111,24 +98,6 @@ def validate_graph(
     return ValidationReport.ok()
 
 
-async def validate_with_dry_run(
-    raw: dict[str, Any] | WorkflowGraph,
-    runner: DryRunner,
-    *,
-    mock_inputs: dict[str, Any] | None = None,
-    expression_checker: ExpressionSyntaxChecker | None = None,
-) -> ValidationReport:
-    """前三阶段 + ④ Dry Run：前三阶段过了才试跑（短路同前）。"""
-    report = validate_graph(raw, expression_checker=expression_checker)
-    if not report.valid:
-        return report
-    graph = raw if isinstance(raw, WorkflowGraph) else WorkflowGraph.model_validate(raw)
-    issues = await runner.run(graph, mock_inputs or {})
-    if issues:
-        return ValidationReport.reject(STAGE_DRY_RUN, issues)
-    return ValidationReport.ok()
-
-
 def apply_config_defaults(raw: dict[str, Any] | WorkflowGraph) -> WorkflowGraph:
     """按各类型注册的默认值字段补全 config，返回补全后的图（原 dict 不被修改）。
 
@@ -145,40 +114,6 @@ def apply_config_defaults(raw: dict[str, Any] | WorkflowGraph) -> WorkflowGraph:
             if field.default is not MISSING_DEFAULT and node.config.get(field.name) is None:
                 node.config[field.name] = field.default
     return graph
-
-
-# --------------------------------------------------------------------------- 图的小工具
-def _adjacency(graph: WorkflowGraph) -> dict[str, list[WorkflowEdge]]:
-    """节点 ID -> 出边列表。"""
-    out_edges: dict[str, list[WorkflowEdge]] = {node.id: [] for node in graph.nodes}
-    for edge in graph.edges:
-        out_edges[edge.source].append(edge)
-    return out_edges
-
-
-def _reachable_ids(out_edges: dict[str, list[WorkflowEdge]], start_id: str) -> set[str]:
-    """从某个节点沿出边能到达的全部节点（含自己）。"""
-    reachable: set[str] = set()
-    queue: deque[str] = deque([start_id])
-    while queue:
-        current = queue.popleft()
-        if current in reachable:
-            continue
-        reachable.add(current)
-        for edge in out_edges.get(current, ()):  # 结构阶段已保证端点存在，.get 只是防御
-            if edge.target not in reachable:
-                queue.append(edge.target)
-    return reachable
-
-
-def _start_ids(graph: WorkflowGraph) -> list[str]:
-    """注册角色为 start 的节点 ID（按节点出现顺序）。"""
-    starts: list[str] = []
-    for node in graph.nodes:
-        spec = get_spec(node.type)
-        if spec is not None and spec.role == "start":
-            starts.append(node.id)
-    return starts
 
 
 # --------------------------------------------------------------------------- ① 结构
@@ -243,9 +178,9 @@ def _structure_stage(raw: dict[str, Any] | WorkflowGraph) -> tuple[WorkflowGraph
 
     # 边端点都有效后算可达域：唯一 start 时只查主流程上的类型；start 数量异常（0 或多个）
     # 时没法界定主流程，退回查全部节点——拓扑阶段随后会报 START_NOT_UNIQUE
-    starts = _start_ids(graph)
+    starts = start_ids(graph.nodes)
     if len(starts) == 1:
-        scope = _reachable_ids(_adjacency(graph), starts[0])
+        scope = reachable_from(out_targets(graph), starts[0])
     else:
         scope = set(seen)
     for node in graph.nodes:
@@ -311,9 +246,9 @@ def _topology_stage(
     孤儿节点（不可达）不产生任何错误——它们不会被执行，允许先画在画布上保存。
     """
     errors: list[ValidationIssue] = []
-    out_edges = _adjacency(graph)
+    out_edges = out_targets(graph)
 
-    starts = _start_ids(graph)
+    starts = start_ids(graph.nodes)
     if len(starts) != 1:
         errors.append(
             ValidationIssue(
@@ -326,7 +261,7 @@ def _topology_stage(
         return errors, set()
 
     start_id = starts[0]
-    reachable = _reachable_ids(out_edges, start_id)
+    reachable = reachable_from(out_edges, start_id)
 
     # 主流程上至少一个 end 角色节点
     if not any(
@@ -345,18 +280,18 @@ def _topology_stage(
     # 主流程内的入度（只计可达边）与自环
     in_degree: dict[str, int] = {node_id: 0 for node_id in reachable}
     for node_id in reachable:
-        for edge in out_edges[node_id]:
-            if edge.source == edge.target:
+        for target in out_edges[node_id]:
+            if target == node_id:
                 errors.append(
                     ValidationIssue(
-                        node_id=edge.source,
+                        node_id=node_id,
                         code="SELF_LOOP",
-                        message=f"节点 {edge.source} 存在指向自己的边",
+                        message=f"节点 {node_id} 存在指向自己的边",
                         suggestion="去掉自环（审批节点也不能自己连自己）",
                     )
                 )
-            if edge.target in in_degree:
-                in_degree[edge.target] += 1
+            if target in in_degree:
+                in_degree[target] += 1
 
     # 各类型注册的出入边条数约束（gateway 至少 2 条出边、end 不许有出边……）
     for node in graph.nodes:
@@ -396,12 +331,12 @@ def _topology_stage(
     while remaining:
         current = remaining.popleft()
         visited += 1
-        for edge in out_edges[current]:
-            if edge.target not in degrees:
+        for target in out_edges[current]:
+            if target not in degrees:
                 continue
-            degrees[edge.target] -= 1
-            if degrees[edge.target] == 0:
-                remaining.append(edge.target)
+            degrees[target] -= 1
+            if degrees[target] == 0:
+                remaining.append(target)
     if visited != len(reachable):
         cyclic = sorted(node_id for node_id, degree in degrees.items() if degree > 0)
         errors.append(
