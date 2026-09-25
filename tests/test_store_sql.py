@@ -215,6 +215,24 @@ async def test_add_inserts_row_and_rejects_duplicate(tmp_path: Path) -> None:
             await store.add(account="newbie", password_hash="another-hash")
 
 
+async def test_set_nickname_changes_only_the_nickname(tmp_path: Path) -> None:
+    """改昵称（个人设置那一笔）：落库、只动 nickname 一列，查不到的人返回 None。"""
+    async with opened_store(tmp_path) as (store, engine):
+        await store.ensure_schema()
+        created = await store.add(account="newbie", password_hash="hash", nickname="旧名字")
+
+        updated = await store.set_nickname("u-newbie", "新名字")
+        assert updated is not None
+        assert updated.nickname == "新名字"
+        # 别的列一个没动（密码 / 角色 / 停用都还是原来的）
+        assert (updated.id, updated.account) == (created.id, created.account)
+        assert updated.password_hash == created.password_hash
+        assert (updated.roles, updated.disabled) == (created.roles, created.disabled)
+        assert await store.get_by_id("u-newbie") == updated  # 真写进去了
+
+        assert await store.set_nickname("u-nobody", "谁") is None
+
+
 # --------------------------------------------------------------------------- 接入 create_app
 async def test_create_app_with_db_serves_login(tmp_path: Path) -> None:
     """传了 db 就走落库存储：lifespan 建表 + 种账号，随后登录 / 取当前用户 / 停用账号被拒都正常。"""
