@@ -56,13 +56,16 @@ class ConfigField:
     * ``required=True``：缺失 / None / 空白字符串 → 校验直接报 ``MISSING_CONFIG``；
     * 给了 ``default``：缺失（键不存在或值为 None）时由
       :func:`nacho.workflow.validator.apply_config_defaults` 在保存版本时填默认值；
-    * 两个都不给：纯可选字段，校验器不碰。
+    * 两个都不给：纯可选字段，校验器不碰；
+    * 给了 ``options``：这是**枚举**字段（画布渲染成下拉，顺序即显示顺序）。校验规则仍写在
+      节点自己的 validator 里，这里只描述「有哪些可选值」。
     """
 
     name: str
     label: str = ""
     required: bool = False
     default: Any = MISSING_DEFAULT
+    options: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

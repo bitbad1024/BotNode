@@ -413,13 +413,13 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
 
 
 def test_apply_config_defaults_fills_registered_defaults() -> None:
-    """保存版本前的默认值补全：trigger/level/timeout 缺失就填，给了值不覆盖。"""
+    """保存版本前的默认值补全：trigger / level / method / echo 缺失就填，给了值不覆盖。"""
     raw = {
         "nodes": [
             node("s", "start"),  # trigger 缺
             node("l", "log", message="hi"),  # level 缺
-            node("h", "http", url="https://x", method="GET", timeout=3),  # timeout 给了
-            node("t", "test"),  # 没有默认值字段
+            node("h", "http", url="https://x", timeout=3),  # method 缺、timeout 给了
+            node("t", "test"),  # echo 缺
             node("e", "end"),
         ],
         "edges": [edge("s", "l"), edge("l", "h"), edge("h", "t"), edge("t", "e")],
@@ -428,8 +428,9 @@ def test_apply_config_defaults_fills_registered_defaults() -> None:
     configs = {n.id: n.config for n in graph.nodes}
     assert configs["s"]["trigger"] == "message"
     assert configs["l"]["level"] == "INFO"
+    assert configs["h"]["method"] == "GET"  # 画布一直替它填 GET，现在后端也这么声明
     assert configs["h"]["timeout"] == 3  # 显式值不被覆盖
-    assert "echo" not in configs["t"]
+    assert configs["t"]["echo"] == "hello"  # test 节点的回显内容（以前前端自己填的）
     # 原 dict 不被修改
     assert "trigger" not in raw["nodes"][0]["config"]
 
@@ -851,6 +852,43 @@ def test_builtin_node_executors_are_registered() -> None:
     for node_type in ("start", "end", "log", "test", "http", "constant"):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant"}
+
+
+def test_builtin_field_metadata_is_declared_in_backend() -> None:
+    """枚举选项与默认值都写在注册表里，画布照单渲染（不再自己填 GET / INFO / hello）。
+
+    这几条以前只活在前端的节点表里（后端没声明），是两边最容易各自漂移的地方：
+    ``test`` 的 echo 字段、``http.method`` 的缺省 GET、``log.level`` / ``start.trigger``
+    的可选值。声明清楚了，「后端提供什么、画布显示什么」才立得住。
+    """
+    from nacho.workflow import get_spec
+    from nacho.workflow.nodes import HTTP_METHODS
+
+    http = get_spec("http")
+    assert http is not None
+    method = next(f for f in http.fields if f.name == "method")
+    assert method.default == "GET"
+    assert method.options is not None
+    assert set(method.options) == HTTP_METHODS  # 下拉选项与校验规则同一份
+
+    log = get_spec("log")
+    assert log is not None
+    level = next(f for f in log.fields if f.name == "level")
+    assert level.default == "INFO"
+    assert level.options == ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+    start = get_spec("start")
+    assert start is not None
+    start_fields = {f.name: f for f in start.fields}
+    assert start_fields["trigger"].default == "message"
+    assert start_fields["trigger"].options == ("message", "time")
+    assert "cron" in start_fields  # 时间形态用到的字段也照实声明
+    assert "name" in start_fields
+
+    test = get_spec("test")
+    assert test is not None
+    assert [f.name for f in test.fields] == ["echo"]
+    assert test.fields[0].default == "hello"
 
 
 def test_declare_node_type_gives_rules_without_executor() -> None:
