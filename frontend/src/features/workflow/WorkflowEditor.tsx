@@ -121,11 +121,8 @@ function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
 
   const portIds = new Set([...spec.inputs, ...spec.outputs].map((port) => port.id))
   const defaults: Record<string, unknown> = {}
-  const fields: NodeFieldSpec[] = []
   for (const field of spec.fields) {
     if (field.has_default) defaults[field.name] = field.default
-    // 字段名与端口同名（log 的 message）：它是消息入口，不进常量条
-    if (!portIds.has(field.name)) fields.push(field)
   }
 
   const base: NodeTypeDef = {
@@ -135,8 +132,12 @@ function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
     defaults,
     inputs: spec.inputs,
     outputs: spec.outputs,
-    constants: fields.map((field) => field.name),
-    fields,
+    // 卡片底部的常量条：与端口同名的字段（log 的 message）是**消息入口**，卡片上不重复显示
+    constants: spec.fields
+      .filter((field) => !portIds.has(field.name))
+      .map((field) => field.name),
+    // 配置面板**照单全收**：message 既是端口又是必填配置，必须能填（滤掉就永远填不上了）
+    fields: [...spec.fields],
   }
 
   if (spec.type === 'start') {
@@ -155,6 +156,16 @@ function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
     return { ...base, constants: Object.keys(config ?? {}) }
   }
   return base
+}
+
+/**
+ * 哪些字段**有专门的编辑器**，通用渲染要跳过（不然会出现两个控件）。
+ *
+ * 目前只有 start 的 ``trigger``：改它得顺手增删 cron（见 ``setStartTrigger``），不是单纯
+ * 改一个值。
+ */
+function hasDedicatedEditor(nodeType: string, fieldName: string): boolean {
+  return nodeType === 'start' && fieldName === 'trigger'
 }
 
 /** start 的触发方式选项同样来自后端目录；label 用一句人话解释，认不出的值原样显示。 */
@@ -1231,7 +1242,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               )}
               {/* 字段清单来自后端目录（中文名与下拉选项都在里面）；端口同名字段走端口交互，不列这里 */}
               {selectedNode.type !== 'constant' &&
-                selectedDef.fields.map((field) => (
+                selectedDef.fields
+                  .filter((field) => !hasDedicatedEditor(selectedNode.type, field.name))
+                  .map((field) => (
                   <div className={styles.field} key={field.name}>
                     <label className={styles.label}>{field.label}</label>
                     {field.options ? (
@@ -1260,7 +1273,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 Object.keys(selectedNode.config)
                   .filter(
                     (key) =>
-                      key !== 'trigger' && !selectedDef.fields.some((f) => f.name === key),
+                      !hasDedicatedEditor(selectedNode.type, key) &&
+                      !selectedDef.fields.some((f) => f.name === key),
                   )
                   .map((key) => (
                     <div className={styles.field} key={`extra-${key}`}>
