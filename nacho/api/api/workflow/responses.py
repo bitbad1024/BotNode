@@ -1,4 +1,4 @@
-"""工作流接口的响应体：校验报告 / 工作流 / 版本（套进统一响应壳 ``data`` 里）。"""
+"""工作流接口的响应体：校验报告 / 工作流 / 版本 / 节点目录（套进统一响应壳 ``data`` 里）。"""
 from __future__ import annotations
 
 from typing import Any
@@ -7,10 +7,16 @@ from pydantic import Field
 
 from ...common.models import _Frozen
 from nacho.workflow import (
+    MISSING_DEFAULT,
+    ConfigField,
+    NodeSpec,
+    PortSpec,
     ValidationIssue,
     ValidationReport,
     WorkflowDefinitionRecord,
     WorkflowVersionRecord,
+    get_spec,
+    registered_types,
 )
 
 
@@ -46,6 +52,88 @@ class ValidationReportData(_Frozen):
             stage=report.stage,
             errors=[ValidationIssueData.from_issue(issue) for issue in report.errors],
         )
+
+
+class NodePortData(_Frozen):
+    """一个端口（画布上的圆点）：``id`` 就是 edge 的 ``source_port`` / ``target_port``。"""
+
+    id: str
+    type: str
+    label: str
+
+    @classmethod
+    def from_port(cls, port: PortSpec) -> NodePortData:
+        return cls(id=port.id, type=port.type, label=port.label or port.id)
+
+
+class NodeFieldData(_Frozen):
+    """``config`` 里的一个字段：画布照它渲染输入框 / 下拉，并按 ``default`` 补初始值。
+
+    ``default`` 只在 ``has_default=true`` 时有意义 —— ``None`` 也是合法默认值，不能拿它当
+    「没声明默认值」的标记（后端那边用 ``MISSING_DEFAULT`` 哨兵区分）。
+    """
+
+    name: str
+    label: str
+    required: bool
+    has_default: bool
+    default: Any = None
+    options: list[str] | None = None
+
+    @classmethod
+    def from_field(cls, field: ConfigField) -> NodeFieldData:
+        has_default = field.default is not MISSING_DEFAULT
+        return cls(
+            name=field.name,
+            label=field.label or field.name,
+            required=field.required,
+            has_default=has_default,
+            default=field.default if has_default else None,
+            options=list(field.options) if field.options else None,
+        )
+
+
+class NodeTypeData(_Frozen):
+    """一种节点类型：画布的面板项 / 节点标题 / 端口 / 配置表单都从这里来。"""
+
+    type: str
+    label: str
+    role: str
+    order: int
+    has_executor: bool
+    min_outgoing: int
+    max_outgoing: int | None = None
+    inputs: list[NodePortData] = Field(default_factory=list)
+    outputs: list[NodePortData] = Field(default_factory=list)
+    fields: list[NodeFieldData] = Field(default_factory=list)
+
+    @classmethod
+    def from_spec(cls, spec: NodeSpec) -> NodeTypeData:
+        return cls(
+            type=spec.node_type,
+            label=spec.label or spec.node_type,
+            role=spec.role,
+            order=spec.order,
+            has_executor=spec.executor is not None,
+            min_outgoing=spec.min_outgoing,
+            max_outgoing=spec.max_outgoing,
+            inputs=[NodePortData.from_port(port) for port in spec.inputs],
+            outputs=[NodePortData.from_port(port) for port in spec.outputs],
+            fields=[NodeFieldData.from_field(field) for field in spec.fields],
+        )
+
+
+class NodeCatalogData(_Frozen):
+    """节点目录：**后端注册了什么，画布就显示什么**（面板顺序按 ``order``）。"""
+
+    nodes: list[NodeTypeData] = Field(default_factory=list)
+
+    @classmethod
+    def from_registry(cls) -> NodeCatalogData:
+        specs = [get_spec(node_type) for node_type in registered_types()]
+        nodes = [NodeTypeData.from_spec(spec) for spec in specs if spec is not None]
+        nodes.sort(key=lambda item: (item.order, item.type))
+        return cls(nodes=nodes)
 
 
 class WorkflowData(_Frozen):

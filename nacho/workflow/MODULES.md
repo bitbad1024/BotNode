@@ -17,7 +17,7 @@ nacho/workflow/
 ├── validator.py     入库前校验：结构 → 拓扑 → 语义（④ Dry Run 只有阶段名，未接）
 ├── store.py         落库：定义 / 版本两张表（SQLModel + AsyncSession），按归属隔离
 ├── nodes/           ★ 节点执行器：一类节点一个文件 + 注册表（**写自己的节点看这里**）
-│   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / NodeExecutionContext
+│   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / NodeExecutionContext
 │   ├── registry.py      注册表：register_node / declare_node_type / get_spec / load_node_modules
 │   ├── start.py         内置：start（图起点；trigger=time 时按 cron 登记调度器）
 │   ├── end.py           内置：end（图终点）
@@ -89,7 +89,7 @@ store ──────────────► models
 
 | 文件 | 作用 | config（必填项加粗） |
 |---|---|---|
-| `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `NodeExecutionContext` / `render_variables` | —— |
+| `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `render_variables`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— |
 | `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— |
 | `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | —— |
@@ -210,7 +210,8 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 ### 5.6 校验那一关：注册什么，就校验什么
 
 校验器（`validator.py`）**没有任何具体节点类型的知识**：它只从注册表读每个类型的
-`NodeSpec`，按规格办事。新增类型不用动 `validator.py` / `models.py` 一行。
+`NodeSpec`，按规格办事。新增类型不用动 `validator.py` / `models.py` 一行，也**不用动画布**
+（画布从节点目录接口读，见 ⑥）。
 
 **① config 字段分两类，在注册处声明**（`fields=[ConfigField(...)]`）：
 
@@ -218,6 +219,7 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 |---|---|---|
 | 不可缺失字段 | `ConfigField("url", required=True)` | 主流程上的节点直接报 `MISSING_CONFIG`（`None` / 空串也算缺失） |
 | 默认值字段 | `ConfigField("level", default="INFO")` | 校验前先补默认值（自定义校验器看到的是补全后的 config）；保存版本时写进快照 |
+| 枚举字段 | `ConfigField("level", default="INFO", options=LOG_LEVEL_ORDER)` | 同上；`options` 只描述「有哪些可选值、按什么顺序显示」（画布渲染成下拉），校验仍归自定义校验器 |
 
 未声明的字段一律不查，原样留在 config 里。
 
@@ -250,14 +252,19 @@ async def exec_dingtalk(node, ctx): ...
 **⑤ 孤儿节点**：从 start 不可达的节点**一律放行**——类型未注册、config 缺失、自带环都不报错，
 保存可以、运行不跑。所以字段规则只对主流程（start 可达）上的节点生效。
 
-**⑥ 前端**：节点在画布上的图标 / 名称 / 配置表单仍是前端自己的清单
-（`WorkflowEditor.tsx` 的 `NODE_TYPES`、`workflowApi.ts` 的 `NodeType`，后者已是
-`NodeType | string` 不挡新类型）；后端不再需要同步任何白名单。
+**⑥ 画布不自己定义节点**：编辑器启动时拉一次节点目录
+（`GET <prefix>/workflows/node-types`，见 `api/workflow/router.py`），**面板项 / 中文名 /
+端口 / 配置表单全按注册表渲染** —— 加一个节点类型只改后端这一个文件，画布与接口都不用动。
 
-> **但两边得对得上**：画布上摆了后端没登记的类型，图一保存就会被校验挡下
-> （`UNKNOWN_NODE_TYPE`）——以前那批只有声明没有执行器的类型（gateway / approval /
-> expression / condition / task）前后端都已删掉：后端在 `nodes/`，画布在
-> `WorkflowEditor.tsx` 的 `NODE_TYPES` / `PALETTE_ORDER` 与 `workflowApi.ts` 的 `NodeType`。
+前端只留两样东西：
+
+- **颜色**（皮肤，后端不管；认不出的类型用灰的）；
+- 两个**固有例外**（形状本来就随 config 变，不是「前端另有定义」）：`start` 的端口与常量条随
+  `config.trigger` 变、`constant` 的常量就是它 config 里的键。
+
+> 那份目录就是「两边对得上」的契约：面板上摆的必然是后端登记过的类型。万一旧图里还有认不出
+> 的类型，画布画成灰色未知节点，保存时被 `UNKNOWN_NODE_TYPE` 挡下 —— 以前那批只有声明没有
+> 执行器的类型（gateway / approval / expression / condition / task）已前后端一起删掉。
 
 ### 5.7 带可选依赖的节点（照 `http.py` 抄）
 
@@ -301,7 +308,7 @@ async def test_my_node_outputs(...) -> None:
 - [ ] config 字段规则在注册处声明齐了：必填的 `required=True`，有缺省的给 `default`
 - [ ] 类型专属校验（可选）：注册时挂 `validator`，配置写错在保存时就报
 - [ ] 需要的拓扑约束：`role` / `min_outgoing` / `max_outgoing` / `expression_field`
-- [ ] 前端画布清单（`WorkflowEditor.tsx`）加了入口；`workflowApi.ts` 无需改动
+- [ ] 画布**不用改**：`label` / `order` / 端口 / `fields` 声明全了，节点就自动出现在面板上
 - [ ] `outputs` 与实际返回的 key 一致，名字带节点前缀
 - [ ] 环境问题会抛、业务结果会返回（第 5.5 节）
 - [ ] 有单测，且外部依赖是打桩的

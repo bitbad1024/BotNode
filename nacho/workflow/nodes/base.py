@@ -45,6 +45,9 @@ NodeRole = Literal["start", "end", "normal"]
 #: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
 NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
 
+#: 端口类型：trigger（控制流）决定「什么时候执行下一个节点」/ message（数据流）传内容
+PortType = Literal["trigger", "message"]
+
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()
 
@@ -69,6 +72,28 @@ class ConfigField:
 
 
 @dataclass(frozen=True)
+class PortSpec:
+    """节点一端的一个端口：画布照它画圆点，连线时两端类型必须相同。
+
+    端口 ``id`` 就是写进 edge 的 ``source_port`` / ``target_port`` 的那个值；它同时是
+    「config 里哪个字段是消息入口」的判据 —— 字段名与端口 id 同名（如 ``log`` 的 ``message``）
+    时，画布把它当端口，不再当常量条显示。
+
+    :param id: 端口名（edge 两端引用的就是它）；
+    :param type: 端口类型，连线两端必须同类；
+    :param label: 显示名（缺省用 id）。
+    """
+
+    id: str
+    type: PortType = "trigger"
+    label: str = ""
+
+
+#: 各节点通用的触发端口（出入口都叫「触发」）
+TRIGGER_PORT = PortSpec("trigger", "trigger", "触发")
+
+
+@dataclass(frozen=True)
 class NodeSpec:
     """一种节点类型的完整注册规格：执行器 + 配置字段规则 + 拓扑约束。
 
@@ -79,7 +104,11 @@ class NodeSpec:
     :param role: 拓扑角色，start 全图唯一、end 至少一个可达；
     :param min_outgoing: 出边条数下限（分流类节点要 ≥2）；
     :param max_outgoing: 出边条数上限（end 为 0），None 不限；
-    :param expression_field: 该字段内容要交图级表达式语法检查器过一遍（expression 节点用）。
+    :param expression_field: 该字段内容要交图级表达式语法检查器过一遍；
+    :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
+    :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
+    :param inputs: 输入端口（画布左侧圆点）；
+    :param outputs: 输出端口（画布右侧圆点）。
     """
 
     node_type: str
@@ -90,6 +119,10 @@ class NodeSpec:
     min_outgoing: int = 0
     max_outgoing: int | None = None
     expression_field: str | None = None
+    label: str = ""
+    order: int = 100
+    inputs: tuple[PortSpec, ...] = ()
+    outputs: tuple[PortSpec, ...] = ()
 
 #: 配置字符串里的变量引用：``{{ name }}``
 _VARIABLE_RE: re.Pattern[str] = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")

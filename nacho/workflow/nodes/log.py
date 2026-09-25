@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import ConfigField, NodeExecutionContext, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
 from .registry import register_node
 
 #: 合法日志级别，**顺序即画布下拉顺序**（config.level 缺省 INFO）
@@ -39,6 +39,12 @@ def validate_log_node(node: WorkflowNode) -> list[ValidationIssue]:
 
 @register_node(
     "log",
+    label="写日志",
+    order=40,
+    # message 既是输入端口也是字段名：画布按「字段名 = 端口名」判定它是消息入口，
+    # 不把它当常量条显示
+    inputs=[TRIGGER_PORT, PortSpec("message", "message", "消息")],
+    outputs=[TRIGGER_PORT],
     fields=[
         ConfigField("message", "日志内容", required=True),
         ConfigField("level", "日志级别", default="INFO", options=LOG_LEVEL_ORDER),

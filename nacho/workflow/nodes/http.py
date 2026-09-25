@@ -29,7 +29,7 @@ import re
 from typing import Any, cast
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import ConfigField, NodeExecutionContext, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
 from .registry import register_node
 
 #: 允许的请求方法（大写），**顺序即画布下拉顺序**
@@ -101,6 +101,10 @@ def _timeout_of(raw: object) -> float | None:
 
 @register_node(
     "http",
+    label="HTTP",
+    order=60,
+    inputs=[TRIGGER_PORT],
+    outputs=[TRIGGER_PORT, PortSpec("message", "message", "响应")],
     fields=[
         ConfigField("url", "请求地址", required=True),
         # method 缺省 GET（画布一直这么填，这里把它写成后端的事实）；显式给空串仍会被

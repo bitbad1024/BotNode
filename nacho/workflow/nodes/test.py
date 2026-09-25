@@ -9,11 +9,18 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import WorkflowNode
-from .base import ConfigField, NodeExecutionContext, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
 from .registry import register_node
 
 
-@register_node("test", fields=[ConfigField("echo", "回显内容", default="hello")])
+@register_node(
+    "test",
+    label="测试",
+    order=50,
+    inputs=[TRIGGER_PORT],
+    outputs=[TRIGGER_PORT, PortSpec("message", "message", "回显")],
+    fields=[ConfigField("echo", "回显内容", default="hello")],
+)
 async def exec_test(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """测试 / 调试节点：把配置内容回显到日志和上下文，供画布联调用。"""
     echo = render_variables(str(node.config.get("echo", node.id)), ctx.variables)
