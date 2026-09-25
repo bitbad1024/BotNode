@@ -105,18 +105,6 @@ const NODE_TYPES: Record<string, NodeTypeDef> = {
     ],
     constants: ['echo'],
   },
-  task: {
-    type: 'task', label: '任务', color: '#64748b', defaults: {},
-    inputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '消息' },
-    ],
-    outputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '消息' },
-    ],
-    constants: [],
-  },
   http: {
     type: 'http', label: 'HTTP', color: '#0ea5e9', defaults: { url: '', method: 'GET' },
     inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
@@ -125,39 +113,6 @@ const NODE_TYPES: Record<string, NodeTypeDef> = {
       { id: 'message', type: 'message', label: '响应' },
     ],
     constants: ['url', 'method'],
-  },
-  condition: {
-    type: 'condition', label: '条件', color: '#f97316', defaults: { condition: '' },
-    inputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '消息' },
-    ],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    constants: ['condition'],
-  },
-  expression: {
-    type: 'expression', label: '表达式', color: '#14b8a6', defaults: { expression: '' },
-    inputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '消息' },
-    ],
-    outputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '结果' },
-    ],
-    constants: ['expression'],
-  },
-  gateway: {
-    type: 'gateway', label: '网关', color: '#a855f7', defaults: {},
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    constants: [],
-  },
-  approval: {
-    type: 'approval', label: '审批', color: '#ec4899', defaults: { assignee: '' },
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    constants: ['assignee'],
   },
   constant: {
     type: 'constant', label: '常量', color: '#eab308', defaults: {},
@@ -171,10 +126,8 @@ const NODE_TYPES: Record<string, NodeTypeDef> = {
   },
 }
 
-const PALETTE_ORDER: string[] = [
-  'start', 'end', 'constant', 'log', 'test', 'task',
-  'http', 'condition', 'expression', 'gateway', 'approval',
-]
+/** 面板顺序：只列后端真注册了的类型（占位类型已随后端一起删，见 nodes/__init__.py）。 */
+const PALETTE_ORDER: string[] = ['start', 'end', 'constant', 'log', 'test', 'http']
 
 /** start 节点时间触发形态：只输出触发端口，cron 是常量配置。 */
 const START_TIME_DEF: NodeTypeDef = {

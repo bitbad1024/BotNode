@@ -74,7 +74,7 @@ class NodeSpec:
     :param fields: :class:`ConfigField` 清单，必填 / 默认值都从这里推导；
     :param validator: 自定义配置校验器（枚举、条件必填这类表格盖不住的规则）；
     :param role: 拓扑角色，start 全图唯一、end 至少一个可达；
-    :param min_outgoing: 出边条数下限（gateway 分流要 ≥2）；
+    :param min_outgoing: 出边条数下限（分流类节点要 ≥2）；
     :param max_outgoing: 出边条数上限（end 为 0），None 不限；
     :param expression_field: 该字段内容要交图级表达式语法检查器过一遍（expression 节点用）。
     """

@@ -9,8 +9,6 @@
       test.py            内置节点：test（回显，画布联调用）
       constant.py        内置节点：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
-      declared.py        占位：gateway / approval / expression / condition / task（规则已登记、
-                         执行器未实现，图能保存；跑到它们时运行器报「暂无执行器」）
 
 **写自己的节点**（不用改校验器 / 框架里的任何文件）：新建一个模块，用装饰器把
 「执行函数 + 必填字段 + 默认值 + 自定义校验器」一次声明完，启动时 import 进来即可::
@@ -52,7 +50,6 @@ from .base import (
     NodeSpec,
     render_variables,
 )
-from . import declared  # noqa: F401  # import 即完成占位类型登记
 from .constant import exec_constant, validate_constant_node
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http

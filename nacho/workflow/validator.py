@@ -293,7 +293,7 @@ def _topology_stage(
             if target in in_degree:
                 in_degree[target] += 1
 
-    # 各类型注册的出入边条数约束（gateway 至少 2 条出边、end 不许有出边……）
+    # 各类型注册的出入边条数约束（分流类节点至少 2 条出边、end 不许有出边……）
     for node in graph.nodes:
         if node.id not in reachable:
             continue
@@ -305,6 +305,8 @@ def _topology_stage(
             errors.append(
                 ValidationIssue(
                     node_id=node.id,
+                    # 码名是历史遗留（当初只有分流类节点会声明 min_outgoing）；现在任何类型都能
+                    # 登记这个下限，语义就是「出边不够」。改名属接口可见变更，先留原名。
                     code="GATEWAY_NEEDS_BRANCHES",
                     message=(
                         f"节点 {node.id}（{node.type}）至少要有 {spec.min_outgoing} 条出边，"

@@ -36,6 +36,7 @@ from nacho.workflow import (  # noqa: E402
     WorkflowNode,
     apply_config_defaults,
     canonical_graph_json,
+    declare_node_type,
     graph_checksum,
     load_node_modules,
     register_node,
@@ -123,8 +124,8 @@ def test_topology_detects_cycle() -> None:
     graph = {
         "nodes": [
             node("s", "start"),
-            node("a", "task"),
-            node("b", "task"),
+            node("a", "test"),
+            node("b", "test"),
             node("e", "end"),
         ],
         "edges": [edge("s", "a"), edge("a", "b"), edge("b", "a"), edge("a", "e")],
@@ -137,7 +138,7 @@ def test_topology_detects_cycle() -> None:
 def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None:
     """孤儿节点（不可达）及其自环 / 环 / 缺配置一律放行；主路径上的自环仍要拦。"""
     with_orphan = {
-        "nodes": [node("s", "start"), node("e", "end"), node("lonely", "task")],
+        "nodes": [node("s", "start"), node("e", "end"), node("lonely", "test")],
         "edges": [edge("s", "e"), edge("lonely", "lonely")],
     }
     assert validate_graph(with_orphan).valid  # 孤儿自环不影响主流程
@@ -148,7 +149,7 @@ def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None
             node("s", "start"),
             node("e", "end"),
             node("o1", "http"),  # 缺必填 url/method，但不可达
-            node("o2", "task"),
+            node("o2", "test"),
         ],
         "edges": [
             edge("s", "e"),
@@ -177,16 +178,18 @@ def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None
 def test_topology_end_must_be_reachable_from_start() -> None:
     """end 存在但没接进主流程（另一个孤儿）不算数，报 END_MISSING。"""
     graph = {
-        "nodes": [node("s", "start"), node("e", "end"), node("x", "task")],
+        "nodes": [node("s", "start"), node("e", "end"), node("x", "test")],
         "edges": [edge("s", "x")],  # end 孤立
     }
     codes = {issue.code for issue in validate_graph(graph).errors}
     assert "END_MISSING" in codes
 
 
-def test_topology_gateway_needs_two_branches() -> None:
+def test_topology_min_outgoing_comes_from_registration() -> None:
+    """出边下限由注册时声明（``min_outgoing``）：少了就报 GATEWAY_NEEDS_BRANCHES。"""
+    declare_node_type("test-split", min_outgoing=2)
     graph = {
-        "nodes": [node("s", "start"), node("g", "gateway"), node("e", "end")],
+        "nodes": [node("s", "start"), node("g", "test-split"), node("e", "end")],
         "edges": [edge("s", "g"), edge("g", "e")],
     }
     report = validate_graph(graph)
@@ -201,7 +204,7 @@ def test_topology_gateway_needs_two_branches() -> None:
 
 def test_topology_end_with_outgoing_rejected() -> None:
     graph = {
-        "nodes": [node("s", "start"), node("e", "end"), node("x", "task")],
+        "nodes": [node("s", "start"), node("e", "end"), node("x", "log", message="hi")],
         "edges": [edge("s", "e"), edge("e", "x")],
     }
     codes = {issue.code for issue in validate_graph(graph).errors}
@@ -214,24 +217,24 @@ def test_semantic_missing_required_config() -> None:
         "nodes": [
             node("s", "start"),
             node("call", "http"),  # 没给 url / method
-            node("boss", "approval"),  # 没给 assignee
+            node("note", "log"),  # 没给 message
             node("e", "end"),
         ],
-        "edges": [edge("s", "call"), edge("call", "boss"), edge("boss", "e")],
+        "edges": [edge("s", "call"), edge("call", "note"), edge("note", "e")],
     }
     report = validate_graph(graph)
     assert not report.valid and report.stage == STAGE_SEMANTIC
     missing = [issue for issue in report.errors if issue.code == "MISSING_CONFIG"]
-    assert {issue.node_id for issue in missing} == {"call", "boss"}
+    assert {issue.node_id for issue in missing} == {"call", "note"}
 
 
 def test_semantic_variable_scope_and_spell_hint() -> None:
     graph = {
         "nodes": [
             node("s", "start", _outputs=["orderAmount"]),
-            node("calc", "expression", expression="{{orderAmount}} * 0.9", _outputs=["price"]),
-            node("typo", "expression", expression="{{orderAmout}} + 1"),
-            node("side", "expression", expression="{{price}}"),
+            node("calc", "log", message="{{orderAmount}} * 0.9", _outputs=["price"]),
+            node("typo", "log", message="{{orderAmout}} + 1"),
+            node("side", "log", message="{{price}}"),
             node("e", "end"),
         ],
         "edges": [
@@ -472,7 +475,7 @@ async def test_executor_skips_orphan_nodes_entirely() -> None:
                 node("s", "start"),
                 node("e", "end"),
                 node("m", "orphan-marker"),  # 可达性外的有执行器孤儿：不该跑
-                node("ghost", "gateway"),  # 无执行器的孤儿：旧实现这里会直接炸
+                node("ghost", "not-a-registered-type"),  # 没登记过（连规格都没）的孤儿
             ],
             "edges": [edge("s", "e")],
         }
@@ -577,10 +580,11 @@ async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() 
 
 @pytest.mark.asyncio
 async def test_executor_unsupported_node_type_raises() -> None:
-    """没注册执行器的节点类型跑图时抛 NotImplementedError。"""
+    """只声明了规格、没实现执行器的类型跑图时抛 NotImplementedError。"""
+    declare_node_type("test-noexec")
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start"), node("c", "condition", condition="x>0"), node("e", "end")],
+            "nodes": [node("s", "start"), node("c", "test-noexec"), node("e", "end")],
             "edges": [edge("s", "c"), edge("c", "e")],
         }
     )
@@ -846,28 +850,39 @@ def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in ("start", "end", "log", "test", "http", "constant"):
         assert get_executor(node_type) is not None
-    assert set(registered_types()) >= {
-        "start", "end", "log", "test", "http", "constant",
-        # 占位声明：类型可校验 / 可保存，执行器还没实现
-        "gateway", "approval", "expression", "condition", "task",
-    }
+    assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant"}
 
 
-def test_declared_types_have_rules_but_no_executor() -> None:
-    """declare_node_type：规则在（必填字段生效），执行器留空（跑到才报暂无执行器）。"""
+def test_declare_node_type_gives_rules_without_executor() -> None:
+    """``declare_node_type``：规则在（必填字段 / 出边下限生效），执行器留空。
+
+    内置节点里已经没有这种「只声明不实现」的类型了（见 nodes/ 的文件表），这条给扩展方用。
+    """
     from nacho.workflow import get_spec
 
-    assert get_spec("gateway").min_outgoing == 2
-    assert get_spec("end").max_outgoing == 0
-    assert get_spec("expression").expression_field == "expression"
-    assert get_executor("approval") is None  # 只有声明
+    declare_node_type(
+        "test-declared",
+        fields=[ConfigField("who", "审批人", required=True)],
+        min_outgoing=2,
+    )
+    spec = get_spec("test-declared")
+    assert spec is not None
+    assert spec.min_outgoing == 2
+    assert spec.executor is None  # 只有声明
+    assert get_spec("end").max_outgoing == 0  # 内置节点的约束同样在注册表里
 
+    # 出边给够（两条），好让流水线走到语义阶段去查必填字段
     graph = {
-        "nodes": [node("s", "start"), node("a", "approval"), node("e", "end")],
-        "edges": [edge("s", "a"), edge("a", "e")],
+        "nodes": [
+            node("s", "start"),
+            node("a", "test-declared"),
+            node("e", "end"),
+            node("e2", "end"),
+        ],
+        "edges": [edge("s", "a"), edge("a", "e"), edge("a", "e2")],
     }
     codes = {i.code for i in validate_graph(graph).errors}
-    assert "MISSING_CONFIG" in codes  # assignee 必填规则来自注册声明
+    assert "MISSING_CONFIG" in codes  # who 必填规则来自注册声明
 
 
 def test_register_node_decorator_registers_and_returns_the_function() -> None:
@@ -1064,7 +1079,7 @@ async def test_store_version_increment_dedup_and_publish(
     assert pointed_again is not None and pointed_again.current_ref == "version"
 
     # 改了：新版本 2，定义指针跟着挪
-    graph_v2 = {"nodes": [node("s", "start"), node("m", "task"), node("e", "end")],
+    graph_v2 = {"nodes": [node("s", "start"), node("m", "test"), node("e", "end")],
                 "edges": [edge("s", "m"), edge("m", "e")]}
     second, created_second = await store.add_version(
         definition,
