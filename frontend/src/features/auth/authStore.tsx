@@ -34,6 +34,8 @@ export interface AuthState {
   tokenHash?: string
   deviceName?: string
   remembered?: boolean
+  /** 头像 blob URL（全局只拉一次，SET_AVATAR_BLOB 时更新） */
+  avatarBlobUrl?: string
 }
 
 type AuthAction =
@@ -47,6 +49,7 @@ type AuthAction =
       remembered?: boolean
     }
   | { type: 'SET_USER'; user: UserProfile }
+  | { type: 'SET_AVATAR_BLOB'; url: string | undefined }
   | { type: 'TOUCH'; expiresInSeconds: number }
   | { type: 'CLEAR' }
 
@@ -103,6 +106,9 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'SET_USER':
       next = { ...state, user: action.user }
       break
+    case 'SET_AVATAR_BLOB':
+      next = { ...state, avatarBlobUrl: action.url }
+      break
     case 'TOUCH':
       // 滑动续期：只拨到期时刻，别的字段（用户 / 设备摘要）原样；0 = 不过期
       next = {
@@ -112,7 +118,7 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
       }
       break
     case 'CLEAR':
-      next = { token: '', user: null, expiresAt: 0 }
+      next = { token: '', user: null, expiresAt: 0, avatarBlobUrl: undefined }
       break
     default:
       return state

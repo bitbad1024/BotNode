@@ -6,6 +6,16 @@ export interface UserProfile {
   account: string
   nickname: string
   roles: string[]
+  /** 有没有头像（个人设置接口返回） */
+  has_avatar?: boolean
+  /** 头像类型（image/png 等） */
+  avatar_mime?: string
+  /** 头像字节数 */
+  avatar_size?: number
+  /** 头像最近更新时间（Unix 秒） */
+  avatar_updated_at?: number
+  /** 头像地址（带 ?v= 缓存刷新标记） */
+  avatar_url?: string
 }
 
 export interface LoginResult {
@@ -47,7 +57,7 @@ export function register(account: string, password: string, nickname: string) {
   >('/auth/register', { account, password, nickname })
 }
 
-/** GET /auth/me：用当前令牌换取用户资料。 */
+/** GET /auth/me：用当前令牌换取用户资料（含头像信息）。 */
 export function fetchProfile() {
   return http.get<UserProfile>('/auth/me')
 }
