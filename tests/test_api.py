@@ -618,7 +618,15 @@ class TestOptions:
         assert (options.prefix, options.token_ttl) == ("/v2", 120.0)
 
     def test_defaults_match_config_defaults(self) -> None:
-        assert ApiOptions.from_mapping(Settings().api.model_dump()) == ApiOptions()
+        """接口层选项的默认值 = 配置系统的默认值（改一边忘了另一边，这里会红）。
+
+        路径字段（``avatar_dir``）例外：配置侧写的是「相对项目根目录」、由配置系统解析成
+        绝对路径，接口层侧的默认值是「相对当前工作目录」的裸路径 —— 两边本来就是两种口径，
+        真跑起来用的也是配置侧解析出来的那个（见 :func:`nacho.bootstrap.run`）。
+        """
+        from_config = ApiOptions.from_mapping(Settings().api.model_dump())
+        from_code = ApiOptions()
+        assert replace(from_config, avatar_dir=from_code.avatar_dir) == from_code
 
     def test_bad_prefix_is_a_config_error(self, tmp_path: Path) -> None:
         """前缀不以 / 开头：配置阶段就报错，不让应用带着坏路由起来。"""

@@ -5,6 +5,7 @@
 **入口层 -> 业务层**，业务层不认识 FastAPI，也不 import 本包。
 
     auth/     鉴权入口：``POST <prefix>/auth/login``、``GET <prefix>/auth/me``
+    profile/  个人设置入口：``<prefix>/profile``（改昵称 / 头像）
     onebot/   OneBot 管理入口：``<prefix>/onebot/clients``、``<prefix>/onebot/tokens``
     log/      运行日志入口：``GET <prefix>/logs``
     workflow/ 工作流入口：``<prefix>/workflows``（定义 / 版本 / 发布 / 入库前校验）
@@ -17,6 +18,13 @@ from __future__ import annotations
 from .auth.router import router as auth_router
 from .log.router import router as log_router
 from .onebot.router import router as onebot_router
+from .profile.router import router as profile_router
 from .workflow import router as workflow_router
 
-__all__ = ["auth_router", "log_router", "onebot_router", "workflow_router"]
+__all__ = [
+    "auth_router",
+    "log_router",
+    "onebot_router",
+    "profile_router",
+    "workflow_router",
+]

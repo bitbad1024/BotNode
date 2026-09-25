@@ -28,6 +28,11 @@ nacho/api/
 │   │   ├── dependencies.py   get_auth_service / bearer_scheme
 │   │   ├── requests.py       LoginRequest / RegisterRequest（请求 schema）
 │   │   └── responses.py      LoginData（响应 schema）
+│   ├── profile/      个人设置（改昵称 / 头像；头像存储走协议，落哪可换）
+│   │   ├── router.py         GET/PATCH /profile、PUT/GET/DELETE /profile/avatar
+│   │   ├── dependencies.py   get_profile_service
+│   │   ├── requests.py       UpdateProfileRequest（请求 schema）
+│   │   └── responses.py      ProfileData（资料 + 头像信息）
 │   ├── onebot/       OneBot 管理（服务本身在 nacho.onebot，按协议取用，不 import）
 │   │   ├── router.py         在线列表 / 踢人 / 令牌签发与吊销
 │   │   ├── protocols.py      OneBotLike / TokenRegistry（结构化协议）
@@ -48,7 +53,8 @@ nacho/api/
     ├── user/        用户：models/protocols/security/store/validation
     ├── session/     会话：登录开出来的那一次会话（设备信息 + 令牌）、滑动续期、吊销
     │                models/client/protocols/store_sql/tokens/service
-    └── auth/        鉴权：models/service（令牌机制在 session 里）
+    ├── auth/        鉴权：models/service（令牌机制在 session 里）
+    └── profile/     个人设置：models/images/protocols/store_file/service（头像存储走协议）
 ```
 
 **依赖方向（单向、无环）**：
@@ -70,8 +76,8 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | 文件 | 作用 |
 |---|---|
 | `nacho/api/__init__.py` | 接口层总览 + 公开导出（`create_app`、`ApiOptions`、各业务服务、错误体系、日志接入点）。分层约定写在模块 docstring 里。 |
-| `nacho/api/app.py` | 唯一装配入口 `create_app()`：建 `FastAPI` → 装访问日志中间件 → 注册异常处理器 → 挂路由并把各业务服务挂到 `app.state` 供注入。不传 `user_store` / `hasher` / `session_store` / `workflow_store` 也能跑（走默认实现）；`onebot` 不传时那组接口回 503。跨包的两块（OneBot / 工作流）只认协议，工作流的默认实现**按需 import**。 |
-| `nacho/api/options.py` | 接口层选项 `ApiOptions`（对应配置 `[api]`）。**不读配置文件**，靠 `from_mapping` 普通映射解耦；含 `DEFAULT_PREFIX`（`/api`）、`DEFAULT_TOKEN_TTL`（7200s，访问令牌滑动有效期）、`DEFAULT_REMEMBER_TTL`（30 天，「记住设备」的长期有效期）。 |
+| `nacho/api/app.py` | 唯一装配入口 `create_app()`：建 `FastAPI` → 装访问日志中间件 → 注册异常处理器 → 挂路由并把各业务服务挂到 `app.state` 供注入。不传 `user_store` / `hasher` / `session_store` / `workflow_store` / `avatar_store` 也能跑（走默认实现）；`onebot` 不传时那组接口回 503。跨包的两块（OneBot / 工作流）只认协议，工作流的默认实现**按需 import**；头像存储默认落 `avatar_dir` 那个本地目录。 |
+| `nacho/api/options.py` | 接口层选项 `ApiOptions`（对应配置 `[api]`）。**不读配置文件**，靠 `from_mapping` 普通映射解耦；含 `DEFAULT_PREFIX`（`/api`）、`DEFAULT_TOKEN_TTL`（7200s，访问令牌滑动有效期）、`DEFAULT_REMEMBER_TTL`（30 天，「记住设备」的长期有效期）、`DEFAULT_AVATAR_DIR`（头像目录）与 `DEFAULT_AVATAR_MAX_BYTES`（2 MiB 上限）。 |
 | `nacho/api/logging.py` | 日志接入点：`api`（业务日志）/`api.access`（访问日志）两个 logger 名；`attach_api_logging()` 挂载文件出口。 |
 
 ---
@@ -86,7 +92,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `common/models.py` | 响应壳：`ApiResponse` / `ErrorResponse` / `ErrorPayload` / `ErrorDetail`，以及 `DEFAULT_TRACE_ID`。不知道 `data` 里装的是什么。 |
 | `common/errors/__init__.py` | 汇总导出错误体系。 |
 | `common/errors/codes.py` | 错误码与 HTTP 状态：`ErrorCode` / `HttpStatus`。 |
-| `common/errors/exceptions.py` | 异常类型：`ApiError` 及其子类（`ValidationError`、`InvalidCredentialsError`、`AccountDisabledError`、`AccountAlreadyExistsError`、`UnauthorizedError`、`TokenInvalidError`、`TokenExpiredError`、`InternalError`）。状态码挂在异常上。 |
+| `common/errors/exceptions.py` | 异常类型：`ApiError` 及其子类（`ValidationError`、`InvalidCredentialsError`、`AccountDisabledError`、`AccountAlreadyExistsError`、`AvatarTooLargeError`、`AvatarTypeUnsupportedError`、`UnauthorizedError`、`TokenInvalidError`、`TokenExpiredError`、`InternalError`）。状态码挂在异常上。 |
 | `common/errors/handlers.py` | `register_exception_handlers` / `to_error_details`：把异常翻成统一的 `ErrorResponse` 形状。 |
 | `common/middlewares/__init__.py` | 汇总导出中间件。 |
 | `common/middlewares/request_log.py` | `RequestLogMiddleware`：每次请求生成编号、写访问日志一行（方法 / 路径 / 状态码 / 耗时 / trace_id）。 |
@@ -103,8 +109,9 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/__init__.py` | 入口层总览，导出 `auth_router`、`onebot_router`、`workflow_router`、`log_router`。 |
+| `api/__init__.py` | 入口层总览，导出 `auth_router`、`profile_router`、`onebot_router`、`workflow_router`、`log_router`。 |
 | `api/auth/__init__.py` | 鉴权入口汇总（注册 / 登录 / 当前用户 / 登录设备）。 |
+| `api/profile/__init__.py` | 个人设置入口汇总（`ProfileData` / `profile_router`）。 |
 | `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销）。 |
 | `api/workflow/__init__.py` | 工作流管理入口汇总（`WorkflowStoreLike` / `workflow_router`）。 |
 | `api/log/__init__.py` | 运行日志入口汇总（`LogData` / `log_router`）。 |
@@ -129,7 +136,25 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 > 勾没勾「记住设备」会同步进设备记录）。认不出来（不在 / 不是本人）就照常发一个新的——复用是
 > 尽力而为的优化，**失败不影响登录**。实现见 `services/session/service.py` 的 `reuse()`。
 
-### 3.3 api/onebot/ —— OneBot 管理入口
+### 3.3 api/profile/ —— 个人设置入口
+
+> 改昵称 + 头像。**写操作只作用于自己**（`user.user.id`）：这组接口就是「个人设置」，不存在
+> 「改别人资料」，所以不用判管理员。按 id 取**别人**的头像放行给所有登录用户 —— 头像本来就是
+> 给人看的（设备 / 用户列表要画），不算泄露。
+>
+> 头像的**字节流不套 JSON 壳**：`PUT` 的请求体就是图片本身，`GET` 回的就是图片本身（带
+> `ETag` / `Last-Modified`，浏览器拿 `If-None-Match` 回来就换 304）。类型按**文件头**认
+> （`Content-Type` 只当提示）：只收 PNG / JPEG / WebP / GIF，**SVG 不收**（那是 XML，能带脚本）。
+> 存哪由 `AvatarStore` 协议决定，默认实现落 `[api] avatar_dir` 那个本地目录。
+
+| 文件 | 作用 |
+|---|---|
+| `api/profile/router.py` | **HTTP 入口**：`GET/PATCH <prefix>/profile`（资料 / 改昵称）、`PUT/DELETE <prefix>/profile/avatar`（传 / 删头像）、`GET <prefix>/profile/avatar[/{user_id}]`（取自己 / 别人的头像字节）。只管翻译，规则在 `services/profile`。 |
+| `api/profile/dependencies.py` | 路由注入件：`get_profile_service`（从 `app.state` 取服务）、`ProfileServiceDep`。 |
+| `api/profile/requests.py` | 请求体 `UpdateProfileRequest`（昵称，复用 `services.user.validation` 的 `Nickname`）。 |
+| `api/profile/responses.py` | 响应体 `ProfileData`：资料 + 头像信息（`has_avatar` / `avatar_mime` / `avatar_size` / `avatar_updated_at`，以及带 `?v=` 的 `avatar_url`，换图后前端好刷新）。 |
+
+### 3.4 api/onebot/ —— OneBot 管理入口
 
 > 把 OneBot 的「在线客户端列表」与「令牌管理」做成 HTTP 接口。服务本身在 `nacho.onebot`，
 > 由主程序装配时传进 `create_app(onebot=...)`；**这里不 import `nacho.onebot`**（那样等于
@@ -153,7 +178,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
 
-### 3.4 api/workflow/ —— 工作流管理入口
+### 3.5 api/workflow/ —— 工作流管理入口
 
 > 工作流是**另一块业务**：图形 / 校验 / 落库的实现都在 `nacho.workflow`，接口层只认一份能力
 > 协议 `WorkflowStoreLike`（见 `protocols.py`），装配时由主程序挂到 `app.state.workflow_store`。
@@ -169,7 +194,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/workflow/requests.py` | 请求体：新建 / 改名 / 暂存 / 提交版本 / 发布。 |
 | `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData` / `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`。 |
 
-### 3.5 api/log/ —— 运行日志检索
+### 3.6 api/log/ —— 运行日志检索
 
 > 把「查历史日志」做成一个 HTTP 接口。**查询本身不在这里实现**：条件原样递给日志系统的
 > `BaseLogger.search()`，它再扇出到各出口 —— 落库那份就是一条 SQL（`WHERE` / `ORDER BY` /
@@ -211,6 +236,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `services/auth/__init__.py` | 鉴权业务汇总（凭据换令牌；令牌机制在 `session/`）。 |
 | `services/user/__init__.py` | 用户模块汇总。 |
 | `services/session/__init__.py` | 会话模块汇总（登录会话、设备信息、令牌映射、吊销）。 |
+| `services/profile/__init__.py` | 个人设置模块汇总（昵称 + 头像、头像存储协议与默认实现）。 |
 
 ### 4.2 services/user/ —— 用户域（不管 HTTP）
 
@@ -223,7 +249,20 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`add` 新增一个账号（注册用，撞 `account` 唯一约束时翻成 `AccountAlreadyExistsError`，不把数据库异常漏出去）、`seed_demo` 空表种演示账号（`admin` / `robot` / `guest` 已停用）。 |
 | `services/user/demo.py` | 演示账号 `DEMO_USERS` 的单一来源（`seed_demo` 用），改账号只改一处。 |
 
-### 4.3 services/auth/ —— 鉴权业务
+### 4.3 services/profile/ —— 个人设置域
+
+> 改昵称 + 头像。昵称落在用户表（`services/user`），头像**字节**落在头像存储 —— 两样拼在
+> 一起，是因为个人设置页一次要「资料 + 头像」。
+
+| 文件 | 作用 |
+|---|---|
+| `services/profile/models.py` | `AvatarInfo`（元信息：类型 / 大小 / 更新时间，`updated_at` 兼作 `ETag`）/ `ProfileView`（资料 + 头像）。 |
+| `services/profile/images.py` | 图片嗅探 `sniff_image_type`：按**文件头**认类型（不信 `Content-Type`），只收 png / jpeg / webp / gif —— SVG 这类 XML 不收（能带脚本）。 |
+| `services/profile/protocols.py` | **能力协议** `AvatarStore`（`save` / `info` / `load` / `remove`）：换底层（对象存储 / 塞库 / 加 CDN）只换实现，上层一行不用改。 |
+| `services/profile/store_file.py` | 默认实现 `FileAvatarStore`：一个目录一个用户一个文件（`<user_id><扩展名>`；临时文件 + `os.replace` 原子替换、同用户换类型清旧文件、文件 IO 丢线程池、user id 先按文件名规则挡住 `../`）。 |
+| `services/profile/service.py` | **业务编排** `ProfileService`：改昵称与头像的存 / 取 / 删；规则（空 → 422、超限 → 413、不是认得的图 → 415）只在这里判一遍。 |
+
+### 4.4 services/auth/ —— 鉴权业务
 
 | 文件 | 作用 |
 |---|---|
@@ -241,4 +280,5 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | 路由里取服务 / 解析 token 的依赖 | `api/<业务>/dependencies.py` |
 | 查库、验密、算令牌等纯逻辑 | `services/<业务>/service.py` 及同层 `*.py` |
 | 业务自己的数据模型 / 协议 | `services/<业务>/models.py`、`protocols.py` |
+| 头像这类「要换底层」的文件存储 | `services/profile/protocols.py` 定协议 + `store_file.py` 给默认实现；目录来自配置 `[api] avatar_dir` |
 | 跨业务共享（响应壳 / 错误 / 日志 / 编码） | `common/` |
