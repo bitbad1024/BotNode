@@ -9,6 +9,7 @@ import { NAV_ITEMS } from './nav'
 import { useLayout } from './layoutStore'
 import { useAuth } from '../auth/authStore'
 import { revokeSession } from '../auth/authApi'
+import AvatarImage from '../auth/AvatarImage'
 import { ThemeToggle } from '../../common/theme'
 import {
   IconMenu,
@@ -17,6 +18,7 @@ import {
   IconChevronDown,
   IconLogout,
   IconDevices,
+  IconSettings,
 } from '../../common/icons'
 import styles from './Topbar.module.css'
 
@@ -88,7 +90,7 @@ export default function Topbar() {
             aria-haspopup="menu"
             aria-expanded={menuOpen}
           >
-            <span className={styles.avatar}>{initial}</span>
+            <AvatarImage initial={initial} size="sm" />
             <span className={styles.userMeta}>
               <span className={styles.userName}>
                 {user?.nickname || user?.account}
@@ -105,7 +107,7 @@ export default function Topbar() {
               />
               <div className={styles.menu} role="menu">
                 <div className={styles.menuHead}>
-                  <span className={styles.menuAvatar}>{initial}</span>
+                  <AvatarImage initial={initial} size="md" />
                   <div className={styles.menuUser}>
                     <span className={styles.menuName}>
                       {user?.nickname || '未命名'}
@@ -123,6 +125,15 @@ export default function Topbar() {
                   </div>
                 )}
                 <div className={styles.menuDivider} />
+                <Link
+                  to="/profile"
+                  className={styles.menuItem}
+                  role="menuitem"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <IconSettings size={17} />
+                  个人设置
+                </Link>
                 <Link
                   to="/sessions"
                   className={styles.menuItem}

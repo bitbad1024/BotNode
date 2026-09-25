@@ -11,6 +11,7 @@ import SchedulePage from '../features/schedule/SchedulePage'
 import LogsPage from '../features/logs/LogsPage'
 import DebugPage from '../features/onebot/DebugPage'
 import WorkflowPage from '../features/workflow/WorkflowPage'
+import ProfilePage from '../features/auth/ProfilePage'
 
 export default function AppRouter() {
   return (
@@ -27,6 +28,7 @@ export default function AppRouter() {
           <Route path="/schedule" element={<SchedulePage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/debug" element={<DebugPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
         </Route>
       </Route>
 

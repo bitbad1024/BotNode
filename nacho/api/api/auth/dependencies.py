@@ -19,6 +19,7 @@ from ...logging import OWNER_ID_STATE
 from ...options import ApiOptions
 from ...services.auth.models import CurrentUser
 from ...services.auth.service import AuthService
+from ...services.profile.service import ProfileService
 from ...services.session.client import describe_client
 from ...services.session.models import ClientInfo
 
@@ -45,6 +46,7 @@ class _AppState(Protocol):
 
     auth_service: AuthService
     api_options: ApiOptions
+    profile_service: ProfileService
 
 
 class _App(Protocol):
@@ -61,6 +63,12 @@ def get_auth_service(request: Request) -> AuthService:
     """
     app = cast("_App", request.app)
     return app.state.auth_service
+
+
+def get_profile_service(request: Request) -> ProfileService:
+    """取个人设置服务：装配时挂在 ``app.state.profile_service`` 上。"""
+    app = cast("_App", request.app)
+    return app.state.profile_service
 
 
 def get_api_options(request: Request) -> ApiOptions:
@@ -157,6 +165,8 @@ async def _current_user(
 
 #: 依赖简写：路由函数里写 ``service: AuthServiceDep`` 即可
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+#: 依赖简写：拿个人设置服务（头像查询要用）
+ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 #: 依赖简写：拿接口层选项（Cookie 要不要持久）
 ApiOptionsDep = Annotated[ApiOptions, Depends(get_api_options)]
 #: 依赖简写：令牌可能没带，拿到的是可空凭据

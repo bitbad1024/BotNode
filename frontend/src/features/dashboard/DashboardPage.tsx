@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom'
 import { fetchProfile } from '../auth/authApi'
 import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
+import AvatarImage from '../auth/AvatarImage'
 import { useToast } from '../../common/Toast'
 import { useNavigate } from 'react-router-dom'
 import { NAV_ITEMS } from '../layout/nav'
@@ -138,9 +139,10 @@ export default function DashboardPage() {
             <span className={styles.cardNote}>GET /api/auth/me</span>
           </div>
           <div className={styles.profileRow}>
-            <span className={styles.avatar}>
-              {(user.nickname || user.account).slice(0, 1)}
-            </span>
+            <AvatarImage
+              initial={(user.nickname || user.account).slice(0, 1)}
+              size="lg"
+            />
             <div>
               <div className={styles.profileNick}>{user.nickname || '—'}</div>
               <div className={styles.profileAccount}>@{user.account}</div>

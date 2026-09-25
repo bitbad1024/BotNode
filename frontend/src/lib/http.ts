@@ -168,9 +168,16 @@ export const http = {
     request<T>(instance.get(url, config)),
   post: <T, B = unknown>(url: string, body?: B) =>
     request<T>(instance.post(url, body)),
-  /** PUT：整份覆盖式更新（如工作流暂存区）用。 */
-  put: <T, B = unknown>(url: string, body?: B) =>
-    request<T>(instance.put(url, body)),
+  /** PUT：整份覆盖式更新（如工作流暂存区）用；config 传 axios 配置（Content-Type 等）。 */
+  put: <T, B = unknown>(url: string, body?: B, config?: AxiosRequestConfig) =>
+    request<T>(instance.put(url, body, config)),
+  /** GET blob：头像这类返回原始字节的接口用（不走 JSON 响应壳）。
+   *  后端返回的地址（如 avatar_url）自带 /api 前缀，axios baseURL 会再拼一遍 —— 先剥掉。 */
+  getBlob: (url: string) => {
+    const prefix = API_BASE_URL.replace(/\/+$/, '')
+    const path = prefix && url.startsWith(prefix) ? url.slice(prefix.length) : url
+    return instance.get(path, { responseType: 'blob' }).then((r) => r.data)
+  },
   /** DELETE：令牌吊销、踢下线这类动作用；查询串直接拼在 url 上。 */
   del: <T>(url: string) => request<T>(instance.delete(url)),
   /** PATCH：改单个字段（如令牌启用 / 停用）用。 */
