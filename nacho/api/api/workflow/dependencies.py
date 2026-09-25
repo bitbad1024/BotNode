@@ -19,7 +19,7 @@ from fastapi import status as http_status
 
 from nacho.workflow import WorkflowDefinitionRecord
 
-from .protocols import WorkflowStoreLike
+from .protocols import WorkflowStoreLike, WorkflowTriggerLike
 
 #: 管理员角色名（与演示账号约定一致）
 ADMIN_ROLE: str = "admin"
@@ -29,6 +29,8 @@ class _AppState(Protocol):
     """挂在 ``app.state`` 上、本模块要用到的东西（由 :func:`nacho.api.create_app` 写入）。"""
 
     workflow_store: WorkflowStoreLike
+    #: 运行时触发器；``None`` = 没装配（开关只落库，见 :func:`get_workflow_triggers`）
+    workflow_triggers: WorkflowTriggerLike | None
 
 
 class _App(Protocol):
@@ -43,6 +45,23 @@ def get_workflow_store(request: Request) -> WorkflowStoreLike:
 
 #: 依赖简写：路由函数里写 ``store: WorkflowStoreDep`` 即可
 WorkflowStoreDep = Annotated[WorkflowStoreLike, Depends(get_workflow_store)]
+
+
+def get_workflow_triggers(request: Request) -> WorkflowTriggerLike | None:
+    """取运行时触发器；**没装配就返回 ``None``**（开关只落库，等下次启动载入）。
+
+    主程序（``nacho.bootstrap``）会把 :class:`~nacho.workflow.runtime.WorkflowTriggers` 传进来，
+    于是拨开关能即时启停；直接 ``create_app()`` 起来的测试 / 示例没这一层，路由按「有没有」
+    决定要不要即时启停 —— 所以这里允许为空，不能当成错误。
+    """
+    app = cast("_App", request.app)
+    return getattr(app.state, "workflow_triggers", None)
+
+
+#: 依赖简写：路由函数里写 ``triggers: WorkflowTriggersDep`` 即可（可能为 None）
+WorkflowTriggersDep = Annotated[
+    WorkflowTriggerLike | None, Depends(get_workflow_triggers)
+]
 
 
 def is_admin(user: CurrentUser) -> bool:

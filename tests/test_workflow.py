@@ -1228,10 +1228,89 @@ async def test_store_draft_save_overwrites_and_switches_pointer(
     assert await store.save_draft("not-exist", canonical_draft_json(half)) is None
 
 
+async def test_definition_enabled_defaults_off_and_toggles() -> None:
+    """运行开关：新建默认关（发布 ≠ 运行），能拨开能拨回，不存在返回 ``None``。"""
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    try:
+        await store.ensure_schema()
+        created = await store.create("u-admin", "开关流")
+        assert created.enabled is False  # 默认不跑
+
+        turned_on = await store.set_enabled(created.id, True)
+        assert turned_on is not None and turned_on.enabled is True
+        stored = await store.get(created.id)
+        assert stored is not None and stored.enabled is True  # 真写进去了
+
+        turned_off = await store.set_enabled(created.id, False)
+        assert turned_off is not None and turned_off.enabled is False
+        assert await store.set_enabled("not-exist", True) is None
+    finally:
+        await engine.dispose()
+
+
+async def test_old_definition_table_gets_the_enabled_column() -> None:
+    """老库（建表时还没有 enabled 列）在 ``ensure_schema`` 时补上，老数据按「不跑」填 0。
+
+    补列不能让升级上来的库突然开始跑 —— 所以 ALTER 的默认值必须是 0（见 store 的
+    ``_DEFINITION_ADDED_COLUMNS``）。
+    """
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        # 造一张「老表」：只有最早的几列，没有 enabled / 暂存区那几列
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(
+                "CREATE TABLE workflow_definitions ("
+                "id VARCHAR(64) PRIMARY KEY, owner_id VARCHAR(64), name VARCHAR(128),"
+                " status VARCHAR(16), current_version INTEGER, published_version INTEGER,"
+                " created_at FLOAT, updated_at FLOAT)"
+            )
+            await conn.exec_driver_sql(
+                "INSERT INTO workflow_definitions (id, owner_id, name, status,"
+                " current_version, published_version, created_at, updated_at)"
+                " VALUES ('wf-old', 'u-admin', '老数据', 'published', 1, 1, 1.0, 1.0)"
+            )
+
+        store = SqlWorkflowStore(engine)
+        await store.ensure_schema()  # 建表跳过（已存在）+ 补增量列
+
+        old = await store.get("wf-old")
+        assert old is not None
+        assert old.enabled is False  # 升级上来默认「不跑」
+        assert old.published_version == 1  # 别的列没被碰
+    finally:
+        await engine.dispose()
+
+
 # --------------------------------------------------------------------------- HTTP 接口
 def api_app() -> FastAPI:
     """接口层应用（演示账号在 lifespan 里种好；工作流双表在同一块内存 sqlite）。"""
     return create_app(ApiOptions(prefix="/api"), hasher=_TEST_HASHER)
+
+
+class FakeTriggers:
+    """假触发器：只记账（``start`` / ``stop`` 各被叫了几次、拿的哪一版）。
+
+    验的是「接口层有没有按开关去即时启停」，不用真调度器（那个由运行时那组用例覆盖）。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, int]] = []
+
+    async def start(self, workflow_id: str, version: int) -> int:
+        self.calls.append(("start", workflow_id, version))
+        return 1
+
+    async def stop(self, workflow_id: str, version: int) -> int:
+        self.calls.append(("stop", workflow_id, version))
+        return 1
+
+
+def api_app_with_triggers(triggers: FakeTriggers) -> FastAPI:
+    """接口层应用 + 运行时触发器（主程序就是这么传的，见 ``nacho.bootstrap``）。"""
+    return create_app(
+        ApiOptions(prefix="/api"), hasher=_TEST_HASHER, workflow_triggers=triggers
+    )
 
 
 @asynccontextmanager
@@ -1467,7 +1546,10 @@ async def test_api_draft_stage_then_commit_then_publish() -> None:
 
 
 async def test_load_published_workflows_registers_crons() -> None:
-    """启动载入：已发布的定时流把 start 登记到调度器；草稿 / 未发布不登记。"""
+    """启动载入：**开着运行开关**的已发布定时流才把 start 登记到调度器。
+
+    「已发布但开关关着」与「只存了版本没发布」两种都不登记 —— 发布 ≠ 运行。
+    """
     from nacho.core.scheduler import TaskManager
     from nacho.workflow.runtime import load_published_workflows
 
@@ -1486,6 +1568,7 @@ async def test_load_published_workflows_registers_crons() -> None:
         checksum=graph_checksum(time_graph),
     )
     assert await store.publish(published_def.id, 1) is not None
+    assert await store.set_enabled(published_def.id, True) is not None  # 拨开开关才算「要跑」
 
     # 只有版本、没发布的工作流不该被载入（消息触发也不会登记任务）
     draft_def = await store.create("u-admin", "草稿流")
@@ -1495,11 +1578,26 @@ async def test_load_published_workflows_registers_crons() -> None:
         checksum=graph_checksum(linear_graph()),
     )
 
+    # 发布过、但开关没拨开的：同样不登记（另起一个节点 id，免得和上面那个撞 task_id）
+    off_graph = {
+        "nodes": [node("so", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("so", "e")],
+    }
+    off_def = await store.create("u-admin", "发了但不跑的流")
+    await store.add_version(
+        off_def,
+        graph_json=canonical_graph_json(off_graph),
+        checksum=graph_checksum(off_graph),
+    )
+    assert await store.publish(off_def.id, 1) is not None
+
     scheduler = TaskManager()
     try:
         loaded = await load_published_workflows(store, scheduler)
         assert loaded == 1
         assert scheduler.get("wf-s") is not None
+        # 开关关着的不登记（`get` 对不存在的任务是抛 KeyError，所以按清单看）
+        assert [task.task_id for task in scheduler.list()] == ["wf-s"]
     finally:
         await engine.dispose()
 
@@ -1540,12 +1638,51 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
         checksum=graph_checksum(graph),
     )
     assert await store.publish(definition.id, 1) is not None
+    assert await store.set_enabled(definition.id, True) is not None  # 开关拨开（否则连登记都不做）
 
     scheduler = TaskManager()
     try:
         assert await load_published_workflows(store, scheduler) == 1
         assert scheduler.get("wf-s") is not None  # 定时开始节点登记上了
         assert ran == []  # 而下游（probe）一次都没跑
+    finally:
+        await engine.dispose()
+
+
+async def test_stop_published_workflow_removes_the_registered_tasks() -> None:
+    """停用：把这一版登记的定时任务摘掉（**不跑图**），重复停、停不存在的都无害。"""
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import (
+        register_published_workflow,
+        stop_published_workflow,
+    )
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    definition = await store.create("u-admin", "定时流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+    assert await store.publish(definition.id, 1) is not None
+
+    scheduler = TaskManager()
+    try:
+        assert await register_published_workflow(definition.id, 1, store, scheduler) == 1
+        assert scheduler.get("wf-s") is not None
+
+        assert await stop_published_workflow(definition.id, 1, store, scheduler) == 1
+        assert scheduler.list() == []  # 摘干净了
+        # 再停一次 / 停一个不存在的版本：都是 0，不抛
+        assert await stop_published_workflow(definition.id, 1, store, scheduler) == 0
+        assert await stop_published_workflow(definition.id, 9, store, scheduler) == 0
     finally:
         await engine.dispose()
 
@@ -1588,3 +1725,162 @@ async def test_api_requires_login() -> None:
         assert (await client.get("/api/workflows")).status_code == 401
         assert (await client.post("/api/workflows/validate", json={"graph": linear_graph()})
                 ).status_code == 401
+
+
+# --------------------------------------------------------------------------- 运行开关
+def _timed_graph(cron: str = "*/5 * * * *") -> dict[str, object]:
+    """一张最小的定时图（换 cron 就换 checksum，用来造第二个版本）。"""
+    return {
+        "nodes": [node("s", "start", trigger="time", cron=cron), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+
+
+async def test_api_enabled_switch_and_published_snapshot() -> None:
+    """开关接口：新建默认关、发布 ≠ 运行、拨开即时登记、关掉即时摘掉；已发布的那一份读得到。
+
+    这是这次改动的核心口径：**发布只挪指针**（不登记、不执行图），跑不跑由开关说了算。
+    """
+    triggers = FakeTriggers()
+    async with api_client(api_app_with_triggers(triggers)) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "开关流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+        assert created.json()["data"]["enabled"] is False  # 新建就是「不跑」
+
+        # 还没发布：拨开是 409（没东西可跑），而且一次都没碰触发器
+        early = await client.put(
+            f"/api/workflows/{workflow_id}/enabled",
+            headers=auth(token),
+            json={"enabled": True},
+        )
+        assert early.status_code == 409
+        assert triggers.calls == []
+
+        await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": _timed_graph(), "note": "首版"},
+        )
+        published = await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+        assert published.status_code == 200
+        assert published.json()["data"]["enabled"] is False
+        assert triggers.calls == []  # 发布不跑、也不登记
+
+        # 「已发布的那一份」：开关状态 + 版本 + 图，一次看全
+        snapshot = await client.get(
+            f"/api/workflows/{workflow_id}/published", headers=auth(token)
+        )
+        assert snapshot.status_code == 200
+        body = snapshot.json()["data"]
+        assert body["workflow"]["published_version"] == 1
+        assert body["workflow"]["enabled"] is False
+        assert [item["id"] for item in body["version"]["graph"]["nodes"]] == ["s", "e"]
+
+        # 拨开 → 即时按已发布版本登记
+        turned_on = await client.put(
+            f"/api/workflows/{workflow_id}/enabled",
+            headers=auth(token),
+            json={"enabled": True},
+        )
+        assert turned_on.status_code == 200
+        assert turned_on.json()["data"]["enabled"] is True
+        assert triggers.calls == [("start", workflow_id, 1)]
+
+        # 关掉 → 即时摘掉
+        turned_off = await client.put(
+            f"/api/workflows/{workflow_id}/enabled",
+            headers=auth(token),
+            json={"enabled": False},
+        )
+        assert turned_off.json()["data"]["enabled"] is False
+        assert triggers.calls[-1] == ("stop", workflow_id, 1)
+
+
+async def test_api_enabled_switch_and_snapshot_are_owner_scoped() -> None:
+    """个人隔离：别人的开关与已发布快照都按「不存在」处理（同一个 404）。"""
+    async with api_client(api_app()) as client:
+        admin_token = await login(client, ADMIN)
+        robot_token = await login(client, ROBOT)
+        created = await client.post(
+            "/api/workflows", headers=auth(admin_token), json={"name": "管理员的定时流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+        await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(admin_token),
+            json={"graph": _timed_graph(), "note": "首版"},
+        )
+        await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(admin_token), json={}
+        )
+
+        toggled = await client.put(
+            f"/api/workflows/{workflow_id}/enabled",
+            headers=auth(robot_token),
+            json={"enabled": True},
+        )
+        snapshot = await client.get(
+            f"/api/workflows/{workflow_id}/published", headers=auth(robot_token)
+        )
+    assert toggled.status_code == 404
+    assert snapshot.status_code == 404
+
+
+async def test_api_publishing_while_switch_off_does_not_register() -> None:
+    """开关关着时发布：一次都不登记（发布 ≠ 运行）。"""
+    triggers = FakeTriggers()
+    async with api_client(api_app_with_triggers(triggers)) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "不跑的流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+        await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": _timed_graph(), "note": "首版"},
+        )
+        await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+    assert triggers.calls == []
+
+
+async def test_api_publishing_again_while_enabled_re_registers() -> None:
+    """开着开关时再发一版：按**新版本**重新登记一遍（别让线上还跑旧版的触发配置）。"""
+    triggers = FakeTriggers()
+    async with api_client(api_app_with_triggers(triggers)) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "改过定时的流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+        await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": _timed_graph(), "note": "首版"},
+        )
+        await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+        await client.put(
+            f"/api/workflows/{workflow_id}/enabled",
+            headers=auth(token),
+            json={"enabled": True},
+        )
+        # 第二版：把 cron 改掉（checksum 不同才会真的多一版）
+        await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": _timed_graph("*/10 * * * *"), "note": "二版"},
+        )
+        again = await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+    assert again.json()["data"]["published_version"] == 2
+    assert triggers.calls == [("start", workflow_id, 1), ("start", workflow_id, 2)]

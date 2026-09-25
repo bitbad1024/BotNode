@@ -1,10 +1,13 @@
 """工作流运行时：把已发布版本的图加载出来，让开始节点的触发配置生效。
 
-服务启动时调一次 :func:`load_published_workflows`——遍历所有 status=published 的工作流，
-**只做登记**：把 ``trigger=time`` 的开始节点按 cron 登记到调度器，整张图**不执行**。
-（以前这里是「跑一遍图、靠开始节点顺带登记」，代价是每次启动都真的把整条流程执行一遍 ——
-登记只需要调开始节点自己，见 :func:`register_published_workflow`。）发布接口本身只挪发布
-指针、不执行图，改了触发配置后重启服务即按新版本登记。
+**发布 ≠ 运行**：发布接口只挪发布指针；要不要真的跑由定义上的**运行开关**（``enabled``）
+决定，默认关着。服务启动时调一次 :func:`load_published_workflows` —— 只挑**开关开着**的
+已发布工作流，把 ``trigger=time`` 的开始节点按 cron 登记到调度器，整张图**不执行**；
+运行期间拨开关由 :class:`WorkflowTriggers` 即时启停（接口层的开关接口调它）。
+
+（登记只调开始节点自己，见 :func:`register_published_workflow` —— 以前这里靠「跑一遍图、
+顺带登记」，代价是每次启动都真的把整条流程执行一遍。停用是对称的，见
+:func:`stop_published_workflow`，同样不跑图。）
 
 调度器到点后走 :func:`make_trigger`：重新加载该版本的图并**跑整条流程**（幂等：
 开始节点会先移除旧任务再重新登记，不会叠加）。
@@ -145,23 +148,86 @@ async def register_published_workflow(
     return primed
 
 
+async def stop_published_workflow(
+    workflow_id: str,
+    version: int,
+    store: SqlWorkflowStore,
+    scheduler: TaskManager,
+) -> int:
+    """把这一版里**开始节点登记过的定时任务**摘掉，返回摘掉的数量。
+
+    与登记对称：登记的 ``task_id`` 固定是 ``wf-<node.id>``（见 ``nodes/start.py``），
+    所以这里照图里的开始节点算一遍 id 去摘即可 —— **不用把图跑一遍**（那是执行，不是停机）。
+    """
+    record = await store.get_version(workflow_id, version)
+    if record is None:
+        _log().warning(
+            "工作流版本不存在，跳过停用",
+            workflow_id=workflow_id,
+            version=version,
+        )
+        return 0
+
+    removed = 0
+    for node_id in start_ids(record.graph().nodes):
+        if scheduler.remove(f"wf-{node_id}"):
+            removed += 1
+    if removed:
+        _log().info(
+            "已停止定时触发",
+            workflow_id=workflow_id,
+            version=version,
+            count=removed,
+        )
+    return removed
+
+
+class WorkflowTriggers:
+    """启停某个已发布版本的时间触发（接口层的「运行开关」靠它**即时生效**）。
+
+    接口层只认结构化的 ``start`` / ``stop`` 两个方法（见
+    :mod:`nacho.api.api.workflow.protocols`），**不 import 本模块**；装配时由主程序把这一份
+    传进 ``create_app(workflow_triggers=...)``。没传的场合（直接 ``create_app`` 的测试 / 示例）
+    开关照样落库，只是生效点在下次启动载入。
+    """
+
+    def __init__(self, store: SqlWorkflowStore, scheduler: TaskManager) -> None:
+        self._store: SqlWorkflowStore = store
+        self._scheduler: TaskManager = scheduler
+
+    async def start(self, workflow_id: str, version: int) -> int:
+        """登记这一版的时间触发（重复调用幂等），返回跑过的开始节点数量。"""
+        return await register_published_workflow(
+            workflow_id, version, self._store, self._scheduler
+        )
+
+    async def stop(self, workflow_id: str, version: int) -> int:
+        """摘掉这一版登记过的定时任务（重复调用无害），返回摘掉的数量。"""
+        return await stop_published_workflow(
+            workflow_id, version, self._store, self._scheduler
+        )
+
+
 async def load_published_workflows(
     store: SqlWorkflowStore,
     scheduler: TaskManager,
     *,
     limit: int = 500,
 ) -> int:
-    """启动时把所有**已发布**工作流登记就绪，返回载入的开始节点数量。
+    """启动时把**开着运行开关**的已发布工作流登记就绪，返回载入的开始节点数量。
 
-    遍历 ``status=published`` 且 ``published_version>0`` 的定义，逐个跑其已发布版本的
-    **开始节点**（时间触发的据此把整条流程登记到 cron；**下游一个都不执行**，见
-    :func:`register_published_workflow`）。单个失败不影响其他工作流，异常只记 error。
+    遍历 ``status=published`` 且 ``published_version>0`` **且 ``enabled``** 的定义，逐个跑其
+    已发布版本的**开始节点**（时间触发的据此把整条流程登记到 cron；**下游一个都不执行**，见
+    :func:`register_published_workflow`）。发布 ≠ 运行：刚发布的（开关默认关）不在这里被跑。
+    单个失败不影响其他工作流，异常只记 error。
     """
     definitions = await store.list(owner_id=None, limit=limit)
     primed = 0
     for definition in definitions:
         if definition.status != "published" or definition.published_version <= 0:
             continue
+        if not definition.enabled:
+            continue  # 已发布但开关关着：不登记、不跑（新发布默认就是这个状态）
         try:
             primed += await register_published_workflow(
                 definition.id, definition.published_version, store, scheduler

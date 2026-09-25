@@ -145,6 +145,8 @@ class WorkflowData(_Frozen):
     status: str
     current_version: int
     published_version: int
+    #: 运行开关：已发布但它是 ``false`` 时不会跑（发布 ≠ 运行）
+    enabled: bool = False
     #: 暂存区最近保存时间（0 = 没暂存过）
     draft_updated_at: float = 0.0
     #: 编辑器当前指向：draft（暂存区）/ version（已提交版本）
@@ -161,6 +163,7 @@ class WorkflowData(_Frozen):
             status=record.status,
             current_version=record.current_version,
             published_version=record.published_version,
+            enabled=record.enabled,
             draft_updated_at=record.draft_updated_at,
             current_ref=record.current_ref,
             created_at=record.created_at,
@@ -207,6 +210,16 @@ class WorkflowVersionData(_Frozen):
             note=record.note,
             created_at=record.created_at,
         )
+
+
+class PublishedWorkflowData(_Frozen):
+    """已发布的那一份：工作流（含运行开关与发布指针）+ 已发布版本快照（图在里面）。
+
+    前端「运行 / 停止」面板进来一次看全：开关开没开、发的是哪一版、那一版长什么样。
+    """
+
+    workflow: WorkflowData
+    version: WorkflowVersionData
 
 
 class SaveVersionResultData(_Frozen):

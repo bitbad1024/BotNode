@@ -44,7 +44,7 @@ from .onebot import (
     onebot_logger,
 )
 from .workflow import SqlWorkflowStore
-from .workflow.runtime import load_published_workflows
+from .workflow.runtime import WorkflowTriggers, load_published_workflows
 
 # --------------------------------------------------------------------------- 状态
 #: 接口层 HTTP 服务（随主程序由 uvicorn 起）；停机时取用
@@ -157,6 +157,8 @@ async def run(
                 user_store=users,
                 session_store=sessions,
                 onebot=_onebot_server,
+                # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）
+                workflow_triggers=WorkflowTriggers(workflows, scheduler),
                 workflow_store=workflows,
             ),
             host=api_host,
@@ -170,8 +172,8 @@ async def run(
     # 启动定时任务调度器：开始节点（trigger=time）靠它到点触发
     await scheduler.start()
 
-    # 把所有已发布工作流的定时触发登记到调度器：**只登记、不执行图**（到点才跑）。
-    # 发布接口只挪指针、不执行图，触发配置随启动统一生效。
+    # 把**开着运行开关**的已发布工作流的定时触发登记到调度器：只登记、不执行图（到点才跑）。
+    # 发布只挪指针、不执行图；跑不跑看开关，运行期拨开关走接口层那个即时启停。
     await load_published_workflows(workflows, scheduler)
 
 

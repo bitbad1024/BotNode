@@ -91,3 +91,26 @@ class WorkflowStoreLike(Protocol):
     ) -> WorkflowDefinitionRecord | None:
         """把 ``version`` 标记为已发布（status + 挪发布指针）；版本不存在返回 ``None``。"""
         ...
+
+    async def set_enabled(
+        self, workflow_id: str, enabled: bool
+    ) -> WorkflowDefinitionRecord | None:
+        """拨**运行开关**（发布 ≠ 运行）；不存在返回 ``None``。"""
+        ...
+
+
+class WorkflowTriggerLike(Protocol):
+    """启停某个已发布版本的定时触发（对应 :class:`nacho.workflow.runtime.WorkflowTriggers`）。
+
+    接口层的「运行开关」靠它**即时生效**：拨开就登记、关掉就摘任务。没注入实现时（直接
+    ``create_app`` 的测试 / 示例）开关只落库，生效点推迟到下次启动载入 —— 所以路由里这份
+    依赖是**可空**的，有就即时启停、没有就只管落库。
+    """
+
+    async def start(self, workflow_id: str, version: int) -> int:
+        """登记这一版的时间触发（幂等），返回跑过的开始节点数量。"""
+        ...
+
+    async def stop(self, workflow_id: str, version: int) -> int:
+        """摘掉这一版登记过的定时任务（重复调用无害），返回摘掉的数量。"""
+        ...
