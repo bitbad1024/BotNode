@@ -2,20 +2,17 @@
 import { http } from '../../lib/http'
 
 // --------------------------------------------------------------------------- 图类型
-//: 与后端注册表一一对应（见 ``nacho/workflow/nodes/__init__.py``）。
-//: 只列**真能跑**的类型：gateway / approval / expression / condition / task 从来没实现过
-//: 执行器，后端已连声明一起删掉，画布不再提供（旧图若还有，加载会显示成未知类型、保存被拒）。
-export type NodeType =
-  | 'start'
-  | 'end'
-  | 'http'
-  | 'log'
-  | 'test'
-  | 'constant'
+/**
+ * 节点类型**不在这里枚举**：能摆哪些节点由后端注册表说了算，画布启动时拉
+ * ``GET /workflows/node-types``（见下面的 fetchNodeCatalog）—— 加一个节点类型只改后端。
+ * 所以 ``type`` 就是普通字符串：认不出的类型（旧图 / 扩展没装）画成灰色未知节点，
+ * 保存时会被后端校验的 ``UNKNOWN_NODE_TYPE`` 挡下。
+ */
+export type PortType = 'trigger' | 'message'
 
 export interface WorkflowNode {
   id: string
-  type: NodeType | string
+  type: string
   config: Record<string, unknown>
   outputs: string[]
   /** 画布坐标：随图持久化（后端快照 / 暂存区都存），但不参与版本 hash */
@@ -38,6 +35,47 @@ export interface WorkflowEdge {
 export interface WorkflowGraph {
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
+}
+
+// --------------------------------------------------------------------------- 节点目录
+/** 一个端口（画布上的圆点）：id 就是 edge 的 sourcePort / targetPort。 */
+export interface NodePortSpec {
+  id: string
+  /** 端口类型：连线两端必须同类 */
+  type: PortType
+  label: string
+}
+
+/** config 里的一个字段：画布照它渲染输入框 / 下拉。 */
+export interface NodeFieldSpec {
+  name: string
+  label: string
+  required: boolean
+  /** default 只在 has_default 时有意义（null 也可能是合法默认值） */
+  has_default: boolean
+  default: unknown
+  /** 有值就是枚举字段：渲染成下拉，顺序即显示顺序 */
+  options: string[] | null
+}
+
+/** 一种节点类型：画布的面板项 / 标题 / 端口 / 配置表单全从这里来。 */
+export interface NodeTypeSpec {
+  type: string
+  label: string
+  role: 'start' | 'end' | 'normal'
+  /** 面板顺序（后端已排好：小的在前） */
+  order: number
+  /** 有没有执行器：声明了但没实现的类型也能存图，跑到它才报错 */
+  has_executor: boolean
+  min_outgoing: number
+  max_outgoing: number | null
+  inputs: NodePortSpec[]
+  outputs: NodePortSpec[]
+  fields: NodeFieldSpec[]
+}
+
+export interface NodeCatalog {
+  nodes: NodeTypeSpec[]
 }
 
 // --------------------------------------------------------------------------- 校验
@@ -94,6 +132,15 @@ export interface SaveVersionResultData {
 }
 
 // --------------------------------------------------------------------------- 接口
+/**
+ * GET /workflows/node-types：节点类型目录（画布的面板 / 端口 / 配置表单都照它渲染）。
+ *
+ * 只读后端内存里的注册表，不碰库；要放在 `/workflows/{id}` 之前，后端已经这么声明了。
+ */
+export function fetchNodeCatalog() {
+  return http.get<NodeCatalog>('/workflows/node-types')
+}
+
 /** POST /workflows/validate：只校验不入库（画布点「校验」时用）。 */
 export function validateGraph(graph: WorkflowGraph) {
   return http.post<ValidationReport, { graph: WorkflowGraph }>('/workflows/validate', { graph })
