@@ -102,15 +102,27 @@ async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     return {}
 
 
+def workflow_task_id(workflow_id: str, node_id: str) -> str:
+    """这条时间触发在调度器里的任务名：**工作流 + 节点**两级。
+
+    只用节点 id 不够 —— 节点 id 只在**一张图内**唯一，两条工作流里都叫 ``s`` 的开始节点会
+    互相顶掉（后登记的把先登记的移除）。带上工作流 id 之后，不同工作流、不同节点都不会撞。
+
+    ``stop`` 那边照同一份口径算 id 去摘任务（见 :func:`nacho.workflow.runtime.
+    stop_published_workflow`），所以**改这里的形状两边要一起改**。
+    """
+    return f"wf-{workflow_id}-{node_id}"
+
+
 async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """把整条流程按 cron 登记到调度器（``trigger=time`` 的行为）。
 
-    调度器没注入时只记日志、不实际登记（测试 / 离线场景）；登记的 task_id 固定为
-    ``wf-<node.id>``，重复执行会先移除再登记（幂等）。
+    调度器没注入时只记日志、不实际登记（测试 / 离线场景）；登记的 task_id 由
+    :func:`workflow_task_id` 定（``wf-<工作流 id>-<节点 id>``），重复执行会先移除再登记（幂等）。
     """
     cron = str(node.config.get("cron", "")).strip()
     name = str(node.config.get("name", node.id))
-    task_id = f"wf-{node.id}"
+    task_id = workflow_task_id(ctx.workflow_id, node.id)
 
     if ctx.scheduler is None:
         ctx.logger.warning(

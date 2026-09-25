@@ -209,9 +209,16 @@ async def delete_workflow(
     request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
+    triggers: WorkflowTriggersDep,
 ) -> Response:
-    """删除定义及其全部版本。"""
+    """删除定义及其全部版本；**顺手把定时触发摘掉**（库删了任务还在，到点会空跑一趟）。
+
+    顺序是先摘后删：任务名要照这一版的图算出来（见 ``stop_published_workflow``），图都没了
+    就算不出来。没装配触发器时跳过（那种场合本来就没即时登记，重启自然消失）。
+    """
     record = await get_in_scope(store, user, workflow_id)
+    if triggers is not None and record.published_version > 0:
+        await triggers.stop(record.id, record.published_version)
     removed = await store.delete(record.id)
     if not removed:
         raise ApiError(

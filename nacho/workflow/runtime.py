@@ -22,7 +22,7 @@ from nacho.core.scheduler import TaskManager
 
 from .executor import NodeExecutionContext, SimpleWorkflowRunner
 from .graph import start_ids
-from .nodes import get_executor
+from .nodes import get_executor, workflow_task_id
 
 if TYPE_CHECKING:
     from .store import SqlWorkflowStore
@@ -80,7 +80,7 @@ async def run_published_workflow(
     graph = record.graph()
     # 到点回调：再跑一次同一个版本（时间触发开始节点幂等重登记）
     trigger = make_trigger(workflow_id, version, store, scheduler)
-    ctx = NodeExecutionContext(scheduler=scheduler, run=trigger)
+    ctx = NodeExecutionContext(scheduler=scheduler, run=trigger, workflow_id=workflow_id)
     runner = SimpleWorkflowRunner()
     try:
         await runner.run(graph, ctx)
@@ -128,6 +128,7 @@ async def register_published_workflow(
     ctx = NodeExecutionContext(
         scheduler=scheduler,
         run=make_trigger(workflow_id, version, store, scheduler),
+        workflow_id=workflow_id,
     )
     primed = 0
     for node in graph.nodes:
@@ -156,8 +157,9 @@ async def stop_published_workflow(
 ) -> int:
     """把这一版里**开始节点登记过的定时任务**摘掉，返回摘掉的数量。
 
-    与登记对称：登记的 ``task_id`` 固定是 ``wf-<node.id>``（见 ``nodes/start.py``），
-    所以这里照图里的开始节点算一遍 id 去摘即可 —— **不用把图跑一遍**（那是执行，不是停机）。
+    与登记对称：任务名由 :func:`nacho.workflow.nodes.start.workflow_task_id` 定
+    （``wf-<工作流 id>-<节点 id>``），照图里的开始节点算一遍 id 去摘即可 ——
+    **不用把图跑一遍**（那是执行，不是停机）。
     """
     record = await store.get_version(workflow_id, version)
     if record is None:
@@ -170,7 +172,7 @@ async def stop_published_workflow(
 
     removed = 0
     for node_id in start_ids(record.graph().nodes):
-        if scheduler.remove(f"wf-{node_id}"):
+        if scheduler.remove(workflow_task_id(workflow_id, node_id)):
             removed += 1
     if removed:
         _log().info(

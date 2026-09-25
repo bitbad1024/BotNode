@@ -516,7 +516,7 @@ async def test_executor_orphan_edge_into_main_path_does_not_block() -> None:
 
 @pytest.mark.asyncio
 async def test_executor_start_time_trigger_registers_with_scheduler() -> None:
-    """start（时间触发）注入调度器时按 cron 登记，task_id = wf-<node.id>，可幂等重登记。"""
+    """start（时间触发）注入调度器时按 cron 登记，task_id = wf-<工作流 id>-<节点 id>（工作流 + 节点两级，避免不同图的同名节点撞车），可幂等重登记。"""
     from nacho.core.scheduler import TaskManager
 
     scheduler = TaskManager()
@@ -534,15 +534,15 @@ async def test_executor_start_time_trigger_registers_with_scheduler() -> None:
             "edges": [edge("s", "e")],
         }
     )
-    ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow)
+    ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow, workflow_id="demo")
     await SimpleWorkflowRunner().run(graph, ctx)
-    task = scheduler.get("wf-s")
+    task = scheduler.get("wf-demo-s")
     assert task is not None
     assert task.name == "每5分钟"
 
     # 再跑一遍：先移除再登记，不报错且仍是同一个 task_id
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert scheduler.get("wf-s") is not None
+    assert scheduler.get("wf-demo-s") is not None
 
 
 @pytest.mark.asyncio
@@ -1399,6 +1399,36 @@ async def test_api_trace_id_is_filled_in_every_workflow_response() -> None:
         assert checked.json()["trace_id"] == checked.headers["X-Trace-Id"]
 
 
+async def test_api_delete_workflow_stops_its_scheduled_tasks() -> None:
+    """删工作流要**先把定时触发摘掉**：只删库的话任务还在调度器里，到点空跑一趟。
+
+    顺序是先摘后删 —— 任务名要照这一版的图算，图没了就算不出来。
+    """
+    triggers = FakeTriggers()
+    async with api_client(api_app_with_triggers(triggers)) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "待删的流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+        saved = await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": linear_graph()},
+        )
+        assert saved.status_code == 201, saved.text
+        published = await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+        assert published.status_code == 200, published.text
+
+        deleted = await client.delete(f"/api/workflows/{workflow_id}", headers=auth(token))
+        assert deleted.status_code == 204
+
+    # 发布时开关还默认关着（不会 start），删除时应当 stop 一次、带着发布版本号
+    assert ("stop", workflow_id, 1) in triggers.calls
+
+
 async def test_api_create_validate_save_publish_full_chain() -> None:
     async with api_client(api_app()) as client:
         token = await login(client, ADMIN)
@@ -1595,9 +1625,9 @@ async def test_load_published_workflows_registers_crons() -> None:
     try:
         loaded = await load_published_workflows(store, scheduler)
         assert loaded == 1
-        assert scheduler.get("wf-s") is not None
+        assert scheduler.get(f"wf-{published_def.id}-s") is not None
         # 开关关着的不登记（`get` 对不存在的任务是抛 KeyError，所以按清单看）
-        assert [task.task_id for task in scheduler.list()] == ["wf-s"]
+        assert [task.task_id for task in scheduler.list()] == [f"wf-{published_def.id}-s"]
     finally:
         await engine.dispose()
 
@@ -1643,7 +1673,7 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
     scheduler = TaskManager()
     try:
         assert await load_published_workflows(store, scheduler) == 1
-        assert scheduler.get("wf-s") is not None  # 定时开始节点登记上了
+        assert scheduler.get(f"wf-{definition.id}-s") is not None  # 定时开始节点登记上了
         assert ran == []  # 而下游（probe）一次都没跑
     finally:
         await engine.dispose()
@@ -1676,13 +1706,50 @@ async def test_stop_published_workflow_removes_the_registered_tasks() -> None:
     scheduler = TaskManager()
     try:
         assert await register_published_workflow(definition.id, 1, store, scheduler) == 1
-        assert scheduler.get("wf-s") is not None
+        assert scheduler.get(f"wf-{definition.id}-s") is not None
 
         assert await stop_published_workflow(definition.id, 1, store, scheduler) == 1
         assert scheduler.list() == []  # 摘干净了
         # 再停一次 / 停一个不存在的版本：都是 0，不抛
         assert await stop_published_workflow(definition.id, 1, store, scheduler) == 0
         assert await stop_published_workflow(definition.id, 9, store, scheduler) == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_workflow_task_ids_carry_the_workflow_id() -> None:
+    """任务名 = 工作流 + 节点：两条工作流的**同名**开始节点不会互相顶掉。
+
+    以前只按节点 id 算（``wf-<node.id>``），而节点 id 只在**一张图内**唯一 —— 两条图都有
+    ``s`` 时，后登记的会把先登记的那条移除，等于悄悄停掉别人的定时。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    first = await store.create("u-admin", "第一条")
+    second = await store.create("u-admin", "第二条")  # 故意用同一个节点 id
+    for definition in (first, second):
+        await store.add_version(
+            definition,
+            graph_json=canonical_graph_json(graph),
+            checksum=graph_checksum(graph),
+        )
+        assert await store.publish(definition.id, 1) is not None
+        assert await store.set_enabled(definition.id, True) is not None
+
+    scheduler = TaskManager()
+    try:
+        assert await load_published_workflows(store, scheduler) == 2
+        task_ids = sorted(task.task_id for task in scheduler.list())
+        assert task_ids == sorted([f"wf-{first.id}-s", f"wf-{second.id}-s"])
     finally:
         await engine.dispose()
 
