@@ -88,24 +88,29 @@ def _conflict(exc: WorkflowNameConflict) -> ApiError:
 @router.post("/validate")
 async def validate_only(
     payload: ValidateRequest,
+    request: Request,
     user: CurrentUserDep,
 ) -> ApiResponse[ValidationReportData]:
     """只跑入库前校验流水线，不碰数据库。"""
     _ = user  # 登录即可；校验是无状态的
     report = validate_graph(payload.graph)
-    return ApiResponse(data=ValidationReportData.from_report(report))
+    return ApiResponse(
+        data=ValidationReportData.from_report(report), trace_id=trace_id_of(request)
+    )
 
 
 # --------------------------------------------------------------------------- 节点目录
 @router.get("/node-types")
-async def list_node_types(user: CurrentUserDep) -> ApiResponse[NodeCatalogData]:
+async def list_node_types(
+    request: Request, user: CurrentUserDep
+) -> ApiResponse[NodeCatalogData]:
     """节点类型目录：画布照它渲染节点面板 / 端口 / 配置表单。
 
     只读内存里那张注册表，不碰数据库 —— 加一个节点类型只改后端（写节点那个文件），画布与
     这个接口都不用动。必须声明在 ``/{workflow_id}`` **之前**，否则会被它当成 id 抢走。
     """
     _ = user  # 登录即可；目录是无状态的
-    return ApiResponse(data=NodeCatalogData.from_registry())
+    return ApiResponse(data=NodeCatalogData.from_registry(), trace_id=trace_id_of(request))
 
 
 # --------------------------------------------------------------------------- 定义
@@ -133,6 +138,7 @@ async def create_workflow(
 
 @router.get("")
 async def list_workflows(
+    request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
     owner_id: str | None = Query(default=None, max_length=64),
@@ -143,18 +149,22 @@ async def list_workflows(
     records = await store.list(
         owner_id=owner_filter_of(user, owner_id), limit=limit, offset=offset
     )
-    return ApiResponse(data=[WorkflowData.from_record(item) for item in records])
+    return ApiResponse(
+        data=[WorkflowData.from_record(item) for item in records],
+        trace_id=trace_id_of(request),
+    )
 
 
 @router.get("/{workflow_id}")
 async def get_workflow(
     workflow_id: str,
+    request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
 ) -> ApiResponse[WorkflowData]:
     """定义详情；不存在 / 是别人的统一 404。"""
     record = await get_in_scope(store, user, workflow_id)
-    return ApiResponse(data=WorkflowData.from_record(record))
+    return ApiResponse(data=WorkflowData.from_record(record), trace_id=trace_id_of(request))
 
 
 @router.patch("/{workflow_id}")
@@ -250,12 +260,15 @@ async def save_draft(
 @router.get("/{workflow_id}/draft")
 async def get_draft(
     workflow_id: str,
+    request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
 ) -> ApiResponse[WorkflowDraftData]:
     """读暂存区；从没暂存过时 ``graph`` 为 null（200，不算错误）。"""
     record = await get_in_scope(store, user, workflow_id)
-    return ApiResponse(data=WorkflowDraftData.from_record(record))
+    return ApiResponse(
+        data=WorkflowDraftData.from_record(record), trace_id=trace_id_of(request)
+    )
 
 
 # --------------------------------------------------------------------------- 版本
@@ -332,19 +345,24 @@ async def save_version(
 @router.get("/{workflow_id}/versions")
 async def list_versions(
     workflow_id: str,
+    request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
 ) -> ApiResponse[list[WorkflowVersionData]]:
     """版本历史（版本号倒序；不含图内容会过大？——当前规模直接带图，将来可加 ?brief=1）。"""
     record = await get_in_scope(store, user, workflow_id)
     versions = await store.list_versions(record.id)
-    return ApiResponse(data=[WorkflowVersionData.from_record(item) for item in versions])
+    return ApiResponse(
+        data=[WorkflowVersionData.from_record(item) for item in versions],
+        trace_id=trace_id_of(request),
+    )
 
 
 @router.get("/{workflow_id}/versions/{version}")
 async def get_version(
     workflow_id: str,
     version: int,
+    request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
 ) -> ApiResponse[WorkflowVersionData]:
@@ -357,7 +375,9 @@ async def get_version(
             f"没有版本 {version}",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    return ApiResponse(data=WorkflowVersionData.from_record(snapshot))
+    return ApiResponse(
+        data=WorkflowVersionData.from_record(snapshot), trace_id=trace_id_of(request)
+    )
 
 
 @router.post("/{workflow_id}/publish")

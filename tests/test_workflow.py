@@ -1287,6 +1287,39 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert orders == sorted(orders)  # 面板顺序：接口给的就已经排好
 
 
+async def test_api_trace_id_is_filled_in_every_workflow_response() -> None:
+    """每个工作流响应的 body 里都要有 trace_id（= 响应头 X-Trace-Id），不能是占位符 "-"。
+
+    以前只有写操作（新建 / 改名 / 暂存 / 提交 / 发布）填了它，只读接口落到响应壳的默认值
+    ``"-"`` —— 响应头一直是对的，缺的是 body 这个字段，于是排障时用户只能报一个 "-"。
+    """
+    async with api_client(api_app()) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "带编号的流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+
+        for path in (
+            "/api/workflows",
+            f"/api/workflows/{workflow_id}",
+            f"/api/workflows/{workflow_id}/draft",
+            f"/api/workflows/{workflow_id}/versions",
+            "/api/workflows/node-types",
+        ):
+            response = await client.get(path, headers=auth(token))
+            assert response.status_code == 200, (path, response.text)
+            body_id = response.json()["trace_id"]
+            assert body_id != "-", f"{path} 的 trace_id 是占位符"
+            assert body_id == response.headers["X-Trace-Id"], path
+
+        # 校验接口（业务结果走 200）同样要带上
+        checked = await client.post(
+            "/api/workflows/validate", headers=auth(token), json={"graph": {"nodes": []}}
+        )
+        assert checked.json()["trace_id"] == checked.headers["X-Trace-Id"]
+
+
 async def test_api_create_validate_save_publish_full_chain() -> None:
     async with api_client(api_app()) as client:
         token = await login(client, ADMIN)
