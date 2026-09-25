@@ -9,13 +9,14 @@
  * - trigger（触发 / 控制流）：决定"什么时候执行下一个节点"，绿色
  * - message（消息 / 数据流）：传递实际数据内容，蓝色
  *
- * 每种节点有固定的输入/输出端口集合（见 NODE_TYPES），连线时类型必须匹配。
+ * 每种节点的输入/输出端口由后端注册表定义（GET /workflows/node-types），连线时类型必须匹配。
  * 常量输入（config 字段）显示为节点底部的标签条，不可连线，在右侧配置面板编辑。
  *
  * 节点坐标直接存在节点 x/y 上随图提交；旧版坐标在 localStorage 里，加载时自动迁移。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  fetchNodeCatalog,
   getDraft,
   getVersion,
   getWorkflow,
@@ -24,7 +25,10 @@ import {
   saveDraft,
   saveVersion,
   validateGraph,
-  type NodeType,
+  type NodeFieldSpec,
+  type NodePortSpec,
+  type NodeTypeSpec,
+  type PortType,
   type ValidationIssue,
   type ValidationReport,
   type SaveVersionResultData,
@@ -45,133 +49,123 @@ import {
 } from '../../common/icons'
 import styles from './WorkflowEditor.module.css'
 
-// --------------------------------------------------------------------------- 端口类型系统
-
-type PortType = 'trigger' | 'message'
-
-interface PortSpec {
-  id: string
-  type: PortType
-  label: string
-}
-
-interface NodeTypeDef {
-  type: NodeType
-  label: string
-  color: string
-  defaults: Record<string, unknown>
-  inputs: PortSpec[]
-  outputs: PortSpec[]
-  /** 纯常量字段名（不含与端口同名的字段） */
-  constants: string[]
-}
+// --------------------------------------------------------------------------- 节点类型（来自后端目录）
+/**
+ * 节点类型**不在前端定义**：编辑器启动时拉一次 ``GET /workflows/node-types``（见 workflowApi
+ * 的 ``fetchNodeCatalog``），面板项 / 标题 / 端口 / 配置字段都按后端给的渲染。这里只留两样：
+ *
+ * - ``NODE_COLORS``：颜色是皮肤，后端不管，认不出的类型用灰的；
+ * - 两个**固有例外**（它们的形状本来就随 config 变，不是「前端另有定义」）：
+ *   ``start`` 的端口与常量条随 ``config.trigger`` 变；``constant`` 的常量就是它的 config 本身。
+ */
+type PortSpec = NodePortSpec
 
 const PORT_COLORS: Record<PortType, string> = {
   trigger: '#22c55e',
   message: '#3b82f6',
 }
 
-const NODE_TYPES: Record<string, NodeTypeDef> = {
-  start: {
-    type: 'start', label: '开始', color: '#22c55e', defaults: { trigger: 'message' },
-    inputs: [],
-    outputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '消息' },
-    ],
-    constants: [],
-  },
-  end: {
-    type: 'end', label: '结束', color: '#ef4444', defaults: {},
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [],
-    constants: [],
-  },
-  log: {
-    type: 'log', label: '写日志', color: '#3b82f6', defaults: { message: '', level: 'INFO' },
-    inputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '消息' },
-    ],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    constants: ['level'],
-  },
-  test: {
-    type: 'test', label: '测试', color: '#8b5cf6', defaults: { echo: 'hello' },
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '回显' },
-    ],
-    constants: ['echo'],
-  },
-  http: {
-    type: 'http', label: 'HTTP', color: '#0ea5e9', defaults: { url: '', method: 'GET' },
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '响应' },
-    ],
-    constants: ['url', 'method'],
-  },
-  constant: {
-    type: 'constant', label: '常量', color: '#eab308', defaults: {},
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [
-      { id: 'trigger', type: 'trigger', label: '触发' },
-      { id: 'message', type: 'message', label: '值' },
-    ],
-    // 常量就是 config 本身：键名在 nodeDef 里按 config 动态取，卡片上每个常量一个标签
-    constants: [],
-  },
+//: 节点配色（皮肤）：后端只给类型名与显示名，颜色由这里定
+const NODE_COLORS: Record<string, string> = {
+  start: '#22c55e',
+  end: '#ef4444',
+  log: '#3b82f6',
+  test: '#8b5cf6',
+  http: '#0ea5e9',
+  constant: '#eab308',
 }
 
-/** 面板顺序：只列后端真注册了的类型（占位类型已随后端一起删，见 nodes/__init__.py）。 */
-const PALETTE_ORDER: string[] = ['start', 'end', 'constant', 'log', 'test', 'http']
+const DEFAULT_COLOR = '#64748b'
 
-/** start 节点时间触发形态：只输出触发端口，cron 是常量配置。 */
-const START_TIME_DEF: NodeTypeDef = {
-  type: 'start',
-  label: '开始 · 时间',
-  color: '#f59e0b',
-  defaults: { trigger: 'time', cron: '*/5 * * * *' },
-  inputs: [],
-  outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-  constants: ['cron'],
+/** start 时间形态换色（面板上「开始」只有一个入口，节点按触发方式区分） */
+const START_TIME_COLOR = '#f59e0b'
+
+interface NodeTypeDef {
+  type: string
+  label: string
+  color: string
+  defaults: Record<string, unknown>
+  inputs: PortSpec[]
+  outputs: PortSpec[]
+  /** 卡片底部的常量条：后端声明的字段里，名字**不是**端口的那些 */
+  constants: string[]
+  /** 配置面板照它渲染（同样不含端口同名字段——那些交给端口交互） */
+  fields: NodeFieldSpec[]
 }
 
-/** start 节点消息触发形态：输出触发 + 消息端口，无常量配置。 */
-const START_MESSAGE_DEF: NodeTypeDef = {
-  type: 'start',
-  label: '开始 · 消息',
-  color: '#22c55e',
-  defaults: { trigger: 'message' },
-  inputs: [],
-  outputs: [
-    { id: 'trigger', type: 'trigger', label: '触发' },
-    { id: 'message', type: 'message', label: '消息' },
-  ],
-  constants: [],
+//: 拉回来的目录：类型 -> 规格（渲染时按类型取；面板顺序也来自它）
+let CATALOG: Record<string, NodeTypeSpec> = {}
+
+/** 装目录（编辑器加载时调一次），返回已按后端 order 排好的面板项列表。 */
+function installCatalog(nodes: NodeTypeSpec[]): NodeTypeSpec[] {
+  CATALOG = Object.fromEntries(nodes.map((item) => [item.type, item]))
+  return [...nodes].sort((a, b) => a.order - b.order)
 }
+
+/** 后端没登记这个类型时的兜底端口：能画、能接线，保存时被 ``UNKNOWN_NODE_TYPE`` 拦下。 */
+const UNKNOWN_PORTS: PortSpec[] = [{ id: 'trigger', type: 'trigger', label: '触发' }]
 
 /**
- * 取节点类型定义；start 的端口 / 常量随 config.trigger 动态变化：
- * time = 只输出触发 + cron 常量；message（含缺省）= 触发 + 消息输出。
+ * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序全部来自后端目录，前端只补颜色，
+ * 并按 config 处理上面说的两个固有例外。
  */
 function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
-  if (type === 'start') {
-    return config?.trigger === 'time' ? START_TIME_DEF : START_MESSAGE_DEF
+  const spec = CATALOG[type]
+  if (spec === undefined) {
+    // 认不出的类型：不猜它的端口，只给一对触发口让它还能画出来（这是兜底，不是定义）
+    return {
+      type, label: type, color: DEFAULT_COLOR, defaults: {},
+      inputs: UNKNOWN_PORTS, outputs: UNKNOWN_PORTS, constants: [], fields: [],
+    }
   }
-  if (type === 'constant') {
-    // 常量节点的常量就是 config 本身：几个键就在卡片上显示几条（高度跟着长）
-    return { ...NODE_TYPES.constant, constants: Object.keys(config ?? {}) }
+
+  const portIds = new Set([...spec.inputs, ...spec.outputs].map((port) => port.id))
+  const defaults: Record<string, unknown> = {}
+  const fields: NodeFieldSpec[] = []
+  for (const field of spec.fields) {
+    if (field.has_default) defaults[field.name] = field.default
+    // 字段名与端口同名（log 的 message）：它是消息入口，不进常量条
+    if (!portIds.has(field.name)) fields.push(field)
   }
-  return NODE_TYPES[type] ?? {
-    type: type as NodeType, label: type, color: '#64748b', defaults: {},
-    inputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    outputs: [{ id: 'trigger', type: 'trigger', label: '触发' }],
-    constants: [],
+
+  const base: NodeTypeDef = {
+    type: spec.type,
+    label: spec.label,
+    color: NODE_COLORS[spec.type] ?? DEFAULT_COLOR,
+    defaults,
+    inputs: spec.inputs,
+    outputs: spec.outputs,
+    constants: fields.map((field) => field.name),
+    fields,
   }
+
+  if (spec.type === 'start') {
+    // 例外一：时间形态只出触发端口，卡片上只显示 cron（message 形态两者都不显示）
+    if (config?.trigger !== 'time') return { ...base, constants: [] }
+    return {
+      ...base,
+      label: `${base.label} · 时间`,
+      color: START_TIME_COLOR,
+      outputs: base.outputs.filter((port) => port.id === 'trigger'),
+      constants: ['cron'],
+    }
+  }
+  if (spec.type === 'constant') {
+    // 例外二：常量节点的「常量」就是它的 config，几个键就在卡片上排几条（高度跟着长）
+    return { ...base, constants: Object.keys(config ?? {}) }
+  }
+  return base
+}
+
+/** start 的触发方式选项同样来自后端目录；label 用一句人话解释，认不出的值原样显示。 */
+const TRIGGER_LABELS: Record<string, string> = {
+  message: '消息触发（无需配置）',
+  time: '时间触发（cron 定时）',
+}
+
+function triggerOptionsOf(): string[] {
+  const field = CATALOG['start']?.fields.find((item) => item.name === 'trigger')
+  return field?.options ?? ['message']
 }
 
 // --------------------------------------------------------------------------- 布局常量
@@ -316,6 +310,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [zoom, setZoom] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [boxSel, setBoxSel] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+  /**
+   * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
+   * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
+   */
+  const [palette, setPalette] = useState<NodeTypeSpec[] | null>(null)
+  const [catalogFailed, setCatalogFailed] = useState(false)
 
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ nodeId: string; offsetX: number; offsetY: number } | null>(null)
@@ -359,6 +359,21 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       nodes: g.nodes.map((n) => (n.id === id ? { ...n, x, y } : n)),
     }))
   }, [])
+
+  /** 拉节点目录：面板 / 端口 / 配置字段都按它渲染（只读后端内存里那张注册表，不碰库）。 */
+  const loadCatalog = useCallback(async () => {
+    setCatalogFailed(false)
+    try {
+      const { data } = await fetchNodeCatalog()
+      setPalette(installCatalog(data.nodes))
+    } catch {
+      setCatalogFailed(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCatalog()
+  }, [loadCatalog])
 
   useEffect(() => {
     if (!workflowId) return
@@ -886,16 +901,16 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
       <div className={styles.body}>
         {/* 节点面板——悬浮，可折叠 */}
-        {showPalette && (
+        {palette !== null && showPalette && (
         <aside className={styles.palette}>
           <div className={styles.paletteTitle}>节点</div>
-          {PALETTE_ORDER.map((type) => {
-            const def = nodeDef(type)
+          {palette.map((spec) => {
+            const def = nodeDef(spec.type)
             return (
               <button
-                key={type}
+                key={spec.type}
                 className={styles.paletteItem}
-                onClick={() => addNode(type)}
+                onClick={() => addNode(spec.type)}
               >
                 <span className={styles.paletteDot} style={{ background: def.color }} />
                 {def.label}
@@ -931,10 +946,26 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             setSelectedIds(new Set())
           }}
         >
-          {loading ? (
+          {palette === null || loading ? (
             <div className={styles.loading}>
-              <span className="spinner" />
-              正在加载…
+              {palette !== null ? (
+                <>
+                  <span className="spinner" />
+                  正在加载…
+                </>
+              ) : catalogFailed ? (
+                <>
+                  节点类型加载失败
+                  <button className="btn" onClick={() => void loadCatalog()}>
+                    重试
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="spinner" />
+                  正在加载节点类型…
+                </>
+              )}
             </div>
           ) : (
             <div className={styles.canvasContent} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
@@ -1101,7 +1132,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         </div>
 
         {/* 配置面板——悬浮，可折叠 */}
-        {showInspector && (
+        {palette !== null && showInspector && (
         <aside className={styles.inspector}>
           {selectedNode && selectedDef ? (
             <>
@@ -1151,8 +1182,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                     value={String(selectedNode.config.trigger ?? 'message')}
                     onChange={(e) => setStartTrigger(selectedNode.id, e.target.value)}
                   >
-                    <option value="message">消息触发（无需配置）</option>
-                    <option value="time">时间触发（cron 定时）</option>
+                    {triggerOptionsOf().map((option) => (
+                      <option key={option} value={option}>
+                        {TRIGGER_LABELS[option] ?? option}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
@@ -1195,45 +1229,49 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   </div>
                 </div>
               )}
+              {/* 字段清单来自后端目录（中文名与下拉选项都在里面）；端口同名字段走端口交互，不列这里 */}
               {selectedNode.type !== 'constant' &&
-                Object.entries(selectedNode.config)
-                  .filter(([key]) => key !== 'trigger')
-                  .map(([key, value]) => (
-                <div className={styles.field} key={key}>
-                  <label className={styles.label}>{key}</label>
-                  {key === 'method' ? (
-                    <select
-                      className={styles.input}
-                      value={String(value)}
-                      onChange={(e) => updateConfig(selectedNode.id, key, e.target.value)}
-                    >
-                      <option>GET</option>
-                      <option>POST</option>
-                      <option>PUT</option>
-                      <option>DELETE</option>
-                      <option>PATCH</option>
-                    </select>
-                  ) : key === 'level' ? (
-                    <select
-                      className={styles.input}
-                      value={String(value)}
-                      onChange={(e) => updateConfig(selectedNode.id, key, e.target.value)}
-                    >
-                      <option>DEBUG</option>
-                      <option>INFO</option>
-                      <option>WARNING</option>
-                      <option>ERROR</option>
-                      <option>CRITICAL</option>
-                    </select>
-                  ) : (
-                    <input
-                      className={styles.input}
-                      value={String(value)}
-                      onChange={(e) => updateConfig(selectedNode.id, key, e.target.value)}
-                    />
-                  )}
-                </div>
-              ))}
+                selectedDef.fields.map((field) => (
+                  <div className={styles.field} key={field.name}>
+                    <label className={styles.label}>{field.label}</label>
+                    {field.options ? (
+                      <select
+                        className={styles.input}
+                        value={String(selectedNode.config[field.name] ?? '')}
+                        onChange={(e) => updateConfig(selectedNode.id, field.name, e.target.value)}
+                      >
+                        {field.options.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className={styles.input}
+                        value={String(selectedNode.config[field.name] ?? '')}
+                        onChange={(e) => updateConfig(selectedNode.id, field.name, e.target.value)}
+                      />
+                    )}
+                  </div>
+                ))}
+              {/* 后端没声明的键（旧数据 / 手写图）：照旧给个输入框，别让它在界面上消失 */}
+              {selectedNode.type !== 'constant' &&
+                Object.keys(selectedNode.config)
+                  .filter(
+                    (key) =>
+                      key !== 'trigger' && !selectedDef.fields.some((f) => f.name === key),
+                  )
+                  .map((key) => (
+                    <div className={styles.field} key={`extra-${key}`}>
+                      <label className={styles.label}>{key}</label>
+                      <input
+                        className={styles.input}
+                        value={String(selectedNode.config[key] ?? '')}
+                        onChange={(e) => updateConfig(selectedNode.id, key, e.target.value)}
+                      />
+                    </div>
+                  ))}
               <div className={styles.field}>
                 <label className={styles.label}>输出变量（逗号分隔）</label>
                 <input

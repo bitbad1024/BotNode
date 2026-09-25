@@ -28,6 +28,7 @@ from .base import (
     NodeExecutor,
     NodeRole,
     NodeSpec,
+    PortSpec,
 )
 
 #: 节点类型名 -> 注册规格（执行器 + 字段规则 + 拓扑约束）
@@ -44,6 +45,10 @@ def register_executor(
     min_outgoing: int = 0,
     max_outgoing: int | None = None,
     expression_field: str | None = None,
+    label: str = "",
+    order: int = 100,
+    inputs: Sequence[PortSpec] = (),
+    outputs: Sequence[PortSpec] = (),
 ) -> None:
     """注册某类型节点的执行函数及其校验规则；重复注册覆盖。
 
@@ -58,6 +63,10 @@ def register_executor(
         min_outgoing=min_outgoing,
         max_outgoing=max_outgoing,
         expression_field=expression_field,
+        label=label,
+        order=order,
+        inputs=tuple(inputs),
+        outputs=tuple(outputs),
     )
 
 
@@ -70,6 +79,10 @@ def declare_node_type(
     min_outgoing: int = 0,
     max_outgoing: int | None = None,
     expression_field: str | None = None,
+    label: str = "",
+    order: int = 100,
+    inputs: Sequence[PortSpec] = (),
+    outputs: Sequence[PortSpec] = (),
 ) -> None:
     """只登记类型与校验规则、执行器留空。
 
@@ -85,6 +98,10 @@ def declare_node_type(
         min_outgoing=min_outgoing,
         max_outgoing=max_outgoing,
         expression_field=expression_field,
+        label=label,
+        order=order,
+        inputs=tuple(inputs),
+        outputs=tuple(outputs),
     )
 
 
@@ -97,6 +114,10 @@ def register_node(
     min_outgoing: int = 0,
     max_outgoing: int | None = None,
     expression_field: str | None = None,
+    label: str = "",
+    order: int = 100,
+    inputs: Sequence[PortSpec] = (),
+    outputs: Sequence[PortSpec] = (),
 ) -> Callable[[NodeExecutor], NodeExecutor]:
     """装饰器写法：在节点函数上标类型与规则即完成注册。
 
@@ -126,6 +147,10 @@ def register_node(
             min_outgoing=min_outgoing,
             max_outgoing=max_outgoing,
             expression_field=expression_field,
+            label=label,
+            order=order,
+            inputs=inputs,
+            outputs=outputs,
         )
         return executor
 

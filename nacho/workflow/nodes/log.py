@@ -12,11 +12,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import ConfigField, NodeExecutionContext, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
 from .registry import register_node
 
-#: 合法日志级别（config.level 缺省 INFO）
-LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+#: 合法日志级别，**顺序即画布下拉顺序**（config.level 缺省 INFO）
+LOG_LEVEL_ORDER: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+#: 合法日志级别的集合形态（校验用；与上面的顺序表同一份内容）
+LOG_LEVELS: frozenset[str] = frozenset(LOG_LEVEL_ORDER)
 
 
 def validate_log_node(node: WorkflowNode) -> list[ValidationIssue]:
@@ -36,9 +39,15 @@ def validate_log_node(node: WorkflowNode) -> list[ValidationIssue]:
 
 @register_node(
     "log",
+    label="写日志",
+    order=40,
+    # message 既是输入端口也是字段名：画布按「字段名 = 端口名」判定它是消息入口，
+    # 不把它当常量条显示
+    inputs=[TRIGGER_PORT, PortSpec("message", "message", "消息")],
+    outputs=[TRIGGER_PORT],
     fields=[
         ConfigField("message", "日志内容", required=True),
-        ConfigField("level", "日志级别", default="INFO"),
+        ConfigField("level", "日志级别", default="INFO", options=LOG_LEVEL_ORDER),
     ],
     validator=validate_log_node,
 )
@@ -46,7 +55,7 @@ async def exec_log(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, A
     """写日志节点：按级别把 message 写进业务日志（支持 ``{{变量}}`` 替换）。"""
     message = render_variables(str(node.config.get("message", "")), ctx.variables)
     level = str(node.config.get("level", "INFO")).upper()
-    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+    if level not in LOG_LEVELS:
         level = "INFO"
     getattr(ctx.logger, level.lower())(f"[log:{node.id}] {message}")
     ctx.log.append(f"[{level}] {node.id}: {message}")

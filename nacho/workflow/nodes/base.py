@@ -45,6 +45,9 @@ NodeRole = Literal["start", "end", "normal"]
 #: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
 NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
 
+#: 端口类型：trigger（控制流）决定「什么时候执行下一个节点」/ message（数据流）传内容
+PortType = Literal["trigger", "message"]
+
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()
 
@@ -56,13 +59,38 @@ class ConfigField:
     * ``required=True``：缺失 / None / 空白字符串 → 校验直接报 ``MISSING_CONFIG``；
     * 给了 ``default``：缺失（键不存在或值为 None）时由
       :func:`nacho.workflow.validator.apply_config_defaults` 在保存版本时填默认值；
-    * 两个都不给：纯可选字段，校验器不碰。
+    * 两个都不给：纯可选字段，校验器不碰；
+    * 给了 ``options``：这是**枚举**字段（画布渲染成下拉，顺序即显示顺序）。校验规则仍写在
+      节点自己的 validator 里，这里只描述「有哪些可选值」。
     """
 
     name: str
     label: str = ""
     required: bool = False
     default: Any = MISSING_DEFAULT
+    options: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class PortSpec:
+    """节点一端的一个端口：画布照它画圆点，连线时两端类型必须相同。
+
+    端口 ``id`` 就是写进 edge 的 ``source_port`` / ``target_port`` 的那个值；它同时是
+    「config 里哪个字段是消息入口」的判据 —— 字段名与端口 id 同名（如 ``log`` 的 ``message``）
+    时，画布把它当端口，不再当常量条显示。
+
+    :param id: 端口名（edge 两端引用的就是它）；
+    :param type: 端口类型，连线两端必须同类；
+    :param label: 显示名（缺省用 id）。
+    """
+
+    id: str
+    type: PortType = "trigger"
+    label: str = ""
+
+
+#: 各节点通用的触发端口（出入口都叫「触发」）
+TRIGGER_PORT = PortSpec("trigger", "trigger", "触发")
 
 
 @dataclass(frozen=True)
@@ -76,7 +104,11 @@ class NodeSpec:
     :param role: 拓扑角色，start 全图唯一、end 至少一个可达；
     :param min_outgoing: 出边条数下限（分流类节点要 ≥2）；
     :param max_outgoing: 出边条数上限（end 为 0），None 不限；
-    :param expression_field: 该字段内容要交图级表达式语法检查器过一遍（expression 节点用）。
+    :param expression_field: 该字段内容要交图级表达式语法检查器过一遍；
+    :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
+    :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
+    :param inputs: 输入端口（画布左侧圆点）；
+    :param outputs: 输出端口（画布右侧圆点）。
     """
 
     node_type: str
@@ -87,6 +119,10 @@ class NodeSpec:
     min_outgoing: int = 0
     max_outgoing: int | None = None
     expression_field: str | None = None
+    label: str = ""
+    order: int = 100
+    inputs: tuple[PortSpec, ...] = ()
+    outputs: tuple[PortSpec, ...] = ()
 
 #: 配置字符串里的变量引用：``{{ name }}``
 _VARIABLE_RE: re.Pattern[str] = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")

@@ -188,11 +188,11 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/workflow/router.py` | **HTTP 入口**：`POST <prefix>/workflows/validate`（只校验不入库，画布里随时试）、定义增删查改、`PUT/GET /{id}/draft`（暂存区）、`POST/GET /{id}/versions`（提交一个版本 / 版本历史）、`POST /{id}/publish`（发布）。校验不过是**业务结果**：HTTP 200 + `{valid:false, stage, errors}`（前端按节点画红点），请求格式错才走全局 422；`valid=false` 时**不写任何数据**。 |
+| `api/workflow/router.py` | **HTTP 入口**：`GET <prefix>/workflows/node-types`（节点类型目录：面板 / 端口 / 配置表单都照它渲染，只读内存注册表、不碰库）、`POST <prefix>/workflows/validate`（只校验不入库，画布里随时试）、定义增删查改、`PUT/GET /{id}/draft`（暂存区）、`POST/GET /{id}/versions`（提交一个版本 / 版本历史）、`POST /{id}/publish`（发布）。校验不过是**业务结果**：HTTP 200 + `{valid:false, stage, errors}`（前端按节点画红点），请求格式错才走全局 422；`valid=false` 时**不写任何数据**。 |
 | `api/workflow/protocols.py` | `WorkflowStoreLike`：接口层用到的那部分存储能力（定义增删查改 + 暂存 / 版本 / 发布 + 启动兜底建表）。默认实现 `nacho.workflow.SqlWorkflowStore` 结构化满足它。 |
 | `api/workflow/dependencies.py` | 路由注入件：`get_workflow_store`（从 `app.state` 取）、`get_in_scope`（按 id 取 + 归属把关，**越界与不存在同为 404**，不拿 id 试探别人的东西）、`is_admin` / `owner_filter_of`（普通用户只看自己，管理员可跨归属）。 |
 | `api/workflow/requests.py` | 请求体：新建 / 改名 / 暂存 / 提交版本 / 发布。 |
-| `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData` / `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`。 |
+| `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData` / `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`，以及节点目录的 `NodeCatalogData` / `NodeTypeData` / `NodeFieldData` / `NodePortData`（从注册表的 `NodeSpec` 映射，`MISSING_DEFAULT` 在这里翻成 `has_default=false`）。 |
 
 ### 3.6 api/log/ —— 运行日志检索
 

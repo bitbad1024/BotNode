@@ -29,13 +29,14 @@ import re
 from typing import Any, cast
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import ConfigField, NodeExecutionContext, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
 from .registry import register_node
 
-#: 允许的请求方法（大写）。校验规则与执行器认同这一份
-HTTP_METHODS: frozenset[str] = frozenset(
-    {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-)
+#: 允许的请求方法（大写），**顺序即画布下拉顺序**
+HTTP_METHOD_ORDER: tuple[str, ...] = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+
+#: 允许的请求方法集合（校验规则与执行器认同这一份；与上面的顺序表同一份内容）
+HTTP_METHODS: frozenset[str] = frozenset(HTTP_METHOD_ORDER)
 
 #: 缺省超时（秒）
 DEFAULT_TIMEOUT: float = 10.0
@@ -100,9 +101,17 @@ def _timeout_of(raw: object) -> float | None:
 
 @register_node(
     "http",
+    label="HTTP",
+    order=60,
+    inputs=[TRIGGER_PORT],
+    outputs=[TRIGGER_PORT, PortSpec("message", "message", "响应")],
     fields=[
         ConfigField("url", "请求地址", required=True),
-        ConfigField("method", "请求方法", required=True),
+        # method 缺省 GET（画布一直这么填，这里把它写成后端的事实）；显式给空串仍会被
+        # required 拦住，拼错则由 validate_http_node 报 INVALID_HTTP_METHOD
+        ConfigField(
+            "method", "请求方法", required=True, default="GET", options=HTTP_METHOD_ORDER
+        ),
         ConfigField("timeout", "超时秒数", default=DEFAULT_TIMEOUT),
     ],
     validator=validate_http_node,

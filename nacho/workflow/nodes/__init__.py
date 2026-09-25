@@ -41,13 +41,16 @@
 from __future__ import annotations
 
 from .base import (
-    ConfigField,
     MISSING_DEFAULT,
+    TRIGGER_PORT,
+    ConfigField,
     NodeConfigValidator,
-    NodeExecutor,
     NodeExecutionContext,
+    NodeExecutor,
     NodeRole,
     NodeSpec,
+    PortSpec,
+    PortType,
     render_variables,
 )
 from .constant import exec_constant, validate_constant_node
@@ -74,6 +77,9 @@ __all__ = [
     "NodeRole",
     "NodeConfigValidator",
     "ConfigField",
+    "PortSpec",
+    "PortType",
+    "TRIGGER_PORT",
     "MISSING_DEFAULT",
     "render_variables",
     # 注册表

@@ -1,6 +1,7 @@
 """工作流管理的 HTTP 入口：定义增删查改 + 暂存 / 版本保存 / 历史 / 发布 + 入库前校验。
 
     POST   <prefix>/workflows/validate             只校验不入库（画布里随时试）
+    GET    <prefix>/workflows/node-types           节点类型目录（画布渲染面板 / 端口 / 表单）
     POST   <prefix>/workflows                      新建空工作流（只要名字）
     GET    <prefix>/workflows                      列表（普通用户只看自己；?owner_id= 管理员）
     GET    <prefix>/workflows/{id}                 定义详情
@@ -58,6 +59,7 @@ from .requests import (
     ValidateRequest,
 )
 from .responses import (
+    NodeCatalogData,
     SaveVersionResultData,
     ValidationReportData,
     WorkflowData,
@@ -92,6 +94,18 @@ async def validate_only(
     _ = user  # 登录即可；校验是无状态的
     report = validate_graph(payload.graph)
     return ApiResponse(data=ValidationReportData.from_report(report))
+
+
+# --------------------------------------------------------------------------- 节点目录
+@router.get("/node-types")
+async def list_node_types(user: CurrentUserDep) -> ApiResponse[NodeCatalogData]:
+    """节点类型目录：画布照它渲染节点面板 / 端口 / 配置表单。
+
+    只读内存里那张注册表，不碰数据库 —— 加一个节点类型只改后端（写节点那个文件），画布与
+    这个接口都不用动。必须声明在 ``/{workflow_id}`` **之前**，否则会被它当成 id 抢走。
+    """
+    _ = user  # 登录即可；目录是无状态的
+    return ApiResponse(data=NodeCatalogData.from_registry())
 
 
 # --------------------------------------------------------------------------- 定义

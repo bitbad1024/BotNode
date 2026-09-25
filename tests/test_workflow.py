@@ -413,13 +413,13 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
 
 
 def test_apply_config_defaults_fills_registered_defaults() -> None:
-    """保存版本前的默认值补全：trigger/level/timeout 缺失就填，给了值不覆盖。"""
+    """保存版本前的默认值补全：trigger / level / method / echo 缺失就填，给了值不覆盖。"""
     raw = {
         "nodes": [
             node("s", "start"),  # trigger 缺
             node("l", "log", message="hi"),  # level 缺
-            node("h", "http", url="https://x", method="GET", timeout=3),  # timeout 给了
-            node("t", "test"),  # 没有默认值字段
+            node("h", "http", url="https://x", timeout=3),  # method 缺、timeout 给了
+            node("t", "test"),  # echo 缺
             node("e", "end"),
         ],
         "edges": [edge("s", "l"), edge("l", "h"), edge("h", "t"), edge("t", "e")],
@@ -428,8 +428,9 @@ def test_apply_config_defaults_fills_registered_defaults() -> None:
     configs = {n.id: n.config for n in graph.nodes}
     assert configs["s"]["trigger"] == "message"
     assert configs["l"]["level"] == "INFO"
+    assert configs["h"]["method"] == "GET"  # 画布一直替它填 GET，现在后端也这么声明
     assert configs["h"]["timeout"] == 3  # 显式值不被覆盖
-    assert "echo" not in configs["t"]
+    assert configs["t"]["echo"] == "hello"  # test 节点的回显内容（以前前端自己填的）
     # 原 dict 不被修改
     assert "trigger" not in raw["nodes"][0]["config"]
 
@@ -853,6 +854,80 @@ def test_builtin_node_executors_are_registered() -> None:
     assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant"}
 
 
+def test_builtin_field_metadata_is_declared_in_backend() -> None:
+    """枚举选项与默认值都写在注册表里，画布照单渲染（不再自己填 GET / INFO / hello）。
+
+    这几条以前只活在前端的节点表里（后端没声明），是两边最容易各自漂移的地方：
+    ``test`` 的 echo 字段、``http.method`` 的缺省 GET、``log.level`` / ``start.trigger``
+    的可选值。声明清楚了，「后端提供什么、画布显示什么」才立得住。
+    """
+    from nacho.workflow import get_spec
+    from nacho.workflow.nodes import HTTP_METHODS
+
+    http = get_spec("http")
+    assert http is not None
+    method = next(f for f in http.fields if f.name == "method")
+    assert method.default == "GET"
+    assert method.options is not None
+    assert set(method.options) == HTTP_METHODS  # 下拉选项与校验规则同一份
+
+    log = get_spec("log")
+    assert log is not None
+    level = next(f for f in log.fields if f.name == "level")
+    assert level.default == "INFO"
+    assert level.options == ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+    start = get_spec("start")
+    assert start is not None
+    start_fields = {f.name: f for f in start.fields}
+    assert start_fields["trigger"].default == "message"
+    assert start_fields["trigger"].options == ("message", "time")
+    assert "cron" in start_fields  # 时间形态用到的字段也照实声明
+    assert "name" in start_fields
+
+    test = get_spec("test")
+    assert test is not None
+    assert [f.name for f in test.fields] == ["echo"]
+    assert test.fields[0].default == "hello"
+
+
+def test_builtin_node_ports_and_labels_are_declared() -> None:
+    """内置节点的中文名 / 面板顺序 / 端口都在注册表里（画布照它画，不再自己维护一份）。
+
+    端口是**图的连线契约**：edge 的 ``source_port`` / ``target_port`` 存的就是这些 id，连线时
+    按 ``type`` 配对；字段名与端口 id 同名的（``log`` 的 ``message``）在画布上算端口、不算常量。
+    """
+    from nacho.workflow import get_spec
+
+    expected: dict[str, tuple[int, str, list[str], list[str]]] = {
+        "start": (10, "开始", [], ["trigger", "message"]),
+        "end": (20, "结束", ["trigger"], []),
+        "constant": (30, "常量", ["trigger"], ["trigger", "message"]),
+        "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
+        "test": (50, "测试", ["trigger"], ["trigger", "message"]),
+        "http": (60, "HTTP", ["trigger"], ["trigger", "message"]),
+    }
+    orders: list[int] = []
+    for node_type, (order, label, inputs, outputs) in expected.items():
+        spec = get_spec(node_type)
+        assert spec is not None
+        assert spec.order == order, node_type
+        assert spec.label == label, node_type
+        assert [p.id for p in spec.inputs] == inputs, node_type
+        assert [p.id for p in spec.outputs] == outputs, node_type
+        orders.append(spec.order)
+    assert orders == sorted(orders)  # 面板顺序：内置节点依次排开、互不打架
+
+    # 端口类型也要在：trigger 是控制流、message 是数据流，连线时按它配对
+    log = get_spec("log")
+    assert log is not None
+    assert [(p.id, p.type) for p in log.inputs] == [
+        ("trigger", "trigger"),
+        ("message", "message"),
+    ]
+    assert log.inputs[0].label == "触发"  # 显示名同样来自后端
+
+
 def test_declare_node_type_gives_rules_without_executor() -> None:
     """``declare_node_type``：规则在（必填字段 / 出边下限生效），执行器留空。
 
@@ -1177,6 +1252,39 @@ async def login(client: httpx.AsyncClient, who: dict[str, str]) -> str:
 
 def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+async def test_api_node_types_catalog_matches_registry() -> None:
+    """``GET /workflows/node-types``：画布要的 label / 端口 / 字段全从这儿来，顺序也排好了。
+
+    这就是「后端提供什么、画布显示什么」的那份数据 —— 没有它，前端只能自己维护一份节点表，
+    两边迟早漂移（``test`` 的 echo 字段就是这么漂出去的）。
+    """
+    async with api_client(api_app()) as client:
+        token = await login(client, ADMIN)
+        response = await client.get("/api/workflows/node-types", headers=auth(token))
+        assert response.status_code == 200, response.text
+        payload = response.json()["data"]
+
+    nodes = {item["type"]: item for item in payload["nodes"]}
+    assert set(nodes) == set(registered_types())  # 注册了什么就有什么
+
+    http = nodes["http"]
+    assert http["label"] == "HTTP"
+    assert http["role"] == "normal"
+    assert http["has_executor"] is True
+    assert [port["id"] for port in http["outputs"]] == ["trigger", "message"]
+    assert http["outputs"][1]["label"] == "响应"  # 端口显示名也来自后端
+    method = next(field for field in http["fields"] if field["name"] == "method")
+    assert method["default"] == "GET" and method["has_default"] is True
+    assert method["options"] == ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    url = next(field for field in http["fields"] if field["name"] == "url")
+    assert url["required"] is True and url["has_default"] is False and url["default"] is None
+
+    end = nodes["end"]
+    assert end["max_outgoing"] == 0 and end["outputs"] == []
+    orders = [item["order"] for item in payload["nodes"]]
+    assert orders == sorted(orders)  # 面板顺序：接口给的就已经排好
 
 
 async def test_api_create_validate_save_publish_full_chain() -> None:

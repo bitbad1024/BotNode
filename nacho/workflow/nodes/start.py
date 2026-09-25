@@ -17,11 +17,15 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import ConfigField, NodeExecutionContext
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec
 from .registry import register_node
 
-#: start 节点的触发方式：time = cron 定时触发（需配 cron）；message = 消息触发（缺省）
-START_TRIGGERS: frozenset[str] = frozenset({"time", "message"})
+#: start 节点的触发方式，**顺序即画布下拉顺序**：message = 消息触发（缺省）；
+#: time = cron 定时触发（需配 cron）
+START_TRIGGER_ORDER: tuple[str, ...] = ("message", "time")
+
+#: 触发方式集合（校验用；与上面的顺序表同一份内容）
+START_TRIGGERS: frozenset[str] = frozenset(START_TRIGGER_ORDER)
 
 
 def validate_start_node(node: WorkflowNode) -> list[ValidationIssue]:
@@ -72,8 +76,19 @@ def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
 
 @register_node(
     "start",
+    label="开始",
+    order=10,
     role="start",
-    fields=[ConfigField("trigger", "触发方式", default="message")],
+    # 端口按**缺省形态**（消息触发 = 触发 + 消息）声明；时间触发只出触发端口，由画布按
+    # config.trigger 切换 —— start 是唯一一个端口随配置变的类型，前端为它留了特判。
+    outputs=[TRIGGER_PORT, PortSpec("message", "message", "消息")],
+    fields=[
+        ConfigField("trigger", "触发方式", default="message", options=START_TRIGGER_ORDER),
+        # cron / name 只在 trigger=time 时有意义（message 触发下既不校验也没用处），但仍然是
+        # 这张图**认**的字段，所以照实声明 —— 画布拿到什么就渲染什么，不再自己猜。
+        ConfigField("cron", "cron 表达式"),
+        ConfigField("name", "调度任务名"),
+    ],
     validator=validate_start_node,
 )
 async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:

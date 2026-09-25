@@ -22,7 +22,7 @@ import re
 from typing import Any
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import NodeExecutionContext, render_variables
+from .base import TRIGGER_PORT, NodeExecutionContext, PortSpec, render_variables
 from .registry import register_node
 
 #: 常量名（也就是变量名）的规则：与 :func:`render_variables` 认的那套保持一致
@@ -56,7 +56,14 @@ def validate_constant_node(node: WorkflowNode) -> list[ValidationIssue]:
     return issues
 
 
-@register_node("constant", validator=validate_constant_node)
+@register_node(
+    "constant",
+    label="常量",
+    order=30,
+    inputs=[TRIGGER_PORT],
+    outputs=[TRIGGER_PORT, PortSpec("message", "message", "值")],
+    validator=validate_constant_node,
+)
 async def exec_constant(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """把 config 里的「名字 -> 值」作为变量产出（值走同一套 ``{{变量}}`` 渲染）。"""
     constants: dict[str, Any] = {
