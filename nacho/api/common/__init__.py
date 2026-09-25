@@ -18,6 +18,8 @@ from .dependencies import trace_id_of
 from .errors import (
     AccountDisabledError,
     ApiError,
+    AvatarTooLargeError,
+    AvatarTypeUnsupportedError,
     ErrorCode,
     HttpStatus,
     InternalError,
@@ -51,6 +53,8 @@ __all__ = [
     "ValidationError",
     "InvalidCredentialsError",
     "AccountDisabledError",
+    "AvatarTooLargeError",
+    "AvatarTypeUnsupportedError",
     "UnauthorizedError",
     "TokenInvalidError",
     "TokenExpiredError",

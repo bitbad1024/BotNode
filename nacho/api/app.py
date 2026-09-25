@@ -44,10 +44,11 @@ from nacho.core.logger import BaseLogger
 from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
-from .api import auth_router, log_router, onebot_router, workflow_router
+from .api import auth_router, log_router, onebot_router, profile_router, workflow_router
 from .api.onebot.protocols import OneBotLike
 from .api.workflow.protocols import WorkflowStoreLike
 from .services.auth import AuthService
+from .services.profile import AvatarStore, FileAvatarStore, ProfileService
 from .services.session import SessionService, SqlSessionStore
 from .services.session.protocols import SessionStore
 from .services.user.protocols import PasswordHasher, UserStore
@@ -65,6 +66,7 @@ def create_app(
     session_store: SessionStore | None = None,
     onebot: OneBotLike | None = None,
     workflow_store: WorkflowStoreLike | None = None,
+    avatar_store: AvatarStore | None = None,
     title: str = "nacho",
     version: str = __version__,
     logger: BaseLogger | None = None,
@@ -86,6 +88,10 @@ def create_app(
     :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``，只认 ``OneBotLike`` 协议）；
         传了 ``<prefix>/onebot/*`` 那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，
         没传时这些接口回 503；
+    :param avatar_store: 头像存储（只认
+        :class:`~nacho.api.services.profile.protocols.AvatarStore` 协议）；默认是落本地目录的
+        :class:`~nacho.api.services.profile.FileAvatarStore`，目录取选项里的 ``avatar_dir``
+        （对应 ``[api] avatar_dir``）——要换成对象存储 / 存库，传一份自己的实现就行；
     :param title / version: OpenAPI 文档上的标题与版本；
     :param logger: 业务日志实例（也是 ``<prefix>/logs`` 检索用的那个），默认 ``api`` 那个。
     """
@@ -131,6 +137,18 @@ def create_app(
 
         workflows_store = SqlWorkflowStore(backing)
 
+    # 头像存储：默认落 ``[api] avatar_dir`` 那个目录（第一次写入时才建目录，见 FileAvatarStore）。
+    # 换成对象存储 / 落库，就传一份满足 AvatarStore 协议的实现进来，上面一行都不用改。
+    avatars_store: AvatarStore = (
+        avatar_store if avatar_store is not None else FileAvatarStore(chosen.avatar_dir)
+    )
+    profile_service = ProfileService(
+        store,
+        avatars_store,
+        max_avatar_bytes=chosen.avatar_max_bytes,
+        logger=log,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         """启动 / 停机各记一条；落库存储在这里建表 + 空表种演示账号。"""
@@ -169,6 +187,7 @@ def create_app(
     app.add_middleware(RequestLogMiddleware, options=chosen, logger=None)
     register_exception_handlers(app, logger=log)
     app.include_router(auth_router, prefix=chosen.prefix)
+    app.include_router(profile_router, prefix=chosen.prefix)
     app.include_router(onebot_router, prefix=chosen.prefix)
     app.include_router(log_router, prefix=chosen.prefix)
     app.include_router(workflow_router, prefix=chosen.prefix)
@@ -190,4 +209,6 @@ def create_app(
     app.state.onebot_server = onebot
     # 工作流存储（定义 + 版本双表）：<prefix>/workflows/* 用
     app.state.workflow_store = workflows_store
+    # 个人设置（改昵称 + 头像）：<prefix>/profile/* 用
+    app.state.profile_service = profile_service
     return app

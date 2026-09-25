@@ -54,6 +54,14 @@ class UserStore(Protocol):
         """
         ...
 
+    async def set_nickname(self, user_id: str, nickname: str) -> UserRecord | None:
+        """改昵称（个人设置那一笔），返回改完的记录；用户不存在返回 ``None``。
+
+        只动 ``nickname`` 一列：密码将来走「改密码」、角色与停用走管理入口，别从「改资料」
+        这儿顺手改掉别的东西。
+        """
+        ...
+
 
 @runtime_checkable
 class PasswordHasher(Protocol):

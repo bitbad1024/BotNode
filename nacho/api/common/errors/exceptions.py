@@ -110,6 +110,43 @@ class AccountAlreadyExistsError(ApiError):
         )
 
 
+def _size_text(size: int) -> str:
+    """把字节数写成给人看的量级（1 KB = 1024 字节，够用就行）。"""
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{max(1, size // 1024)} KB"
+
+
+class AvatarTooLargeError(ApiError):
+    """上传的头像超过大小上限（413）。
+
+    为什么是 413 而不是 422：请求体已经收完了才发现超限（服务端没有边收边断的机制），
+    这就是「实体太大」的标准语义；客户端据此提示「换张小图」。
+    """
+
+    def __init__(self, *, limit: int, message: str = "") -> None:
+        super().__init__(
+            ErrorCode.AVATAR_TOO_LARGE,
+            message or f"头像不能超过 {_size_text(limit)}",
+            status_code=HttpStatus.REQUEST_ENTITY_TOO_LARGE,
+        )
+
+
+class AvatarTypeUnsupportedError(ApiError):
+    """上传的不是认得的图片（415）。
+
+    类型按**文件头**认，客户端报的 ``Content-Type`` 不作数（报成 ``image/png`` 的 HTML
+    一样会被这里挡掉）—— 详见 :mod:`nacho.api.services.profile.images`。
+    """
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(
+            ErrorCode.AVATAR_TYPE_UNSUPPORTED,
+            message or "头像只收 PNG / JPEG / WebP / GIF 图片",
+            status_code=HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+        )
+
+
 class UnauthorizedError(ApiError):
     """没带令牌 / 令牌用不了（401）。"""
 

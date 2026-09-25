@@ -155,6 +155,20 @@ class SqlUserStore:
                 raise AccountAlreadyExistsError() from exc
         return _to_record(row)
 
+    # ------------------------------------------------------------------ 改资料
+    async def set_nickname(self, user_id: str, nickname: str) -> UserRecord | None:
+        """改昵称（个人设置那一笔），返回改完的记录；用户不存在返回 ``None``。
+
+        只改 ``nickname`` 一列：密码将来走「改密码」、角色与停用走管理入口。
+        """
+        async with self._sessions() as session:
+            row = await session.get(UserTable, user_id)
+            if row is None:
+                return None
+            row.nickname = nickname
+            await session.commit()
+            return _to_record(row)
+
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:
         """按账号取用户；没有就返回 ``None``。"""

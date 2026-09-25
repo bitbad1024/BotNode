@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import cast
 
 #: 默认路由前缀：登录接口最终挂在 ``/api/auth/login``
@@ -19,6 +20,12 @@ DEFAULT_PREFIX: str = "/api"
 DEFAULT_TOKEN_TTL: float = 7200.0
 #: 长期令牌（「记住设备」才有）默认有效期（秒）：30 天。
 DEFAULT_REMEMBER_TTL: float = 2_592_000.0
+#: 头像默认存放目录（相对当前工作目录；配置文件里可改成别的，见 ``[api] avatar_dir``）。
+#: 只影响默认的本地目录存储（:class:`~nacho.api.services.profile.FileAvatarStore`）。
+DEFAULT_AVATAR_DIR: str = "data/avatars"
+#: 头像默认大小上限（字节）：2 MiB。常见的 512×512 头像（带照片的 PNG）也就几百 KB，
+#: 上限存在的意义是别让人把整个相册塞进来；``[api] avatar_max_bytes`` 可改。
+DEFAULT_AVATAR_MAX_BYTES: int = 2 * 1024 * 1024
 
 
 def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, object]:
@@ -45,6 +52,10 @@ class ApiOptions:
     #: 是否信任代理头 ``X-Forwarded-For`` 里的客户端 ip。
     #: 默认 ``False``：直接把 XFF 当真实 ip 是能被伪造的，只有确实挂在可信代理后面才打开。
     trust_proxy: bool = False
+    #: 头像存放目录（默认实现往这儿落文件；换存储实现时它就没用了 —— 由那个实现自己交代）
+    avatar_dir: Path = Path(DEFAULT_AVATAR_DIR)
+    #: 头像字节上限（超了回 413）；``<= 0`` 表示不限（不建议，见 ``[api] avatar_max_bytes``）
+    avatar_max_bytes: int = DEFAULT_AVATAR_MAX_BYTES
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> ApiOptions:
@@ -60,4 +71,9 @@ class ApiOptions:
             remember_ttl=cast(float, picked.get("remember_ttl", DEFAULT_REMEMBER_TTL)),
             access_log=cast(bool, picked.get("access_log", True)),
             trust_proxy=cast(bool, picked.get("trust_proxy", False)),
+            # 配置系统给的是路径（``Path``）或字符串，两种都收
+            avatar_dir=Path(cast("str | Path", picked.get("avatar_dir", DEFAULT_AVATAR_DIR))),
+            avatar_max_bytes=cast(
+                int, picked.get("avatar_max_bytes", DEFAULT_AVATAR_MAX_BYTES)
+            ),
         )

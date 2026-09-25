@@ -38,7 +38,7 @@
     #   GET  /api/auth/me      Authorization: Bearer <上一步返回的 token>
 
 接真实环境时把各模块协议的实现传进 :func:`create_app` 即可（``user_store`` / ``hasher`` /
-``tokens``），路由与这里一行都不用改。
+``session_store`` / ``onebot`` / ``workflow_store`` / ``avatar_store``），路由与这里一行都不用改。
 
 依赖 ``fastapi``（``pip install "nacho[api]"``）；请求日志走 ``nacho.core.logger``，
 不额外引日志库。
@@ -50,6 +50,8 @@ from .common.errors import (
     AccountAlreadyExistsError,
     AccountDisabledError,
     ApiError,
+    AvatarTooLargeError,
+    AvatarTypeUnsupportedError,
     ErrorCode,
     HttpStatus,
     InternalError,
@@ -71,7 +73,7 @@ from .logging import (
     attach_api_logging,
     keep_access_off_audit,
 )
-from .api import auth_router, log_router, onebot_router
+from .api import auth_router, log_router, onebot_router, profile_router
 from .api.auth.dependencies import SESSION_COOKIE
 from .api.auth.requests import LoginRequest, RegisterRequest
 from .api.auth.responses import (
@@ -91,6 +93,14 @@ from .api.onebot import (
     TokenData,
 )
 from .services.auth import AuthService, Credentials, CurrentUser, LoginResult
+from .services.profile import (
+    DEFAULT_AVATAR_MAX_BYTES,
+    AvatarInfo,
+    AvatarStore,
+    FileAvatarStore,
+    ProfileService,
+    ProfileView,
+)
 from .services.session import (
     ClientInfo,
     SessionRecord,
@@ -117,7 +127,8 @@ from .services.user import (
     UserStore,
     profile_of,
 )
-from .options import DEFAULT_PREFIX, DEFAULT_TOKEN_TTL, ApiOptions
+from .api.profile import ProfileData, UpdateProfileRequest
+from .options import DEFAULT_AVATAR_DIR, DEFAULT_PREFIX, DEFAULT_TOKEN_TTL, ApiOptions
 
 __all__ = [
     # 装配
@@ -151,6 +162,8 @@ __all__ = [
     "InvalidCredentialsError",
     "AccountDisabledError",
     "AccountAlreadyExistsError",
+    "AvatarTooLargeError",
+    "AvatarTypeUnsupportedError",
     "UnauthorizedError",
     "TokenInvalidError",
     "TokenExpiredError",
@@ -192,6 +205,17 @@ __all__ = [
     "SqlSessionStore",
     "TokenHashCollisionError",
     "describe_client",
+    # 个人设置模块
+    "ProfileService",
+    "ProfileView",
+    "AvatarInfo",
+    "AvatarStore",
+    "FileAvatarStore",
+    "DEFAULT_AVATAR_MAX_BYTES",
+    "DEFAULT_AVATAR_DIR",
+    "UpdateProfileRequest",
+    "ProfileData",
+    "profile_router",
     # 日志接入点
     "api_logger",
     "attach_api_logging",

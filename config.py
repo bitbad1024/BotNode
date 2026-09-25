@@ -366,6 +366,10 @@ class ApiSettings(_Region):
     决定要不要认 ``X-Forwarded-For`` 里的客户端 ip（没挂在可信代理后面就别开——
     那个头客户端自己就能伪造）。
 
+    头像那两项只影响个人设置的默认存储：``avatar_dir`` 是**存放目录**（默认实现的本地
+    目录，相对路径按项目根目录解析；换成对象存储 / 落库时它就没用了），``avatar_max_bytes``
+    是单个头像的字节上限（超了回 413）。
+
     ``token_ttl`` / ``remember_ttl`` 填 ``0`` 表示**永不过期**。注意 ``token_ttl``
     是**滑动**的：每次带令牌的请求都会把有效期往后延，所以它是"闲置多久算掉线"，
     而不是"登录后最多能用多久"。
@@ -382,6 +386,12 @@ class ApiSettings(_Region):
     )
     access_log: bool = True  # 逐条记访问日志（方法 / 路径 / 状态码 / 耗时）
     trust_proxy: bool = False  # 信任 X-Forwarded-For 里的客户端 ip（要挂在可信代理后面才开）
+    # 头像存放目录（默认实现的本地目录；相对路径按项目根目录解析。换存储实现时它就没用了）
+    avatar_dir: ConfigPath = BASE_DIR / "data" / "avatars"
+    # 头像大小上限（字节）：超了接口层回 413。默认 2 MiB
+    avatar_max_bytes: int = Field(
+        default=2 * 1024 * 1024, ge=1, description="不小于 1 的字节数"
+    )
 
     @field_validator("prefix")
     @classmethod

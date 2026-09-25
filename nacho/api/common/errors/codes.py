@@ -22,6 +22,10 @@ class ErrorCode(StrEnum):
     ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
     #: 注册时这个账号已被占用（账号唯一，同账号只能注册一次）
     ACCOUNT_ALREADY_EXISTS = "ACCOUNT_ALREADY_EXISTS"
+    #: 上传的头像超过大小上限
+    AVATAR_TOO_LARGE = "AVATAR_TOO_LARGE"
+    #: 上传的不是认得的图片类型（按文件头认，SVG 这类 XML 不收）
+    AVATAR_TYPE_UNSUPPORTED = "AVATAR_TYPE_UNSUPPORTED"
     #: 没带令牌 / 令牌用不了
     UNAUTHORIZED = "UNAUTHORIZED"
     #: 令牌被改过 / 不是本服务签的
@@ -43,3 +47,7 @@ class HttpStatus(IntEnum):
 
     #: 422：请求体没过校验（pydantic 校验失败）
     UNPROCESSABLE_ENTITY = 422
+    #: 413：请求体太大（上传的头像超了上限）
+    REQUEST_ENTITY_TOO_LARGE = 413
+    #: 415：内容类型不支持（上传的不是认得的图片）
+    UNSUPPORTED_MEDIA_TYPE = 415
