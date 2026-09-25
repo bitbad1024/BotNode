@@ -170,7 +170,7 @@ async def run(
     # 启动定时任务调度器：开始节点（trigger=time）靠它到点触发
     await scheduler.start()
 
-    # 把所有已发布工作流载入调度器（时间触发的开始节点在此登记 cron）。
+    # 把所有已发布工作流的定时触发登记到调度器：**只登记、不执行图**（到点才跑）。
     # 发布接口只挪指针、不执行图，触发配置随启动统一生效。
     await load_published_workflows(workflows, scheduler)
 

@@ -28,7 +28,7 @@ nacho/workflow/
 │   └── declared.py      占位：gateway/approval/expression/condition/task（规则已登记，执行器未实现）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点（校验器与运行器共用同一份）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行（SimpleWorkflowRunner）
-└── runtime.py       运行时：加载已发布版本的图并执行（时间触发的 start 到点后走它）
+└── runtime.py       运行时：启动只**登记**定时触发（不执行图）；到点后加载该版本跑整条流程
 ```
 
 **依赖方向（单向、无环）**：
@@ -313,4 +313,4 @@ async def test_my_node_outputs(...) -> None:
 | 新的 HTTP 接口 | `nacho/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 分支 / 重试） | `executor.py`（现在的 `SimpleWorkflowRunner` 是串行版；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
-| 发布 / 触发链路 | `runtime.py`（`make_trigger` / `run_published_workflow`） |
+| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` **只登记**；到点 `make_trigger` → `run_published_workflow` 跑整条流程） |

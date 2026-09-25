@@ -1311,7 +1311,7 @@ async def test_api_draft_stage_then_commit_then_publish() -> None:
 
 
 async def test_load_published_workflows_registers_crons() -> None:
-    """启动载入：只跑已发布工作流，时间触发 start 登记到调度器；草稿 / 未发布不载入。"""
+    """启动载入：已发布的定时流把 start 登记到调度器；草稿 / 未发布不登记。"""
     from nacho.core.scheduler import TaskManager
     from nacho.workflow.runtime import load_published_workflows
 
@@ -1344,6 +1344,52 @@ async def test_load_published_workflows_registers_crons() -> None:
         loaded = await load_published_workflows(store, scheduler)
         assert loaded == 1
         assert scheduler.get("wf-s") is not None
+    finally:
+        await engine.dispose()
+
+
+async def test_load_published_workflows_registers_without_running_the_graph() -> None:
+    """启动载入**只登记、不执行图**：下游节点一个都不许跑。
+
+    回归：以前靠「跑一遍整张图」让开始节点顺带登记 cron，于是每次开机都把整条流程真的
+    执行了一次（没到点也跑）。现在登记只调开始节点自己。
+    """
+
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    ran: list[str] = []
+
+    @register_node("probe")
+    async def exec_probe(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [
+            node("s", "start", trigger="time", cron="*/5 * * * *"),
+            node("p", "probe"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "p"), edge("p", "e")],
+    }
+    definition = await store.create("u-admin", "带下游的定时流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+    assert await store.publish(definition.id, 1) is not None
+
+    scheduler = TaskManager()
+    try:
+        assert await load_published_workflows(store, scheduler) == 1
+        assert scheduler.get("wf-s") is not None  # 定时开始节点登记上了
+        assert ran == []  # 而下游（probe）一次都没跑
     finally:
         await engine.dispose()
 

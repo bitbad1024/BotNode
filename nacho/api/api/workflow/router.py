@@ -20,8 +20,9 @@
 ``{valid:false, stage, errors}``，前端按节点画红点；后者（字段缺 / 类型错）走全局
 422。提交版本接口在 ``valid=false`` 时**不写任何数据**。
 
-发布接口**只挪发布指针**，不立即执行图；已发布工作流在服务启动时统一载入调度器
-（见 :func:`nacho.workflow.runtime.load_published_workflows`），改了定时配置需重启生效。
+发布接口**只挪发布指针**，不立即执行图；已发布工作流的定时触发在服务启动时统一登记到
+调度器（**只登记、不执行**，到点才跑，见 :func:`nacho.workflow.runtime.load_published_workflows`），
+改了定时配置需重启生效。
 """
 from __future__ import annotations
 
