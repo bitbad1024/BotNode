@@ -34,13 +34,17 @@ from ...common.errors import ApiError, ErrorCode, HttpStatus
 from ...common.models import ApiResponse, ErrorResponse
 from ...options import ApiOptions
 from ...services.auth.models import Credentials, LoginResult
+from ...services.profile.models import ProfileView
+from ...services.profile.service import ProfileService
 from ...services.user.models import UserProfile
+from ..profile.responses import ProfileData
 from .dependencies import (
     SESSION_COOKIE,
     ApiOptionsDep,
     AuthServiceDep,
     ClientDep,
     CurrentUserDep,
+    ProfileServiceDep,
 )
 from .requests import LoginRequest, RegisterRequest
 from .responses import (
@@ -190,7 +194,7 @@ async def login(
 
 @router.get(
     "/me",
-    response_model=ApiResponse[UserProfile],
+    response_model=ApiResponse[ProfileData],
     summary="当前登录用户",
     responses={
         status.HTTP_401_UNAUTHORIZED: {
@@ -199,13 +203,26 @@ async def login(
         }
     },
 )
-async def me(request: Request, user: CurrentUserDep) -> ApiResponse[UserProfile]:
+async def me(
+    request: Request,
+    user: CurrentUserDep,
+    profile_service: ProfileServiceDep,
+    options: ApiOptionsDep,
+) -> ApiResponse[ProfileData]:
     """拿令牌换当前用户资料。
 
     前端启动时也用它**探测登录态**：令牌在 HttpOnly Cookie 里，JS 读不到，只能问服务端。
     响应头会带上 ``X-Session-Expires-In``（这次滑动续期后的剩余秒数），倒计时照着它走。
+    返回的 ``ProfileData`` 带头像信息（``has_avatar`` / ``avatar_url`` 等），顶栏头像靠它。
     """
-    return ApiResponse[UserProfile](data=user.user, trace_id=trace_id_of(request))
+    view = await profile_service.get(user.user.id)
+    data = ProfileData.from_view(view, prefix=options.prefix) if view else None
+    # 用户存在但 ProfileView 为空（异常防御）：退化成不含头像的基础资料
+    if data is None:
+        data = ProfileData.from_view(
+            ProfileView(profile=user.user, avatar=None), prefix=options.prefix
+        )
+    return ApiResponse[ProfileData](data=data, trace_id=trace_id_of(request))
 
 
 @router.get(
