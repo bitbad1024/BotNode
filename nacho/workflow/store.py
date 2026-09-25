@@ -35,7 +35,7 @@ import time
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import Column, Connection, Text, UniqueConstraint, desc, inspect, text
+from sqlalchemy import Column, Connection, Text, UniqueConstraint, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.sql import func
