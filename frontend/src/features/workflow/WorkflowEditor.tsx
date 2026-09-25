@@ -24,6 +24,7 @@ import {
   publishWorkflow,
   saveDraft,
   saveVersion,
+  setWorkflowEnabled,
   validateGraph,
   type NodeFieldSpec,
   type NodePortSpec,
@@ -313,6 +314,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [definition, setDefinition] = useState<WorkflowData | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  /** 拨运行开关的那一下（独立于保存，别互相挡着） */
+  const [switching, setSwitching] = useState(false)
   const [drafting, setDrafting] = useState(false)
   const [validating, setValidating] = useState(false)
   const [showPalette, setShowPalette] = useState(true)
@@ -784,6 +787,29 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
   }, [workflowId, graph, pushToast])
 
+  /**
+   * 拨**运行开关**：发布 ≠ 运行 —— 拨开才真的按已发布版本跑（默认关）。
+   *
+   * 还没发布过就点它是没意义的（后端也会 409），所以按钮在那种情况下是禁用的。
+   */
+  const onToggleEnabled = useCallback(async () => {
+    if (!definition) return
+    const next = !definition.enabled
+    setSwitching(true)
+    try {
+      const { data } = await setWorkflowEnabled(definition.id, next)
+      setDefinition(data)
+      pushToast(
+        'success',
+        next ? `已开启：按已发布版本 v${data.published_version} 跑` : '已停止：不再定时触发',
+      )
+    } catch (err) {
+      pushToast('error', err instanceof ApiRequestError ? err.message : '开关切换失败')
+    } finally {
+      setSwitching(false)
+    }
+  }, [definition, pushToast])
+
   const onPublish = useCallback(async () => {
     if (!workflowId) return
     try {
@@ -882,6 +908,18 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           </button>
           <button className="btn" onClick={() => void onPublish()}>
             发布
+          </button>
+          <button
+            className={`btn ${definition?.enabled ? styles.primary : ''}`}
+            disabled={switching || !definition || definition.published_version === 0}
+            title={
+              definition?.enabled
+                ? '点一下停止：不再定时触发（发布状态不变）'
+                : '点一下开启：按已发布版本跑'
+            }
+            onClick={() => void onToggleEnabled()}
+          >
+            {switching ? '切换中…' : definition?.enabled ? '运行中' : '已停止'}
           </button>
           <button
             className={`btn ${showPalette ? '' : styles.toggleOff}`}
