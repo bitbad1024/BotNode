@@ -183,6 +183,9 @@ class WorkflowDefinitionRecord(BaseModel):
     current_version: int = 0
     #: 已发布的版本号；从没发布过就是 0
     published_version: int = 0
+    #: **运行开关**：发布 ≠ 运行 —— 发布只挪指针，这里为 ``True`` 才会被调度器跑起来。
+    #: 默认 ``False``（发布完是「已发布但不跑」，由接口层开关拨开）。
+    enabled: bool = False
     #: 暂存区图原文（规范 JSON 字符串）；从没暂存过是空串
     draft_graph_json: str = ""
     #: 暂存区最近保存时间（Unix 秒；0 = 没暂存过）

@@ -27,7 +27,8 @@ nacho/workflow/
 │   └── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点（校验器与运行器共用同一份）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行（SimpleWorkflowRunner）
-└── runtime.py       运行时：启动只**登记**定时触发（不执行图）；到点后加载该版本跑整条流程
+└── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
+                     到点后加载该版本跑整条流程；拨开关即时启停（WorkflowTriggers）
 ```
 
 **依赖方向（单向、无环）**：
@@ -78,10 +79,15 @@ store ──────────────► models
 
 | 名字 | 作用 |
 |---|---|
-| `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针），`UNIQUE(owner_id, name)` |
+| `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针 + **运行开关** `enabled`），`UNIQUE(owner_id, name)` |
 | `WorkflowVersionTable` | `workflow_versions`：每次保存一张**不可变**图快照，`UNIQUE(workflow_id, version)` |
 | `SqlWorkflowStore` | 读写实现：查询走 `AsyncSession`（不手写 SQL；`ensure_schema` 里那一句 `ALTER TABLE` 是给老库补列的迁移，属例外）；按 `owner_id` 隔离 |
 | `WorkflowError` / `WorkflowNameConflict` | 存储层错误（消息直接给人看） |
+
+> **发布 ≠ 运行**：发布只挪发布指针（`status=published` + `published_version`），**不执行图**；
+> 要不要真的跑由 `enabled`（运行开关，默认 `False`）说了算 —— 它是**库里的字段**，重启 / 多进程
+> 认的是同一份。老库升级时这一列按 `0` 补（见 `_DEFINITION_ADDED_COLUMNS`），不会因为多了个
+> 开关就突然开始跑。开关怎么拨（接口 / 隔离 / 即时启停）见 `nacho/api/api/workflow/`。
 
 引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），本模块不建引擎、不读配置。
 
@@ -324,4 +330,4 @@ async def test_my_node_outputs(...) -> None:
 | 新的 HTTP 接口 | `nacho/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 分支 / 重试） | `executor.py`（现在的 `SimpleWorkflowRunner` 是串行版；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
-| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` **只登记**；到点 `make_trigger` → `run_published_workflow` 跑整条流程） |
+| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程） |

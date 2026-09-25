@@ -13,6 +13,8 @@
     GET    <prefix>/workflows/{id}/versions        版本历史
     GET    <prefix>/workflows/{id}/versions/{ver}  某个版本快照
     POST   <prefix>/workflows/{id}/publish         发布版本（不传 version = 发布最新版）
+    GET    <prefix>/workflows/{id}/published       已发布的那一份（开关 + 版本 + 图）
+    PUT    <prefix>/workflows/{id}/enabled         拨运行开关（发布 ≠ 运行，默认不跑）
 
 全部需要登录。多用户隔离：归属 ``owner_id`` 就是创建者的用户 id；普通用户只在自己
 名下操作，管理员不限，具体把关见 :mod:`.dependencies`。
@@ -21,9 +23,12 @@
 ``{valid:false, stage, errors}``，前端按节点画红点；后者（字段缺 / 类型错）走全局
 422。提交版本接口在 ``valid=false`` 时**不写任何数据**。
 
-发布接口**只挪发布指针**，不立即执行图；已发布工作流的定时触发在服务启动时统一登记到
-调度器（**只登记、不执行**，到点才跑，见 :func:`nacho.workflow.runtime.load_published_workflows`），
-改了定时配置需重启生效。
+**发布 ≠ 运行**：发布接口只挪发布指针（``status=published`` + ``published_version``）、
+不执行图；跑不跑由定义上的**运行开关**（``enabled``，默认关）说了算 —— 看它用
+``GET .../published``，拨它用 ``PUT .../enabled``。拨开关时若装配了运行时触发器（主程序
+会传，见 :class:`nacho.workflow.runtime.WorkflowTriggers`）就**即时启停**，没装配的场合
+开关只落库、等下次启动载入（见 :func:`nacho.workflow.runtime.load_published_workflows`）；
+改了 cron 这类触发配置又不动开关的，重启生效。
 """
 from __future__ import annotations
 
@@ -47,6 +52,7 @@ from nacho.workflow import (
 from .dependencies import (
     CurrentUserDep,
     WorkflowStoreDep,
+    WorkflowTriggersDep,
     get_in_scope,
     owner_filter_of,
 )
@@ -56,10 +62,12 @@ from .requests import (
     RenameWorkflowRequest,
     SaveDraftRequest,
     SaveVersionRequest,
+    SetEnabledRequest,
     ValidateRequest,
 )
 from .responses import (
     NodeCatalogData,
+    PublishedWorkflowData,
     SaveVersionResultData,
     ValidationReportData,
     WorkflowData,
@@ -201,9 +209,16 @@ async def delete_workflow(
     request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
+    triggers: WorkflowTriggersDep,
 ) -> Response:
-    """删除定义及其全部版本。"""
+    """删除定义及其全部版本；**顺手把定时触发摘掉**（库删了任务还在，到点会空跑一趟）。
+
+    顺序是先摘后删：任务名要照这一版的图算出来（见 ``stop_published_workflow``），图都没了
+    就算不出来。没装配触发器时跳过（那种场合本来就没即时登记，重启自然消失）。
+    """
     record = await get_in_scope(store, user, workflow_id)
+    if triggers is not None and record.published_version > 0:
+        await triggers.stop(record.id, record.published_version)
     removed = await store.delete(record.id)
     if not removed:
         raise ApiError(
@@ -387,12 +402,16 @@ async def publish_workflow(
     request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
+    triggers: WorkflowTriggersDep,
 ) -> ApiResponse[WorkflowData]:
     """发布版本：不传 ``version`` 就发布当前最新版本；没存过任何版本 -> 409。
 
-    发布**只挪发布指针**（status=published + published_version），不在请求里执行图——
-    时间触发的注册在服务启动时统一做（载入所有已发布工作流），避免发布动作本身产生
-    一次副作用执行；改了 cron 等触发配置后重启服务即生效。
+    **发布 ≠ 运行**：发布只挪发布指针（status=published + published_version）+ 记一条审计，
+    **不执行图**；要不要真的跑由运行开关（``enabled``）决定，默认关着 —— 拨开见
+    ``PUT /{id}/enabled``。
+
+    开关已经开着的（发布新版本前就在跑）会**即时改按新版本重新登记**一遍，免得线上还跑着
+    上一版的触发配置；关着的到此为止。改了 cron 之类触发配置又不想动开关的，重启即生效。
     """
     record = await get_in_scope(store, user, workflow_id)
     target_version = payload.version if payload.version is not None else record.current_version
@@ -402,6 +421,7 @@ async def publish_workflow(
             "还没有可发布的版本，请先提交图",
             status_code=status.HTTP_409_CONFLICT,
         )
+    previous_version = record.published_version
     published = await store.publish(record.id, target_version)
     if published is None:
         raise ApiError(
@@ -409,11 +429,99 @@ async def publish_workflow(
             f"没有版本 {target_version}",
             status_code=status.HTTP_404_NOT_FOUND,
         )
+    if triggers is not None:
+        # 先摘旧版的任务，再按新版登记：新版要是改了开始节点（改名 / 删掉一个），光靠登记时
+        # 「同名覆盖」盖不住旧任务 —— 任务名里带节点 id，名字变了就是另一个任务
+        if record.enabled and previous_version > 0:
+            await triggers.stop(record.id, previous_version)
+        # 本来就开着开关：按**新版本**重新登记（登记幂等，重复调用不会叠加）
+        if published.enabled:
+            await triggers.start(published.id, published.published_version)
     _audit(
         "工作流版本已发布",
         owner_id=record.owner_id,
         workflow_id=record.id,
         version=target_version,
+        enabled=published.enabled,
         trace_id=trace_id_of(request),
     )
     return ApiResponse(data=WorkflowData.from_record(published), trace_id=trace_id_of(request))
+
+
+@router.put("/{workflow_id}/enabled")
+async def set_workflow_enabled(
+    workflow_id: str,
+    payload: SetEnabledRequest,
+    request: Request,
+    store: WorkflowStoreDep,
+    user: CurrentUserDep,
+    triggers: WorkflowTriggersDep,
+) -> ApiResponse[WorkflowData]:
+    """拨**运行开关**：``true`` 开始跑，``false`` 停下来（发布 ≠ 运行，默认不跑）。
+
+    装配了运行时触发器时**即时生效**（主程序会传）：拨开就登记已发布版本的时间触发，
+    关掉就把它摘下来；没装配的场合（直接 ``create_app`` 的测试 / 示例）开关照样落库，
+    效果等下次启动载入。
+
+    还没发布过（``published_version = 0``）时拨开是 **409**（没东西可跑，先发布一版）；
+    关掉随时可以。越界（不存在 / 是别人的）与别的接口一样走同一个 **404**。
+    """
+    record = await get_in_scope(store, user, workflow_id)
+    if payload.enabled and record.published_version <= 0:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR,
+            "还没发布过版本，先发布再打开开关",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    # 拨到关：**先摘任务再落库** —— 停机只看图（当前已发布版本），不依赖还没写进库的新状态；
+    # 反过来先落库的话，中间一出错就会留下「库里已关、任务还在跑」
+    if triggers is not None and not payload.enabled:
+        await triggers.stop(record.id, record.published_version)
+    updated = await store.set_enabled(record.id, payload.enabled)
+    if updated is None:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没有这个工作流", status_code=status.HTTP_404_NOT_FOUND
+        )
+    if triggers is not None and payload.enabled:
+        # 拨开：按已发布版本登记（登记幂等，重复拨不会叠加）
+        await triggers.start(updated.id, updated.published_version)
+    _audit(
+        "工作流运行开关已切换",
+        owner_id=record.owner_id,
+        workflow_id=record.id,
+        enabled=updated.enabled,
+        version=updated.published_version,
+        trace_id=trace_id_of(request),
+    )
+    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id_of(request))
+
+
+@router.get("/{workflow_id}/published")
+async def get_published_workflow(
+    workflow_id: str,
+    store: WorkflowStoreDep,
+    user: CurrentUserDep,
+) -> ApiResponse[PublishedWorkflowData]:
+    """看**已发布的那一份**：开关状态 + 已发布版本 + 它的图（前端「运行 / 停止」面板用）。
+
+    没发布过（``published_version = 0``）→ 404；个人隔离同其它接口（不是自己的也走同一个 404）。
+    """
+    record = await get_in_scope(store, user, workflow_id)
+    if record.published_version <= 0:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "还没发布过版本", status_code=status.HTTP_404_NOT_FOUND
+        )
+    snapshot = await store.get_version(record.id, record.published_version)
+    if snapshot is None:
+        # 指针有、快照没了：数据被人手工动过，说清楚比 500 好
+        raise ApiError(
+            ErrorCode.HTTP_ERROR,
+            f"已发布的版本 {record.published_version} 不在了",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return ApiResponse(
+        data=PublishedWorkflowData(
+            workflow=WorkflowData.from_record(record),
+            version=WorkflowVersionData.from_record(snapshot),
+        )
+    )

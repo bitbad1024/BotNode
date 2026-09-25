@@ -9,6 +9,7 @@
         status             VARCHAR(16)  DEFAULT 'draft'  draft / published
         current_version    INTEGER      DEFAULT 0        最近提交的版本号
         published_version  INTEGER      DEFAULT 0        已发布版本号（0 = 没发布过）
+        enabled            BOOLEAN      DEFAULT 0        运行开关（发布 ≠ 运行，默认不跑）
         draft_graph_json   TEXT         DEFAULT ''       暂存区图（编辑中，未提交）
         draft_updated_at   FLOAT        DEFAULT 0        暂存区最近保存时间
         current_ref        VARCHAR(16)  DEFAULT 'draft'  当前指针 draft / version
@@ -77,6 +78,8 @@ class WorkflowDefinitionTable(SQLModel, table=True):
     status: str = Field(default="draft", max_length=16)
     current_version: int = Field(default=0)
     published_version: int = Field(default=0)
+    #: 运行开关：发布只挪指针，这里为 True 才会被调度器跑起来（默认关）
+    enabled: bool = Field(default=False)
     #: 暂存区图原文（空串 = 没暂存过）；新老库都按可空 / 缺省 '' 建
     draft_graph_json: str = Field(
         default="", sa_column=Column(Text(), nullable=False, server_default="")
@@ -113,6 +116,7 @@ def _definition_to_record(row: WorkflowDefinitionTable) -> WorkflowDefinitionRec
         status=row.status,
         current_version=int(row.current_version),
         published_version=int(row.published_version),
+        enabled=bool(row.enabled),
         draft_graph_json=row.draft_graph_json or "",
         draft_updated_at=float(row.draft_updated_at or 0.0),
         current_ref=row.current_ref or "draft",
@@ -157,6 +161,9 @@ class SqlWorkflowStore:
         "draft_graph_json": "TEXT NOT NULL DEFAULT ''",
         "draft_updated_at": "FLOAT DEFAULT 0",
         "current_ref": "VARCHAR(16) DEFAULT 'draft'",
+        # 运行开关（2026-09 之后加的）：老库补列时一并按「不跑」填 0 —— 升级上来不会
+        # 因为多了个开关就突然开始跑，符合「发布 ≠ 运行」这条新口径
+        "enabled": "BOOLEAN NOT NULL DEFAULT 0",
     }
 
     def _migrate_definition_columns(self, conn: object) -> None:
@@ -237,6 +244,24 @@ class SqlWorkflowStore:
                 current = await session.get(WorkflowDefinitionTable, workflow_id)
                 owner = current.owner_id if current is not None else ""
             raise WorkflowNameConflict(owner, name) from exc
+
+    async def set_enabled(
+        self, workflow_id: str, enabled: bool
+    ) -> WorkflowDefinitionRecord | None:
+        """拨**运行开关**（发布 ≠ 运行）；不存在返回 ``None``。
+
+        与 ``status`` 各管各的：开关只决定「这个已发布的图要不要被跑起来」，
+        关掉它不回退发布指针，也不改 ``status`` —— 想下线是「停止」，不是「撤回发布」。
+        """
+        async with self._sessions() as session:
+            row = await session.get(WorkflowDefinitionTable, workflow_id)
+            if row is None:
+                return None
+            row.enabled = enabled
+            row.updated_at = time.time()
+            session.add(row)
+            await session.commit()
+            return _definition_to_record(row)
 
     async def save_draft(
         self, workflow_id: str, graph_json: str

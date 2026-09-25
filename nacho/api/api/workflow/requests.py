@@ -49,3 +49,12 @@ class PublishRequest(_Mutable):
     """发布指定版本；不传 version 就发布当前最新版本。"""
 
     version: int | None = Field(default=None, ge=1)
+
+
+class SetEnabledRequest(_Mutable):
+    """拨运行开关：``true`` = 跑起来，``false`` = 停下来。
+
+    **发布 ≠ 运行**：发布只挪发布指针，什么时候真的跑由这个开关说了算，默认不跑。
+    """
+
+    enabled: bool = Field(description="true = 跑起来（登记定时触发）；false = 停下来")

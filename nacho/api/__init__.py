@@ -38,7 +38,8 @@
     #   GET  /api/auth/me      Authorization: Bearer <上一步返回的 token>
 
 接真实环境时把各模块协议的实现传进 :func:`create_app` 即可（``user_store`` / ``hasher`` /
-``session_store`` / ``onebot`` / ``workflow_store`` / ``avatar_store``），路由与这里一行都不用改。
+``session_store`` / ``onebot`` / ``workflow_store`` / ``workflow_triggers`` / ``avatar_store``），
+路由与这里一行都不用改。
 
 依赖 ``fastapi``（``pip install "nacho[api]"``）；请求日志走 ``nacho.core.logger``，
 不额外引日志库。

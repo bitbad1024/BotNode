@@ -46,7 +46,7 @@ from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
 from .api import auth_router, log_router, onebot_router, profile_router, workflow_router
 from .api.onebot.protocols import OneBotLike
-from .api.workflow.protocols import WorkflowStoreLike
+from .api.workflow.protocols import WorkflowStoreLike, WorkflowTriggerLike
 from .services.auth import AuthService
 from .services.profile import AvatarStore, FileAvatarStore, ProfileService
 from .services.session import SessionService, SqlSessionStore
@@ -66,6 +66,7 @@ def create_app(
     session_store: SessionStore | None = None,
     onebot: OneBotLike | None = None,
     workflow_store: WorkflowStoreLike | None = None,
+    workflow_triggers: WorkflowTriggerLike | None = None,
     avatar_store: AvatarStore | None = None,
     title: str = "nacho",
     version: str = __version__,
@@ -88,6 +89,9 @@ def create_app(
     :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``，只认 ``OneBotLike`` 协议）；
         传了 ``<prefix>/onebot/*`` 那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，
         没传时这些接口回 503；
+    :param workflow_triggers: 工作流的运行时触发器（只认
+        :class:`~nacho.api.api.workflow.protocols.WorkflowTriggerLike`）；传了以后拨运行开关
+        **即时启停**，没传时开关只落库、效果等下次启动载入（主程序会传，见 ``nacho.bootstrap``）；
     :param avatar_store: 头像存储（只认
         :class:`~nacho.api.services.profile.protocols.AvatarStore` 协议）；默认是落本地目录的
         :class:`~nacho.api.services.profile.FileAvatarStore`，目录取选项里的 ``avatar_dir``
@@ -209,6 +213,8 @@ def create_app(
     app.state.onebot_server = onebot
     # 工作流存储（定义 + 版本双表）：<prefix>/workflows/* 用
     app.state.workflow_store = workflows_store
+    # 运行时触发器（可空）：拨运行开关时即时启停，没传就只落库
+    app.state.workflow_triggers = workflow_triggers
     # 个人设置（改昵称 + 头像）：<prefix>/profile/* 用
     app.state.profile_service = profile_service
     return app

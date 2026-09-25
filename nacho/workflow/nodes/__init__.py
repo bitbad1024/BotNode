@@ -66,7 +66,12 @@ from .registry import (
     register_node,
     registered_types,
 )
-from .start import START_TRIGGERS, exec_start, validate_start_node
+from .start import (
+    START_TRIGGERS,
+    exec_start,
+    validate_start_node,
+    workflow_task_id,
+)
 from .test import exec_test
 
 __all__ = [
@@ -94,6 +99,7 @@ __all__ = [
     "exec_start",
     "validate_start_node",
     "START_TRIGGERS",
+    "workflow_task_id",
     "exec_end",
     "exec_log",
     "LOG_LEVELS",

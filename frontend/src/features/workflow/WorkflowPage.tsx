@@ -7,6 +7,7 @@ import {
   listWorkflows,
   publishWorkflow,
   renameWorkflow,
+  setWorkflowEnabled,
   type WorkflowData,
 } from './workflowApi'
 import { ApiRequestError } from '../../lib/http'
@@ -115,6 +116,21 @@ export default function WorkflowPage() {
     }
   }
 
+  /** 拨**运行开关**：发布 ≠ 运行 —— 拨开才真的按已发布版本跑（默认关）。 */
+  async function toggleEnabled(w: WorkflowData) {
+    const next = !w.enabled
+    setBusy(true)
+    try {
+      const { data } = await setWorkflowEnabled(w.id, next)
+      pushToast('success', next ? `已开启：${w.name}` : `已停止：${w.name}`)
+      setItems((list) => list.map((item) => (item.id === data.id ? data : item)))
+    } catch (err) {
+      pushToast('error', describe(err))  // 还没发布过就拨开：后端 409
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function publish(id: string) {
     setBusy(true)
     try {
@@ -182,6 +198,7 @@ export default function WorkflowPage() {
           <table className={styles.table}>
             <thead>
               <tr>
+                <th>运行</th>
                 <th>名称</th>
                 <th>状态</th>
                 <th>当前版本</th>
@@ -217,6 +234,31 @@ export default function WorkflowPage() {
                     </td>
                     <td>
                       <span className={`chip ${st.cls}`}>{st.text}</span>
+                    </td>
+                    <td>
+                      <label
+                        className={styles.switch}
+                        title={
+                          w.published_version === 0
+                            ? '先发布一版，才能拨运行开关'
+                            : w.enabled
+                              ? '点一下停止：不再定时触发（发布状态不变）'
+                              : '点一下开启：按已发布版本跑'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={w.enabled}
+                          disabled={busy || w.published_version === 0}
+                          onChange={() => void toggleEnabled(w)}
+                        />
+                        <span className={styles.switchTrack}>
+                          <span className={styles.switchDot} />
+                        </span>
+                        <span className={styles.switchText}>
+                          {w.enabled ? '运行中' : '已停止'}
+                        </span>
+                      </label>
                     </td>
                     <td>v{w.current_version}</td>
                     <td>{w.published_version > 0 ? `v${w.published_version}` : '—'}</td>

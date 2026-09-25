@@ -51,6 +51,9 @@ PortType = Literal["trigger", "message"]
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()
 
+#: 上下文里「没有所属工作流」时的代号：离线跑 / 测试直接构造 ctx 的场合
+NO_WORKFLOW_ID: str = "local"
+
 
 @dataclass(frozen=True)
 class ConfigField:
@@ -149,7 +152,10 @@ class NodeExecutionContext:
 
     :param logger: 业务日志实例（log 节点写这里）；
     :param scheduler: 调度器（时间触发的 start 节点把流程图登记到这里）；
-    :param run: 触发整条流程的回调，cron 到点时调用。
+    :param run: 触发整条流程的回调，cron 到点时调用；
+    :param workflow_id: 这条图属于哪个工作流（时间触发登记任务时要它来保证任务名唯一，
+        见 :func:`nacho.workflow.nodes.start.workflow_task_id`）；离线跑 / 测试直接构造
+        ctx 时是 :data:`NO_WORKFLOW_ID`。
     """
 
     def __init__(
@@ -158,9 +164,11 @@ class NodeExecutionContext:
         logger: BaseLogger | None = None,
         scheduler: TaskManager | None = None,
         run: Callable[[], Awaitable[None]] | None = None,
+        workflow_id: str = NO_WORKFLOW_ID,
     ) -> None:
         self.variables: dict[str, Any] = {}
         self.log: list[str] = []  # 节点产出的文字日志（供测试 / 前端回显）
+        self.workflow_id: str = workflow_id
         self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run

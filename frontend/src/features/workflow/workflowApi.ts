@@ -98,6 +98,8 @@ export interface WorkflowData {
   owner_id: string
   name: string
   status: 'draft' | 'published'
+  /** **运行开关**：发布 ≠ 运行 —— 默认关，拨开才真的按已发布版本跑 */
+  enabled: boolean
   current_version: number
   published_version: number
   /** 暂存区最近保存时间（0 = 没暂存过） */
@@ -129,6 +131,12 @@ export interface SaveVersionResultData {
   workflow: WorkflowData
   version: WorkflowVersionData
   created: boolean
+}
+
+/** 已发布的那一份：定义（含**运行开关**）+ 版本快照（含图）。 */
+export interface PublishedWorkflowData {
+  workflow: WorkflowData
+  version: WorkflowVersionData
 }
 
 // --------------------------------------------------------------------------- 接口
@@ -210,4 +218,17 @@ export function publishWorkflow(id: string, version?: number) {
     `/workflows/${encodeURIComponent(id)}/publish`,
     body,
   )
+}
+
+/** PUT /workflows/{id}/enabled：拨**运行开关**（发布 ≠ 运行：默认不跑，拨开才跑）。 */
+export function setWorkflowEnabled(id: string, enabled: boolean) {
+  return http.put<WorkflowData, { enabled: boolean }>(
+    `/workflows/${encodeURIComponent(id)}/enabled`,
+    { enabled },
+  )
+}
+
+/** GET /workflows/{id}/published：已发布的那一份（开关状态 + 版本 + 图）。 */
+export function getPublishedWorkflow(id: string) {
+  return http.get<PublishedWorkflowData>(`/workflows/${encodeURIComponent(id)}/published`)
 }
