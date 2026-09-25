@@ -293,7 +293,7 @@ def _topology_stage(
             if target in in_degree:
                 in_degree[target] += 1
 
-    # 各类型注册的出入边条数约束（gateway 至少 2 条出边、end 不许有出边……）
+    # 各类型注册的出入边条数约束（分流类节点至少 2 条出边、end 不许有出边……）
     for node in graph.nodes:
         if node.id not in reachable:
             continue
