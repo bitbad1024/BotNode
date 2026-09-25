@@ -1,15 +1,21 @@
 /**
- * 会话状态：令牌 / 用户资料 / 过期时刻，持久化到 localStorage。
+ * 会话状态：令牌 / 用户资料 / 过期时刻 / 设备摘要，持久化到 localStorage。
  * Context + useReducer；键名与格式固定，刷新不丢会话。
+ *
+ * 另外订阅 http 层两个全局事件：
+ * - 会话心跳（响应头 ``X-Session-Expires-In``）→ ``TOUCH`` 拨准剩余有效期：服务端每个
+ *   已登录请求都在滑动续期，这里只是把新算出来的秒数落到本地（0 = 服务端宣告不过期）；
+ * - 任意 401 → 清会话，路由守卫会自动把人踢回登录页。
  */
 import {
   createContext,
   useContext,
+  useEffect,
   useReducer,
   type Dispatch,
   type ReactNode,
 } from 'react'
-import { SESSION_KEY } from '../../lib/http'
+import { SESSION_KEY, SESSION_TICK_EVENT, UNAUTHORIZED_EVENT } from '../../lib/http'
 import type { UserProfile } from './authApi'
 
 interface PersistedSession {
@@ -41,6 +47,7 @@ type AuthAction =
       remembered?: boolean
     }
   | { type: 'SET_USER'; user: UserProfile }
+  | { type: 'TOUCH'; expiresInSeconds: number }
   | { type: 'CLEAR' }
 
 function loadSession(): AuthState {
@@ -96,6 +103,14 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'SET_USER':
       next = { ...state, user: action.user }
       break
+    case 'TOUCH':
+      // 滑动续期：只拨到期时刻，别的字段（用户 / 设备摘要）原样；0 = 不过期
+      next = {
+        ...state,
+        expiresAt:
+          action.expiresInSeconds > 0 ? Date.now() + action.expiresInSeconds * 1000 : 0,
+      }
+      break
     case 'CLEAR':
       next = { token: '', user: null, expiresAt: 0 }
       break
@@ -116,6 +131,23 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, loadSession)
+
+  useEffect(() => {
+    const onTick = (e: Event) => {
+      const secs = (e as CustomEvent<number>).detail
+      if (typeof secs === 'number') {
+        dispatch({ type: 'TOUCH', expiresInSeconds: secs })
+      }
+    }
+    const onUnauthorized = () => dispatch({ type: 'CLEAR' })
+    window.addEventListener(SESSION_TICK_EVENT, onTick)
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => {
+      window.removeEventListener(SESSION_TICK_EVENT, onTick)
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    }
+  }, [])
+
   return (
     <AuthContext.Provider
       value={{ state, dispatch, isAuthenticated: Boolean(state.token) }}
