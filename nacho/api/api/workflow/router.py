@@ -421,6 +421,7 @@ async def publish_workflow(
             "还没有可发布的版本，请先提交图",
             status_code=status.HTTP_409_CONFLICT,
         )
+    previous_version = record.published_version
     published = await store.publish(record.id, target_version)
     if published is None:
         raise ApiError(
@@ -428,9 +429,14 @@ async def publish_workflow(
             f"没有版本 {target_version}",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    if published.enabled and triggers is not None:
-        # 本来就开着开关：让触发器按**新版本**重新登记（登记是幂等的，旧的同名任务会被换掉）
-        await triggers.start(published.id, published.published_version)
+    if triggers is not None:
+        # 先摘旧版的任务，再按新版登记：新版要是改了开始节点（改名 / 删掉一个），光靠登记时
+        # 「同名覆盖」盖不住旧任务 —— 任务名里带节点 id，名字变了就是另一个任务
+        if record.enabled and previous_version > 0:
+            await triggers.stop(record.id, previous_version)
+        # 本来就开着开关：按**新版本**重新登记（登记幂等，重复调用不会叠加）
+        if published.enabled:
+            await triggers.start(published.id, published.published_version)
     _audit(
         "工作流版本已发布",
         owner_id=record.owner_id,
@@ -467,16 +473,18 @@ async def set_workflow_enabled(
             "还没发布过版本，先发布再打开开关",
             status_code=status.HTTP_409_CONFLICT,
         )
+    # 拨到关：**先摘任务再落库** —— 停机只看图（当前已发布版本），不依赖还没写进库的新状态；
+    # 反过来先落库的话，中间一出错就会留下「库里已关、任务还在跑」
+    if triggers is not None and not payload.enabled:
+        await triggers.stop(record.id, record.published_version)
     updated = await store.set_enabled(record.id, payload.enabled)
     if updated is None:
         raise ApiError(
             ErrorCode.HTTP_ERROR, "没有这个工作流", status_code=status.HTTP_404_NOT_FOUND
         )
-    if triggers is not None:
-        if payload.enabled:
-            await triggers.start(updated.id, updated.published_version)
-        else:
-            await triggers.stop(updated.id, updated.published_version)
+    if triggers is not None and payload.enabled:
+        # 拨开：按已发布版本登记（登记幂等，重复拨不会叠加）
+        await triggers.start(updated.id, updated.published_version)
     _audit(
         "工作流运行开关已切换",
         owner_id=record.owner_id,

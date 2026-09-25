@@ -1950,4 +1950,10 @@ async def test_api_publishing_again_while_enabled_re_registers() -> None:
             f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
         )
     assert again.json()["data"]["published_version"] == 2
-    assert triggers.calls == [("start", workflow_id, 1), ("start", workflow_id, 2)]
+    # **先停旧版、再起新版**：任务名里带节点 id，新版要是改了开始节点，光靠登记时同名覆盖
+    # 盖不住旧任务（那会留下一个永远没人摘的定时）
+    assert triggers.calls == [
+        ("start", workflow_id, 1),
+        ("stop", workflow_id, 1),
+        ("start", workflow_id, 2),
+    ]
