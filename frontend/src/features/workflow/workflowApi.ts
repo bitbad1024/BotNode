@@ -2,15 +2,13 @@
 import { http } from '../../lib/http'
 
 // --------------------------------------------------------------------------- 图类型
+//: 与后端注册表一一对应（见 ``nacho/workflow/nodes/__init__.py``）。
+//: 只列**真能跑**的类型：gateway / approval / expression / condition / task 从来没实现过
+//: 执行器，后端已连声明一起删掉，画布不再提供（旧图若还有，加载会显示成未知类型、保存被拒）。
 export type NodeType =
   | 'start'
   | 'end'
-  | 'gateway'
-  | 'approval'
-  | 'expression'
   | 'http'
-  | 'condition'
-  | 'task'
   | 'log'
   | 'test'
   | 'constant'

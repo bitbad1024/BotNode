@@ -172,7 +172,7 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 - 入参：节点本身（`id` / `type` / `config` / `outputs`）+ 运行时上下文；
 - 返回：**本节点产出的变量**（`dict`），运行器把它 `update` 进 `ctx.variables`，下游用
   `{{名字}}` 引用。不产出变量就返回 `{}`（像 `start` / `end` 那样）。
-- 执行是**串行**的（节点之间有数据依赖）；并行 / 分支语义留给将来的 `gateway` 节点。
+- 执行是**串行**的（节点之间有数据依赖）；并行 / 分支语义留给将来新增的分流类节点。
 
 ### 5.3 上下文 `NodeExecutionContext` 能给什么
 
@@ -256,7 +256,8 @@ async def exec_dingtalk(node, ctx): ...
 
 > **但两边得对得上**：画布上摆了后端没登记的类型，图一保存就会被校验挡下
 > （`UNKNOWN_NODE_TYPE`）——以前那批只有声明没有执行器的类型（gateway / approval /
-> expression / condition / task）已经从后端删掉，画布那边也要跟着去掉。
+> expression / condition / task）前后端都已删掉：后端在 `nodes/`，画布在
+> `WorkflowEditor.tsx` 的 `NODE_TYPES` / `PALETTE_ORDER` 与 `workflowApi.ts` 的 `NodeType`。
 
 ### 5.7 带可选依赖的节点（照 `http.py` 抄）
 
