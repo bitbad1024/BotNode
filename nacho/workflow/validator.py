@@ -10,23 +10,27 @@
 挤牙膏），所以阶段内部的检查不互相打断；阶段之间才短路。
 
 校验规则**全部从节点注册表推导**（见 :mod:`nacho.workflow.nodes.registry`）：认不认识
-某个类型、哪些 config 必填、缺省填什么、有什么专属约束，都在节点注册时声明，新增节点
-类型不需要改本文件。
+某个类型、哪些 config 必填、缺省填什么、有哪些端口、哪个入口必须接线，都在节点注册时
+声明，新增节点类型不需要改本文件。
+
+语义阶段最主要的活是**检查连线**：值沿边走，所以「端口名对不对、两端类型配不配、必填
+入口接上没接上」就是图能不能跑通的关键 —— 见 :func:`_port_wiring`。
 
 **孤儿节点允许存在**：校验器只保证「start 沿出边能正常拓扑展开到 end」。从 start
 不可达的节点（没接进主流程的散点、独立小图、哪怕里面有环）一律不产生任何错误，也不
-参与语义检查；运行器同样只跑 start 可达的节点，孤儿永远不影响主流程。
+参与语义检查；运行器同样只跑 start 可达的节点，孤儿永远不影响主流程 —— 但孤儿连出来的
+线**不算数**（那些节点不会执行），所以被孤儿喂着的必填入口照样报「没接上」。
 """
 from __future__ import annotations
 
-import re
 from collections import deque
+from collections.abc import Sequence
 from difflib import get_close_matches
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
-from .graph import out_targets, reachable_from, start_ids
+from .graph import edge_source_port, edge_target_port, out_targets, reachable_from, start_ids
 from .models import (
     STAGE_SEMANTIC,
     STAGE_STRUCTURE,
@@ -34,13 +38,10 @@ from .models import (
     ValidationIssue,
     ValidationReport,
     WorkflowGraph,
-    WorkflowNode,
 )
-from .nodes.base import MISSING_DEFAULT
+from .nodes.base import MISSING_DEFAULT, PortSpec
 from .nodes.registry import get_spec, registered_types
 
-#: 配置字符串里的变量引用：{{ name }}
-_VARIABLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 # --------------------------------------------------------------------------- 表达式引擎位
 @runtime_checkable
@@ -361,13 +362,12 @@ def _semantic_stage(
     reachable: set[str],
     checker: ExpressionSyntaxChecker,
 ) -> list[ValidationIssue]:
-    """语义阶段（只看主流程可达节点）：注册字段必填 → 节点自注册校验 → 表达式语法 → 变量作用域。"""
+    """语义阶段（只看主流程可达节点）：注册字段必填 → 节点自注册校验 → 表达式语法 → 连线。"""
     errors: list[ValidationIssue] = []
-    by_id: dict[str, WorkflowNode] = {node.id: node for node in graph.nodes}
     errors.extend(_config_completeness(graph, reachable))
     errors.extend(_node_validators(graph, reachable))
     errors.extend(_expression_syntax(graph, reachable, checker))
-    errors.extend(_variable_scope(graph, reachable, by_id))
+    errors.extend(_port_wiring(graph, reachable))
     return errors
 
 
@@ -384,7 +384,7 @@ def _config_completeness(graph: WorkflowGraph, reachable: set[str]) -> list[Vali
             if not field.required:
                 continue
             value = node.config.get(field.name)
-            if value is None or (isinstance(value, str) and not value.strip()):
+            if _is_blank(value):
                 label = f"（{field.label}）" if field.label else ""
                 issues.append(
                     ValidationIssue(
@@ -409,117 +409,134 @@ def _node_validators(graph: WorkflowGraph, reachable: set[str]) -> list[Validati
     return issues
 
 
-def _ancestors_of(
-    graph: WorkflowGraph, scope: set[str]
-) -> dict[str, frozenset[str]]:
-    """算域内每个节点的**前置节点集合**：沿边能走到它的所有节点（变量作用域的来源）。
+def _is_blank(value: Any) -> bool:
+    """必填判定：``None`` 与空白字符串算「没填」，其余（含数字 0 / False）都算填了。"""
+    return value is None or (isinstance(value, str) and not value.strip())
 
-    拓扑阶段已保证主流程无环，这里直接记忆化 DFS 反图；孤儿不在 scope 里，直接跳过。
+
+def _find_port(ports: Sequence[PortSpec], port_id: str) -> PortSpec | None:
+    """在端口清单里按 id 找端口；找不到返回 None。"""
+    for port in ports:
+        if port.id == port_id:
+            return port
+    return None
+
+
+def _port_hint(port_id: str, ports: Sequence[PortSpec]) -> str:
+    """端口名拼错时给一句「是否想用 X」；没有相近的返回空串。"""
+    matches = get_close_matches(port_id, [port.id for port in ports], n=1, cutoff=0.6)
+    if not matches:
+        return ""
+    return f"端口 {port_id!r} 不存在，是否想用 {matches[0]!r}？"
+
+
+def _port_wiring(graph: WorkflowGraph, reachable: set[str]) -> list[ValidationIssue]:
+    """③-A 连线：端口存不存在 / 两端同不同类 / 数据入口必接且只接一条。
+
+    值沿边走，所以这里是「值能不能送到该到的地方」的唯一关口。只看主流程上的边（两端都
+    可达）：孤儿节点永不执行，它连出去的线不算数 —— 被孤儿喂着的必填入口照样算「没接上」。
+    另外，**某类型完全没声明端口**时不查它的那一端（只 ``declare_node_type`` 占位的扩展
+    节点没有「端口名对不对」可言），声明了才查。
     """
-    reverse: dict[str, list[str]] = {node_id: [] for node_id in scope}
-    for edge in graph.edges:
-        if edge.source in scope and edge.target in scope:
-            reverse[edge.target].append(edge.source)
-
-    ancestors: dict[str, frozenset[str]] = {}
-
-    def resolve(node_id: str, stack: set[str]) -> frozenset[str]:
-        if node_id in ancestors:
-            return ancestors[node_id]
-        if node_id in stack:  # 理论上拓扑阶段已拦住环，这只是防御性兜底
-            return frozenset()
-        stack.add(node_id)
-        found: set[str] = set()
-        for parent in reverse[node_id]:
-            found.add(parent)
-            found.update(resolve(parent, stack))
-        stack.discard(node_id)
-        frozen = frozenset(found)
-        ancestors[node_id] = frozen
-        return frozen
-
-    for node_id in scope:
-        _ = resolve(node_id, set())
-    return ancestors
-
-
-def _variable_scope(
-    graph: WorkflowGraph,
-    reachable: set[str],
-    by_id: dict[str, WorkflowNode],
-) -> list[ValidationIssue]:
-    """③-A 变量作用域：配置里 ``{{x}}`` 引用的 x 必须是某个**前置节点**声明的输出。
-
-    只分析主流程：孤儿节点既不产出变量给下游，也不被检查。拼错名字时用 difflib 在
-    主流程已声明变量里找最像的，给「是否想用」建议。
-    """
-    ancestors = _ancestors_of(graph, reachable)
-    declared_by: dict[str, str] = {}  # 变量名 -> 声明它的节点 ID（主流程内）
-    for node in graph.nodes:
-        if node.id not in reachable:
-            continue
-        for name in node.outputs:
-            declared_by.setdefault(name, node.id)
-
     issues: list[ValidationIssue] = []
+    node_type = {node.id: node.type for node in graph.nodes}
+    main_edges = [
+        edge for edge in graph.edges if edge.source in reachable and edge.target in reachable
+    ]
+    #: (目标节点, 目标端口) -> 接在上面的边条数：数据入口只允许一条
+    incoming: dict[tuple[str, str], int] = {}
+
+    for edge in main_edges:
+        source_spec = get_spec(node_type[edge.source])
+        target_spec = get_spec(node_type[edge.target])
+        if source_spec is None or target_spec is None:  # 结构阶段已拦，这里只防御
+            continue
+        # 两端各自独立判断：**该类型声明了端口才查这一端**。完全没声明端口的类型（只
+        # ``declare_node_type`` 占个位的扩展节点）按「端口未定义」处理，不报端口错。
+        source_port = _find_port(source_spec.outputs, edge_source_port(edge))
+        target_port = _find_port(target_spec.inputs, edge_target_port(edge))
+        if source_spec.outputs and source_port is None:
+            issues.append(
+                ValidationIssue(
+                    node_id=edge.source,
+                    code="UNKNOWN_PORT",
+                    message=(
+                        f"{node_type[edge.source]} 节点 {edge.source} 没有输出端口 "
+                        f"{edge_source_port(edge)!r}"
+                    ),
+                    suggestion=_port_hint(edge_source_port(edge), source_spec.outputs)
+                    or "从面板右侧列出的输出端口里挑一个",
+                )
+            )
+        if target_spec.inputs and target_port is None:
+            issues.append(
+                ValidationIssue(
+                    node_id=edge.target,
+                    code="UNKNOWN_PORT",
+                    message=(
+                        f"{node_type[edge.target]} 节点 {edge.target} 没有输入端口 "
+                        f"{edge_target_port(edge)!r}"
+                    ),
+                    suggestion=_port_hint(edge_target_port(edge), target_spec.inputs)
+                    or "从面板左侧列出的输入端口里挑一个",
+                )
+            )
+        if (
+            source_port is not None
+            and target_port is not None
+            and source_port.type != target_port.type
+        ):
+            issues.append(
+                ValidationIssue(
+                    node_id=edge.target,
+                    code="PORT_TYPE_MISMATCH",
+                    message=(
+                        f"{edge.source}.{source_port.id}（{source_port.type}）接不到 "
+                        f"{edge.target}.{target_port.id}（{target_port.type}）"
+                    ),
+                    suggestion="数据端口（message）接数据端口，触发端口（trigger）接触发端口",
+                )
+            )
+        key = (edge.target, edge_target_port(edge))
+        incoming[key] = incoming.get(key, 0) + 1
+
     for node in graph.nodes:
         if node.id not in reachable:
             continue
-        for name in _references_in(node.config):
-            declarer = declared_by.get(name)
-            if declarer is None:
+        spec = get_spec(node.type)
+        if spec is None:  # 结构阶段已拦，这里只防御
+            continue
+        for port in spec.inputs:
+            count = incoming.get((node.id, port.id), 0)
+            if count > 1:
                 issues.append(
                     ValidationIssue(
                         node_id=node.id,
-                        code="VARIABLE_NOT_DECLARED",
-                        message=f"变量 {name!r} 没有任何节点声明",
-                        suggestion=_spell_hint(name, declared_by)
-                        or "检查前置节点的 outputs 声明或修正拼写",
+                        code="DUPLICATE_INPUT_EDGE",
+                        message=f"{node.type} 节点 {node.id} 的入口 {port.id} 接了 {count} 条线",
+                        suggestion="一个入口只连一个上游：多余的线删掉，或先汇到一个节点再往下送",
                     )
                 )
-            elif declarer not in ancestors[node.id]:
+            # 必填入口：接了线（主流程上的线）或同名字段手填了内容，二者有其一即可
+            if not port.required or count:
+                continue
+            if _is_blank(node.config.get(port.id)):
+                label = f"（{port.label}）" if port.label else ""
                 issues.append(
                     ValidationIssue(
                         node_id=node.id,
-                        code="VARIABLE_OUT_OF_SCOPE",
+                        code="INPUT_NOT_CONNECTED",
                         message=(
-                            f"变量 {name!r} 由节点 {declarer} 声明，但它不在 {node.id} 的前置链路上"
+                            f"{node.type} 节点 {node.id} 的必填入口 {port.id}{label} "
+                            "既没接线也没填内容"
                         ),
-                        suggestion="变量只能沿边向下游传递：把声明节点接到本节点之前",
+                        suggestion=(
+                            f"从一个上游的输出端口连一根线到 {port.id}，"
+                            f"或在 config.{port.id} 里手填内容"
+                        ),
                     )
                 )
     return issues
-
-
-def _references_in(value: Any) -> list[str]:
-    """递归收集任意 config 值里所有 ``{{name}}`` 引用（字符串内），保序去重。"""
-    found: list[str] = []
-    seen: set[str] = set()
-
-    def walk(item: Any) -> None:
-        if isinstance(item, str):
-            for match in _VARIABLE_RE.finditer(item):
-                name = match.group(1)
-                if name not in seen:
-                    seen.add(name)
-                    found.append(name)
-        elif isinstance(item, dict):
-            for sub in item.values():
-                walk(sub)
-        elif isinstance(item, list):
-            for sub in item:
-                walk(sub)
-
-    walk(value)
-    return found
-
-
-def _spell_hint(name: str, declared_by: dict[str, str]) -> str:
-    """拼错检测：在已声明变量名里找最像的，找到就给一句「是否想用」。"""
-    matches = get_close_matches(name, list(declared_by), n=1, cutoff=0.6)
-    if not matches:
-        return ""
-    return f"变量 {name!r} 未定义，是否想用 {matches[0]!r}？"
 
 
 def _expression_syntax(

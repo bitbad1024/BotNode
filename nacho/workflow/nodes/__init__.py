@@ -1,31 +1,35 @@
 """工作流节点：**一类节点一个文件**，文件里 import 契约 -> 写函数 -> 当场注册。
 
     nodes/
-      base.py            契约：NodeExecutor / NodeSpec / ConfigField / NodeExecutionContext
+      base.py            契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / 运行时上下文
       registry.py        注册表：register_node / declare_node_type / get_spec / load_node_modules
       start.py           内置节点：start（图起点；trigger=time 时按 cron 登记调度器）
       end.py             内置节点：end（图终点）
       log.py             内置节点：log（按级别写业务日志）
       test.py            内置节点：test（回显，画布联调用）
-      constant.py        内置节点：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
+      constant.py        内置节点：constant（一个节点一个常量值，从 value 端口送下去）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
 
+**数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
+
 **写自己的节点**（不用改校验器 / 框架里的任何文件）：新建一个模块，用装饰器把
-「执行函数 + 必填字段 + 默认值 + 自定义校验器」一次声明完，启动时 import 进来即可::
+「执行函数 + 端口 + 字段 + 自定义校验器」一次声明完，启动时 import 进来即可::
 
     # my_pkg/dingtalk.py
     from nacho.workflow.nodes import (
-        ConfigField, NodeExecutionContext, register_node, render_variables,
+        ConfigField, NodeExecutionContext, PortSpec, input_value, register_node,
     )
 
     @register_node(
         "dingtalk",
-        fields=[ConfigField("text", "消息内容", required=True)],  # 缺失校验直接报错
+        inputs=[PortSpec("text", "message", "消息内容", required=True)],  # 入口：接线或手填
+        outputs=[PortSpec("sent", "message", "是否发出")],
+        fields=[ConfigField("text", "消息内容")],  # 没接线时的手填兜底
     )
     async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
-        text = render_variables(str(node.config.get("text", "")), ctx.variables)
+        text = input_value(node, ctx, "text")
         ctx.logger.info("发钉钉消息", node_id=node.id, text=text)
-        return {"sent": True}
+        return {"sent": True}  # 键 = 输出端口名
 
     # 启动时（app.py 或自己的入口）
     from nacho.workflow import load_node_modules
@@ -51,9 +55,9 @@ from .base import (
     NodeSpec,
     PortSpec,
     PortType,
-    render_variables,
+    input_value,
 )
-from .constant import exec_constant, validate_constant_node
+from .constant import exec_constant
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http
 from .log import LOG_LEVELS, exec_log
@@ -86,7 +90,7 @@ __all__ = [
     "PortType",
     "TRIGGER_PORT",
     "MISSING_DEFAULT",
-    "render_variables",
+    "input_value",
     # 注册表
     "register_executor",
     "register_node",
@@ -104,7 +108,6 @@ __all__ = [
     "exec_log",
     "LOG_LEVELS",
     "exec_constant",
-    "validate_constant_node",
     "exec_test",
     "exec_http",
     "HTTP_METHODS",

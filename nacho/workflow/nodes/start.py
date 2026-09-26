@@ -5,6 +5,11 @@ config:
     cron:    ``trigger=time`` 时必填，5 / 6 段 cron 表达式
     name:    调度任务显示名（可选，缺省用节点 id）
 
+输出端口：
+
+    ``message``  消息触发时外部送进来的那条消息（``ctx.trigger_data["message"]``，没有就空串）；
+                 时间触发没有消息，所以那份图别把线接到 ``message`` 出口上
+
 ``time`` 不自己"到点执行"：把整条流程图登记到
 :class:`~nacho.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；``message`` 被动
 等消息接入（消息源留待后续），发布 / 试跑时只写一条开始日志。
@@ -97,9 +102,12 @@ async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     if trigger == "time":
         return await _register_cron(node, ctx)
 
+    # 消息触发的消息是「外面送进来的」：调用方把它放在 ctx.trigger_data 里，这里原样从
+    # message 出口送下去（消息源还没接，缺省就是空串）
+    message = ctx.trigger_data.get("message", "")
     ctx.log.append(f"[start] {node.id} 流程开始（消息触发）")
     ctx.logger.info("工作流开始（消息触发，等待消息进入）", node_id=node.id)
-    return {}
+    return {"message": message}
 
 
 def workflow_task_id(workflow_id: str, node_id: str) -> str:

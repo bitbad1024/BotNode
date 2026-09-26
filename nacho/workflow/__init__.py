@@ -72,11 +72,11 @@ from .nodes import (
     declare_node_type,
     get_executor,
     get_spec,
+    input_value,
     load_node_modules,
     register_executor,
     register_node,
     registered_types,
-    render_variables,
 )
 
 __all__ = [
@@ -113,7 +113,7 @@ __all__ = [
     "PortType",
     "TRIGGER_PORT",
     "MISSING_DEFAULT",
-    "render_variables",
+    "input_value",
     "register_executor",
     "register_node",
     "declare_node_type",

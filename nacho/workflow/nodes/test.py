@@ -1,15 +1,17 @@
-"""测试 / 调试节点：把配置内容回显到日志和上下文，供画布联调用。
+"""测试 / 调试节点：把入口送来的值回显到日志，再从自己的出口送下去。
+
+它两头都有端口，所以常用在中间「看一眼线上到底流过了什么」：上游连到 ``message`` 入口，
+自己的 ``message`` 出口再接给下游。
 
 config:
-    echo: 要回显的内容（可含 ``{{变量}}``）。保存时默认填 ``hello``；手写图里没这个键时
-          执行器退回用节点 id
+    message: 回显内容（**没接线时**的手填值，缺省 ``hello``；手写图里连这个键都没有时用节点 id）
 """
 from __future__ import annotations
 
 from typing import Any
 
 from ..models import WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
 
 
@@ -17,13 +19,13 @@ from .registry import register_node
     "test",
     label="测试",
     order=50,
-    inputs=[TRIGGER_PORT],
+    inputs=[TRIGGER_PORT, PortSpec("message", "message", "回显内容")],
     outputs=[TRIGGER_PORT, PortSpec("message", "message", "回显")],
-    fields=[ConfigField("echo", "回显内容", default="hello")],
+    fields=[ConfigField("message", "回显内容", default="hello")],
 )
 async def exec_test(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-    """测试 / 调试节点：把配置内容回显到日志和上下文，供画布联调用。"""
-    echo = render_variables(str(node.config.get("echo", node.id)), ctx.variables)
-    ctx.logger.info(f"[test:{node.id}] {echo}", variables=dict(ctx.variables))
+    """回显入口的值（没接线时用 config.message），原样从 ``message`` 出口送下去。"""
+    echo = str(input_value(node, ctx, "message", default=node.id))
+    ctx.logger.info(f"[test:{node.id}] {echo}", inputs=sorted(ctx.inputs))
     ctx.log.append(f"[test] {node.id}: {echo}")
-    return {"echo": echo}
+    return {"message": echo}

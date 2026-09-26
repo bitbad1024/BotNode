@@ -21,12 +21,12 @@ nacho/workflow/
 │   ├── registry.py      注册表：register_node / declare_node_type / get_spec / load_node_modules
 │   ├── start.py         内置：start（图起点；trigger=time 时按 cron 登记调度器）
 │   ├── end.py           内置：end（图终点）
-│   ├── log.py           内置：log（按级别写业务日志）
+│   ├── log.py           内置：log（按级别写业务日志；内容从 message 入口来）
 │   ├── test.py          内置：test（回显，画布联调用）
-│   ├── constant.py      内置：constant（常量：一组「名字 -> 值」，下游连线后 {{引用}}）
+│   ├── constant.py      内置：constant（一个节点一个常量值，从 value 出口送下去）
 │   └── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
-├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点（校验器与运行器共用同一份）
-├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行（SimpleWorkflowRunner）
+├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
+├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据**
 └── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
                      到点后加载该版本跑整条流程；拨开关即时启停（WorkflowTriggers）
 ```
@@ -49,16 +49,19 @@ store ──────────────► models
 
 | 名字 | 作用 |
 |---|---|
-| `WorkflowNode` | 一个节点：`id`（图内唯一）/ `type`（合法值 = 注册表里已登记的类型）/ `config` / `outputs`（声明的输出变量名） |
-| `WorkflowEdge` | 一条有向边：`source` → `target`（也是变量作用域的传播方向） |
+| `WorkflowNode` | 一个节点：`id`（图内唯一）/ `type`（合法值 = 注册表里已登记的类型）/ `config` / 画布坐标 `x`·`y` |
+| `WorkflowEdge` | 一条有向边：`source` 的**输出端口** → `target` 的**输入端口**，值就沿它流 |
 | `WorkflowGraph` | 一张图：`nodes` + `edges`，入库前校验与版本快照装的都是它 |
 | `ValidationIssue` / `ValidationReport` | 校验结果：`node_id` + `code` + 人话 + 建议；失败会带上卡在哪个 `stage` |
 | `STAGE_*` | 四个阶段名（`structure` / `topology` / `semantic` / `dry_run`） |
 | `WorkflowDefinitionRecord` / `WorkflowVersionRecord` | 落库记录（定义 / 版本快照） |
 | `canonical_graph_json` / `graph_checksum` | 规范 JSON 与它的 sha256（内容没变就不产生新版本） |
 
-> **`outputs` 是「声明」不是「产出」**：它只用来让校验器知道「下游的 `{{名字}}` 有没有人声明」。
-> 节点真正产出什么，由执行函数**返回的 dict** 决定（见第 5.2 节）——两者要对得上。
+> **数据沿连线走，没有全局变量**：节点从自己的**输入端口**拿到上游送来的值（引擎按边投递，
+> 键 = 目标端口名），把产出放在**输出端口**上（执行函数返回值的键 = 端口 id）。
+> `message` 类型端口送值、`trigger` 类型端口只表达先后；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
+>
+> 边没写端口时按 `trigger` 读（`graph.DEFAULT_EDGE_PORT`）：这类边只表达顺序、不送值。
 
 ## 2. validator.py —— 入库前三个阶段（④ Dry Run 还没接）
 
@@ -66,7 +69,7 @@ store ──────────────► models
 |---|---|---|
 | ① 结构 | 能不能解析成图、节点 id 唯一、边端点存在、主流程上的类型都已注册（孤儿类型不查） | `UNKNOWN_NODE_TYPE` |
 | ② 拓扑 | **只看 start 可达的主流程**：start 唯一、至少一个可达 end、无环（Kahn）、注册的出入边约束（分流类节点 ≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
-| ③ 语义 | 注册字段必填、节点自注册校验器（trigger/cron、log level、http method）、变量作用域、表达式语法；**全部只查主流程节点** | `MISSING_CONFIG` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
+| ③ 语义 | 注册字段必填、节点自注册校验器（trigger/cron、log level、http method）、**连线**（端口存在 / 两端同类 / 必填入口接上没）、表达式语法；**全部只查主流程节点** | `MISSING_CONFIG` / `INPUT_NOT_CONNECTED` / `UNKNOWN_PORT` / `PORT_TYPE_MISMATCH` / `DUPLICATE_INPUT_EDGE` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
 | ④ Dry Run | **还没接**：只留了阶段名常量 `STAGE_DRY_RUN`，等执行引擎就位再加 | —— |
 
 > **短路**：某一阶段出错就不再往后跑 —— 结构都不对，拓扑 / 语义无从谈起。
@@ -93,20 +96,24 @@ store ──────────────► models
 
 ## 4. nodes/ —— 节点执行器（一类一文件）
 
-| 文件 | 作用 | config（必填项加粗） |
-|---|---|---|
-| `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `render_variables`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— |
-| `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— |
-| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
-| `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | —— |
-| `log.py` | 按级别写业务日志（支持 `{{变量}}`） | **`message`**、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
-| `test.py` | 回显，画布联调 | `echo`（缺省用节点 id，运行期兜底） |
-| `constant.py` | **常量**：config 里每一个键就是一个常量（键名 = 变量名），执行时原样产出，下游连线后用 `{{名字}}` 读 | 一组「名字 -> 值」，直接平铺在 config 上；至少要有一个，键名必须能当变量名（自注册校验器） |
-| `http.py` | 发一次 HTTP 请求 | **`url`**、**`method`**（枚举由自注册校验器把）、`timeout`（缺省 10，注册默认值）、`headers`、`body` |
+| 文件 | 作用 | 端口（输入 → 输出） | config（必填项加粗） |
+|---|---|---|---|
+| `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `input_value`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— | —— |
+| `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— | —— |
+| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 | — → `trigger` / `message` | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
+| `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | `trigger` → — | —— |
+| `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
+| `test.py` | 回显（画布联调）：把入口的值原样从出口送下去，夹在中间看「线上流过了什么」 | `trigger` / `message` → `trigger` / `message` | `message`（缺省 `hello`） |
+| `constant.py` | **常量**：一个节点一个值，从 `value` 出口送下去 | `trigger` → `trigger` / `value` | **`value`**（必填，没有默认值） |
+| `http.py` | 发一次 HTTP 请求 | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
 
-> **字面量尽量走常量节点**：地址、模板、固定文案这类字符串写在 `constant` 节点上，谁要用就连
-> 一根线过来用 `{{名字}}` 读 —— 别把同一串值复制进每个节点的 config（改一次要翻整张图）。常量节点
-> 必须在 start 可达的主流程里（孤儿不执行，它的变量也就没人声明）。
+> **「入口」= 字段名与端口 id 同名的那个数据端口**：`log.message` / `http.url` / `http.body` 都能
+> 被连线覆盖 —— **线上的值优先，没接线才用 config 里手填的**（`input_value` 就是这个口径）。
+> 标了 `required=True` 的入口必须「接线或手填」，否则语义阶段报 `INPUT_NOT_CONNECTED`。
+>
+> **字面量尽量走常量节点**：地址、模板、固定文案这类值写在 `constant` 节点上，谁要用就连一根线
+> 过来 —— 别把同一串值复制进每个节点的 config（改一次要翻整张图）。要几个常量就摆几个节点；常量
+> 节点必须在 start 可达的主流程里（孤儿不执行，它的线也就没人送值）。
 
 **注册表是进程级、内存里的一张表**（`registry._SPECS`，类型名 → `NodeSpec`），不落库、没有配置文件：
 
@@ -133,22 +140,27 @@ def load_node_modules(*module_names) -> list[str]: ...     # 装外部模块
 # ① 新建一个模块（照 nacho/workflow/nodes/log.py 的样子；一个节点一个文件）
 #    my_pkg/nodes/dingtalk.py
 from nacho.workflow.nodes import (
-    ConfigField, NodeExecutionContext, register_node, render_variables,
+    ConfigField, NodeExecutionContext, PortSpec, input_value, register_node,
 )
 
 @register_node(
     "dingtalk",
-    # ② 当场注册：执行函数 + 校验规则一起声明，校验器 / 模型 / 前端框架代码都不用动
+    # ② 当场注册：执行函数 + 端口 + 校验规则一起声明，校验器 / 模型 / 前端框架代码都不用动
+    inputs=[
+        # 数据入口：上游把值接到 text；required 表示「必须接线或手填同名字段」
+        PortSpec("text", "message", "消息内容", required=True),
+    ],
+    outputs=[PortSpec("sent", "message", "是否发出")],
     fields=[
-        ConfigField("text", "消息内容", required=True),   # 缺失 → MISSING_CONFIG
-        ConfigField("format", "格式", default="text"),    # 缺失 → 保存时自动补 text
+        ConfigField("text", "消息内容"),                  # 没接线时的手填兜底
+        ConfigField("format", "格式", default="text"),     # 缺失 → 保存时自动补 text
     ],
 )
 async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
-    text = render_variables(str(node.config.get("text", "")), ctx.variables)
+    text = str(input_value(node, ctx, "text"))         # 线上来的优先，没接线才用手填值
     ctx.logger.info("发钉钉消息", node_id=node.id, text=text)
     ctx.log.append(f"[dingtalk] {node.id}: {text}")
-    return {"dingtalk_text": text}             # 本节点的输出变量（下游 {{dingtalk_text}}）
+    return {"sent": True}                              # 键 = 输出端口名
 ```
 
 ```python
@@ -175,40 +187,46 @@ print(registered_types())        # 已注册的类型名（排序）
 NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str, Any]]]
 ```
 
-- 入参：节点本身（`id` / `type` / `config` / `outputs`）+ 运行时上下文；
-- 返回：**本节点产出的变量**（`dict`），运行器把它 `update` 进 `ctx.variables`，下游用
-  `{{名字}}` 引用。不产出变量就返回 `{}`（像 `start` / `end` 那样）。
+- 入参：节点本身（`id` / `type` / `config`）+ 运行时上下文；
+- 返回：**本节点产出的值**（`dict`，**键 = 已声明的输出端口名**）。引擎按边把它投递给下游的
+  对应入口；多出来的键不会被投递（`start` 的 `scheduled` / `task_id` 就是这种「只给日志看」的
+  信息）。没有产出就返回 `{}`（像 `log` / `end` 那样）。
 - 执行是**串行**的（节点之间有数据依赖）；并行 / 分支语义留给将来新增的分流类节点。
 
 ### 5.3 上下文 `NodeExecutionContext` 能给什么
 
 | 成员 | 是什么 | 用来干嘛 |
 |---|---|---|
-| `ctx.variables` | `dict[str, Any]`，上游所有节点的输出合并而来 | 取上游的值；`render_variables` 用的就是它 |
+| `ctx.inputs` | `dict[str, Any]`，**引擎按入边投递进来的值**（键 = 目标端口名） | 用 `input_value(node, ctx, "名字")` 取；测试里直接 `ctx.inputs["x"] = ...` 预置 |
+| `ctx.trigger_data` | `dict[str, Any]`，消息触发时外面送进来的数据 | `start` 的 `message` 出口从它取（`ctx.trigger_data["message"]`） |
 | `ctx.logger` | `BaseLogger`（`nacho.core.logger`） | 写业务日志（节点自己的运行痕迹） |
 | `ctx.log` | `list[str]` | 节点产出的文字行（给前端回显 / 测试断言，不落日志文件） |
 | `ctx.scheduler` | `TaskManager \| None` | 要把流程挂到 cron 就用它（`start` 的 `trigger=time` 的做法）；没注入时是 `None` |
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 
-`render_variables(template, variables)`：把 `{{名字}}` 换成变量值（变量不存在就留空串）。
-名字规则是 `[A-Za-z_][A-Za-z0-9_]*`（**只有这种名字算变量**，其余原样保留）。
-配置里凡是让用户填文本的地方都走它，口径才一致。
+`input_value(node, ctx, name, default="")`：取某个数据入口的值 —— **线上的值优先，没接线才用
+config 里同名字段的手填值**，两者都没有才用 `default`。这是「字段名 = 端口名」那条约定的唯一
+实现处，节点不用自己判断有没有接线。
 
-### 5.4 输出变量的命名
+节点拿到的**只有指向自己的那些边送来的值**：别的节点产出什么它看不见（没有全局变量上下文）。
 
-变量上下文是**全图一份**（不是每个节点一份），所以：
+### 5.4 端口怎么设计
 
-- 起**带前缀**的名字（`log_message` / `echo` / `http_status` / `dingtalk_text`），别用 `result`、
-  `data` 这种通用词 —— 两个节点都产出 `result` 时，后跑的会覆盖先跑的；
-- 节点 `outputs` 里要声明这些名字：校验器按「前置节点声明的变量」判断 `{{名字}}` 合不合法
-  （`VARIABLE_NOT_DECLARED` / `VARIABLE_OUT_OF_SCOPE` 就是它报的）。
+- **端口名就是对外契约**：它写进 edge 的 `source_port` / `target_port`，也是执行函数返回值的
+  键名 —— 改端口等于改「这张图还能不能跑」（以前端口只是画布上的装饰）；
+- 输出端口用**带节点前缀**的名字（`http_status` / `http_body`、`dingtalk_sent`），别用 `result`、
+  `data` 这种通用词：端口虽然是每个节点自己一份（不会互相覆盖），但下游连线时要一眼看出线上是什么；
+- 数据入口用**普通名词**（`url` / `body` / `message`），并给同名字段留个手填兜底：画布会把
+  「已接线 / 未接线」标出来，校验器只在「既没接线也没填」时才报 `INPUT_NOT_CONNECTED`；
+- **一个数据入口只允许一条入边**（`DUPLICATE_INPUT_EDGE`）：要合并多个上游，就先各自接到一个
+  中间节点，再从那一个节点往下送。
 
 ### 5.5 失败怎么处理：分两类
 
 | 情况 | 怎么办 | 例子 |
 |---|---|---|
 | **业务结果**（对方回了错、查不到、校验不过） | 记日志（`ctx.logger.warning`）+ 正常返回，让流程继续往下走 | `http` 节点的 4xx / 5xx |
-| **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 渲染后为空 |
+| **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 入口没接线也没填 |
 
 跑图的失败长这样（`executor.py`）：执行函数一抛，`SimpleWorkflowRunner.run` 就中断，
 日志里那条异常带着堆栈 —— 比「跑完了但什么都没发生」好查得多。
@@ -219,13 +237,23 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 `NodeSpec`，按规格办事。新增类型不用动 `validator.py` / `models.py` 一行，也**不用动画布**
 （画布从节点目录接口读，见 ⑥）。
 
-**① config 字段分两类，在注册处声明**（`fields=[ConfigField(...)]`）：
+**① 端口与 config 字段，都在注册处声明**：
 
-| 字段类别 | 写法 | 缺失时 |
+| 声明 | 写法 | 语义 |
 |---|---|---|
+| 数据入口 | `inputs=[PortSpec("url", "message", "请求地址", required=True)]` | 上游把值接进来；`required` = 「必须接线或手填同名字段」，否则 `INPUT_NOT_CONNECTED` |
+| 控制流端口 | `PortSpec("trigger", "trigger", "触发")`（内置节点用常量 `TRIGGER_PORT`） | 只表达先后，不送值；多条入边允许（汇聚） |
+| 数据出口 | `outputs=[PortSpec("http_status", "message", "状态码")]` | 执行函数返回值的键；下游把线接过来才拿得到 |
+| 出口 / 入口与字段同名 | `ConfigField("url", "请求地址")` 配 `PortSpec("url", ...)` | 该字段可被连线覆盖：**线上优先**，没接线才用手填 |
 | 不可缺失字段 | `ConfigField("url", required=True)` | 主流程上的节点直接报 `MISSING_CONFIG`（`None` / 空串也算缺失） |
 | 默认值字段 | `ConfigField("level", default="INFO")` | 校验前先补默认值（自定义校验器看到的是补全后的 config）；保存版本时写进快照 |
 | 枚举字段 | `ConfigField("level", default="INFO", options=LOG_LEVEL_ORDER)` | 同上；`options` 只描述「有哪些可选值、按什么顺序显示」（画布渲染成下拉），校验仍归自定义校验器 |
+
+连线本身的规则（端口存不存在 `UNKNOWN_PORT`、两端同不同类 `PORT_TYPE_MISMATCH`、数据入口只接
+一条线 `DUPLICATE_INPUT_EDGE`）由校验器统一查，**不用自己写**。
+
+> 一个类型**完全没声明端口**时（只 `declare_node_type` 占位的扩展节点），校验不查它的那一端 ——
+> 没声明就谈不上「端口名对不对」；声明了才查。
 
 未声明的字段一律不查，原样留在 config 里。
 
@@ -262,11 +290,10 @@ async def exec_dingtalk(node, ctx): ...
 （`GET <prefix>/workflows/node-types`，见 `api/workflow/router.py`），**面板项 / 中文名 /
 端口 / 配置表单全按注册表渲染** —— 加一个节点类型只改后端这一个文件，画布与接口都不用动。
 
-前端只留两样东西：
+前端只留一样东西：**颜色**（皮肤，后端不管；认不出的类型用灰的）。
 
-- **颜色**（皮肤，后端不管；认不出的类型用灰的）；
-- 两个**固有例外**（形状本来就随 config 变，不是「前端另有定义」）：`start` 的端口与常量条随
-  `config.trigger` 变、`constant` 的常量就是它 config 里的键。
+还有一处**固有例外**（形状本来就随 config 变，不是「前端另有定义」）：`start` 的端口与卡片上
+的字段条随 `config.trigger` 变（时间触发的图里不显示 `message` 出口）。
 
 > 那份目录就是「两边对得上」的契约：面板上摆的必然是后端登记过的类型。万一旧图里还有认不出
 > 的类型，画布画成灰色未知节点，保存时被 `UNKNOWN_NODE_TYPE` 挡下 —— 以前那批只有声明没有
@@ -295,14 +322,15 @@ def _import_httpx() -> Any:
 @pytest.mark.asyncio
 async def test_my_node_outputs(...) -> None:
     node = WorkflowNode(                          # type 已是自由字符串，正常构造即可
-        id="d1", type="dingtalk", config={"text": "hi {{name}}"}, outputs=["dingtalk_text"]
+        id="d1", type="dingtalk", config={}       # text 走连线，不写在 config 里
     )
     ctx = NodeExecutionContext()
-    ctx.variables["name"] = "nacho"
-    assert await exec_dingtalk(node, ctx) == {"dingtalk_text": "hi nacho"}
+    ctx.inputs = {"text": "hi nacho"}             # 引擎投递进来的入口值（测试直接预置）
+    assert await exec_dingtalk(node, ctx) == {"sent": True}
 ```
 
-- **直接调函数**，不必为了测节点去拼一张图（要走全链路再 `WorkflowGraph` + `SimpleWorkflowRunner`）；
+- **直接调函数**，不必为了测节点去拼一张图（要验「值真的沿边走」再拼 `WorkflowGraph` +
+  `SimpleWorkflowRunner`，见 `tests/test_workflow.py` 里的 `test_http_status_reaches_*`）；
 - 对外部 IO **打桩**，别走真实网络：`monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)`
   （`tests/test_workflow.py` 里的 `FakeAsyncClient` 就是这个套路），本项目的惯例是打桩而不是起服务；
 - 注册本身也值得测：`assert get_executor("dingtalk") is exec_dingtalk`、
@@ -311,11 +339,12 @@ async def test_my_node_outputs(...) -> None:
 ### 5.9 上线前自查
 
 - [ ] 类型在模块里注册上了（`get_spec("类型") is not None`；有执行函数再查 `get_executor`）
+- [ ] 端口声明齐了：数据入口 / 出口都是 `"message"` 类型，控制流用 `TRIGGER_PORT`；必填入口标 `required=True`
+- [ ] 返回值键 = 输出端口 id；取入口值用 `input_value`（别直接读 `ctx.inputs`，那会绕过「没接线用手填」的兜底）
 - [ ] config 字段规则在注册处声明齐了：必填的 `required=True`，有缺省的给 `default`
 - [ ] 类型专属校验（可选）：注册时挂 `validator`，配置写错在保存时就报
 - [ ] 需要的拓扑约束：`role` / `min_outgoing` / `max_outgoing` / `expression_field`
 - [ ] 画布**不用改**：`label` / `order` / 端口 / `fields` 声明全了，节点就自动出现在面板上
-- [ ] `outputs` 与实际返回的 key 一致，名字带节点前缀
 - [ ] 环境问题会抛、业务结果会返回（第 5.5 节）
 - [ ] 有单测，且外部依赖是打桩的
 

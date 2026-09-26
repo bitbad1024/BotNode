@@ -1,32 +1,37 @@
-"""写一个节点要用到的东西：执行函数的形状 + 它的运行时上下文 + 模板渲染 + 注册规格。
+"""写一个节点要用到的东西：执行函数的形状 + 它的运行时上下文 + 端口契约 + 注册规格。
+
+**数据沿连线走，没有全局变量**：一个节点从自己的**输入端口**拿到上游送来的值，把产出放在
+**输出端口**上，边就是这两者之间的管道（edge 的 ``source_port`` / ``target_port``）。
 
 **这一份是对外契约**：别人写自己的节点时只从这里（以及 :mod:`.registry`）import，
 不需要碰框架里别的文件::
 
     from nacho.workflow.nodes import (
-        NodeExecutionContext, ConfigField, register_node, render_variables,
+        NodeExecutionContext, ConfigField, PortSpec, register_node, input_value,
     )
 
     @register_node(
         "dingtalk",
-        # 必填字段：缺失 / 空串在校验阶段直接报错
-        fields=[ConfigField("text", "消息内容", required=True)],
+        # 输入端口：上游把消息接到 text 入口；required 表示「必须接线或手填」
+        inputs=[PortSpec("text", "message", "消息内容", required=True)],
+        outputs=[PortSpec("sent", "message", "是否发出")],
+        # 同名字段 = 没接线时的手填兜底（连了线就用线上的值）
+        fields=[ConfigField("text", "消息内容")],
     )
     async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
-        text = render_variables(str(node.config.get("text", "")), ctx.variables)
+        text = input_value(node, ctx, "text")
         ctx.logger.info("发钉钉消息", node_id=node.id, text=text)
-        return {"sent": True}      # 产出给下游 {{sent}} 引用
+        return {"sent": True}      # 键 = 输出端口名，下游连哪根线就拿到哪个值
 
-函数签名就是 :data:`NodeExecutor`：收「节点 + 上下文」，返回**本节点产出的变量**（会被
-合并进 ``ctx.variables``，下游用 ``{{名字}}`` 引用）。
+函数签名就是 :data:`NodeExecutor`：收「节点 + 上下文」，返回**本节点的产出**（键必须是
+已声明的输出端口名；引擎按边把它投递给下游对应入口）。
 
-**校验什么由注册方自己说了算**：必填字段 / 默认值通过 :class:`ConfigField` 声明，
-表格化覆盖不了的规则（枚举、条件必填）写一个 :data:`NodeConfigValidator` 挂上来，
-不用改校验器框架代码。
+**校验什么由注册方自己说了算**：必填字段 / 默认值通过 :class:`ConfigField` 声明，端口与
+「入口必填」通过 :class:`PortSpec` 声明，表格化覆盖不了的规则（枚举、条件必填）写一个
+:data:`NodeConfigValidator` 挂上来，不用改校验器框架代码。
 """
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -36,7 +41,7 @@ from nacho.core.scheduler import TaskManager
 
 from ..models import ValidationIssue, WorkflowNode
 
-#: 节点执行函数：(节点, 上下文) -> 该节点的输出变量 dict
+#: 节点执行函数：(节点, 上下文) -> 本节点产出（键 = 已声明的输出端口名）
 NodeExecutor = Callable[[WorkflowNode, "NodeExecutionContext"], Awaitable[dict[str, Any]]]
 
 #: 节点在图中的拓扑角色：start=唯一入口 / end=终点 / normal=普通节点
@@ -76,20 +81,28 @@ class ConfigField:
 
 @dataclass(frozen=True)
 class PortSpec:
-    """节点一端的一个端口：画布照它画圆点，连线时两端类型必须相同。
+    """节点一端的一个端口 —— **既是画布上的圆点，也是执行期的数据契约**。
 
-    端口 ``id`` 就是写进 edge 的 ``source_port`` / ``target_port`` 的那个值；它同时是
-    「config 里哪个字段是消息入口」的判据 —— 字段名与端口 id 同名（如 ``log`` 的 ``message``）
-    时，画布把它当端口，不再当常量条显示。
+    ``id`` 就是写进 edge 的 ``source_port`` / ``target_port`` 的那个值：
 
-    :param id: 端口名（edge 两端引用的就是它）；
+    * ``type="message"``（数据端口）：边**送值**。输出端口的值 = 执行函数返回值里同名的键；
+      输入端口的值进 :attr:`NodeExecutionContext.inputs`，节点用 :func:`input_value` 取
+      （同名的 :class:`ConfigField` 是「没接线时手填」的兜底）；
+    * ``type="trigger"``（控制流端口）：边只表达「谁先谁后」，不送值。
+
+    输入端口还多一个 ``required``：标了就必须**接上线或手填同名字段**，否则语义阶段报
+    ``INPUT_NOT_CONNECTED``（输出端口忽略它）。
+
+    :param id: 端口名（edge 两端引用的就是它；数据输出端口同时是产出值的键名）；
     :param type: 端口类型，连线两端必须同类；
-    :param label: 显示名（缺省用 id）。
+    :param label: 显示名（缺省用 id）；
+    :param required: 仅输入端口有效：必须接线（或同名字段手填了值）。
     """
 
     id: str
     type: PortType = "trigger"
     label: str = ""
+    required: bool = False
 
 
 #: 各节点通用的触发端口（出入口都叫「触发」）
@@ -110,8 +123,8 @@ class NodeSpec:
     :param expression_field: 该字段内容要交图级表达式语法检查器过一遍；
     :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
     :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
-    :param inputs: 输入端口（画布左侧圆点）；
-    :param outputs: 输出端口（画布右侧圆点）。
+    :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
+    :param outputs: 输出端口（画布右侧圆点；执行函数返回值的键必须是这里的 id）。
     """
 
     node_type: str
@@ -127,28 +140,30 @@ class NodeSpec:
     inputs: tuple[PortSpec, ...] = ()
     outputs: tuple[PortSpec, ...] = ()
 
-#: 配置字符串里的变量引用：``{{ name }}``
-_VARIABLE_RE: re.Pattern[str] = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+def input_value(
+    node: WorkflowNode, ctx: NodeExecutionContext, name: str, default: Any = ""
+) -> Any:
+    """取某个数据入口的值：**线上送来的优先，没接线才用 config 里同名字段的手填值**。
 
+    这是「字段名 = 端口名」那条约定的唯一实现处，节点不用自己判断有没有接线::
 
-def render_variables(template: str, variables: dict[str, Any]) -> str:
-    """把模板里的 ``{{name}}`` 换成变量值（变量不存在就留空串）。
+        text = input_value(node, ctx, "message", default="")
 
-    节点配置里凡是让用户填文本的地方都走它，口径才一致：只有字母 / 下划线开头、后面是
-    字母数字下划线的名字算变量，其余原样保留。
+    :param node: 当前节点（手填兜底从它的 ``config`` 取）；
+    :param ctx: 运行时上下文（``inputs`` 里是引擎按边投递进来的值）；
+    :param name: 入口名（数据端口的 id，通常与同名的 :class:`ConfigField` 一致）；
+    :param default: 既没接线、config 里也没有这个键时返回什么。
     """
-
-    def sub(match: re.Match[str]) -> str:
-        return str(variables.get(match.group(1), ""))
-
-    return _VARIABLE_RE.sub(sub, template)
+    if name in ctx.inputs:
+        return ctx.inputs[name]
+    return node.config.get(name, default)
 
 
 class NodeExecutionContext:
-    """节点运行时上下文：上游输出变量 + 日志 + 调度器。
+    """节点运行时上下文：本节点的入口值 + 日志 + 调度器。
 
-    ``variables`` 是**属性**不是入参：构造时为空，随节点执行不断合并上游产出（要预置变量
-    直接写 ``ctx.variables["x"] = ...``，测试里常这么干）。
+    ``inputs`` 是**属性**不是入参：引擎每跑一个节点前，按指向它的边把上游产出投递进来
+    （键 = 目标端口名）。要预置入口值（测试 / 手动跑）直接写 ``ctx.inputs["x"] = ...``。
 
     :param logger: 业务日志实例（log 节点写这里）；
     :param scheduler: 调度器（时间触发的 start 节点把流程图登记到这里）；
@@ -166,7 +181,8 @@ class NodeExecutionContext:
         run: Callable[[], Awaitable[None]] | None = None,
         workflow_id: str = NO_WORKFLOW_ID,
     ) -> None:
-        self.variables: dict[str, Any] = {}
+        self.inputs: dict[str, Any] = {}
+        self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
         self.log: list[str] = []  # 节点产出的文字日志（供测试 / 前端回显）
         self.workflow_id: str = workflow_id
         self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
