@@ -15,6 +15,7 @@ import {
 } from './workflowApi'
 import { ApiRequestError } from '../../lib/http'
 import { useToast } from '../../common/Toast'
+import { ConfirmDialog } from '../../common/ConfirmDialog'
 import {
   IconEdit,
   IconPlus,
@@ -188,7 +189,6 @@ export default function WorkflowPage() {
             <tbody>
               {items.map((w) => {
                 const st = statusLabel(w)
-                const confirming = confirmId === w.id
                 return (
                   <tr key={w.id}>
                     <td className={styles.nameCell}>
@@ -276,29 +276,14 @@ export default function WorkflowPage() {
                         >
                           发布最新版
                         </button>
-                        {confirming ? (
-                          <>
-                            <button
-                              className={`btn ${styles.solidDanger}`}
-                              disabled={busy}
-                              onClick={() => void remove(w.id)}
-                            >
-                              确认删除
-                            </button>
-                            <button className="btn" onClick={() => setConfirmId(null)}>
-                              取消
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            className={`btn ${styles.danger}`}
-                            disabled={busy}
-                            onClick={() => setConfirmId(w.id)}
-                          >
-                            <IconTrash size={14} />
-                            删除
-                          </button>
-                        )}
+                        <button
+                          className={`btn ${styles.danger}`}
+                          disabled={busy}
+                          onClick={() => setConfirmId(w.id)}
+                        >
+                          <IconTrash size={14} />
+                          删除
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -308,6 +293,23 @@ export default function WorkflowPage() {
           </table>
         )}
       </section>
+
+      {/* 删除不可逆：统一走确认弹窗 */}
+      {confirmId && (
+        <ConfirmDialog
+          title="删除这个工作流？"
+          body={
+            <>
+              删除 <b>{items.find((w) => w.id === confirmId)?.name ?? '这个工作流'}</b>
+              ：它的暂存区、全部版本与发布记录一并删掉，不可恢复（正在运行时也会随之停掉）。
+            </>
+          }
+          confirmText="删除"
+          busy={busy}
+          onCancel={() => setConfirmId(null)}
+          onConfirm={() => void remove(confirmId)}
+        />
+      )}
 
       {creating && (
         <WorkflowCreateDialog

@@ -118,12 +118,6 @@
   border-color: var(--danger-line);
   background: var(--danger-bg);
 }
-.solidDanger {
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-
 .empty {
   padding: 28px 18px;
   text-align: center;

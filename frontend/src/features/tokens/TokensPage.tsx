@@ -25,6 +25,7 @@ import {
 import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
+import { ConfirmDialog } from '../../common/ConfirmDialog'
 import {
   IconAlert,
   IconCopy,
@@ -103,6 +104,24 @@ export default function TokensPage() {
       setPending(null)
     }
   }
+
+  /** 确认弹窗里点「确认」：按 pending 的种类跑对应的动作。 */
+  function confirmPending() {
+    if (!pending) return
+    if (pending.kind === 'revoke') {
+      void run(() => revokeToken(pending.id), '令牌已吊销')
+      return
+    }
+    void run(
+      () => kickClient(pending.id, pending.revoke),
+      pending.revoke ? '已断开并吊销令牌' : '已断开连接',
+    )
+  }
+
+  /** 弹窗正文里点名的对象：吊销看令牌、断开看客户端（找不到就退回「这条连接」）。 */
+  const revokeTarget = pending?.kind === 'revoke' ? tokens.find((t) => t.id === pending.id) : null
+  const kickTarget =
+    pending?.kind === 'kick' ? clients.find((c) => c.client_id === pending.id) : null
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -241,8 +260,6 @@ export default function TokensPage() {
             </thead>
             <tbody>
               {clients.map((c) => {
-                const active =
-                  pending?.kind === 'kick' && pending.id === c.client_id ? pending : null
                 return (
                   <tr key={c.client_id}>
                     <td>
@@ -252,50 +269,27 @@ export default function TokensPage() {
                     <td className={`${styles.mono} ${styles.muted}`}>{c.remote}</td>
                     <td className={styles.muted}>{formatTime(c.connected_at)}</td>
                     <td>
-                      {active ? (
-                        <div className={styles.confirm}>
-                          <span className={styles.confirmText}>
-                            {active.revoke ? '断开并吊销它的令牌？' : '断开这条连接？'}
-                          </span>
-                          <button
-                            className={`btn ${styles.solidDanger}`}
-                            disabled={busy}
-                            onClick={() =>
-                              void run(
-                                () => kickClient(c.client_id, active.revoke),
-                                active.revoke ? '已断开并吊销令牌' : '已断开连接',
-                              )
-                            }
-                          >
-                            确认
-                          </button>
-                          <button className="btn" onClick={() => setPending(null)}>
-                            取消
-                          </button>
-                        </div>
-                      ) : (
-                        <div className={styles.rowActions}>
-                          <button
-                            className="btn"
-                            disabled={busy}
-                            onClick={() =>
-                              setPending({ kind: 'kick', id: c.client_id, revoke: false })
-                            }
-                          >
-                            断开
-                          </button>
-                          <button
-                            className={`btn ${styles.danger}`}
-                            disabled={busy}
-                            onClick={() =>
-                              setPending({ kind: 'kick', id: c.client_id, revoke: true })
-                            }
-                          >
-                            <IconTrash size={14} />
-                            断开并吊销
-                          </button>
-                        </div>
-                      )}
+                      <div className={styles.rowActions}>
+                        <button
+                          className="btn"
+                          disabled={busy}
+                          onClick={() =>
+                            setPending({ kind: 'kick', id: c.client_id, revoke: false })
+                          }
+                        >
+                          断开
+                        </button>
+                        <button
+                          className={`btn ${styles.danger}`}
+                          disabled={busy}
+                          onClick={() =>
+                            setPending({ kind: 'kick', id: c.client_id, revoke: true })
+                          }
+                        >
+                          <IconTrash size={14} />
+                          断开并吊销
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -331,7 +325,6 @@ export default function TokensPage() {
             </thead>
             <tbody>
               {tokens.map((t) => {
-                const active = pending?.kind === 'revoke' && pending.id === t.id
                 return (
                   <tr key={t.id}>
                     <td>
@@ -368,34 +361,16 @@ export default function TokensPage() {
                       </div>
                     </td>
                     <td>
-                      {active ? (
-                        <div className={styles.confirm}>
-                          <span className={styles.confirmText}>
-                            吊销后用它连着的客户端会断开？
-                          </span>
-                          <button
-                            className={`btn ${styles.solidDanger}`}
-                            disabled={busy}
-                            onClick={() => void run(() => revokeToken(t.id), '令牌已吊销')}
-                          >
-                            确认
-                          </button>
-                          <button className="btn" onClick={() => setPending(null)}>
-                            取消
-                          </button>
-                        </div>
-                      ) : (
-                        <div className={styles.rowActions}>
-                          <button
-                            className={`btn ${styles.danger}`}
-                            disabled={busy}
-                            onClick={() => setPending({ kind: 'revoke', id: t.id })}
-                          >
-                            <IconTrash size={14} />
-                            吊销
-                          </button>
-                        </div>
-                      )}
+                      <div className={styles.rowActions}>
+                        <button
+                          className={`btn ${styles.danger}`}
+                          disabled={busy}
+                          onClick={() => setPending({ kind: 'revoke', id: t.id })}
+                        >
+                          <IconTrash size={14} />
+                          吊销
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -404,6 +379,42 @@ export default function TokensPage() {
           </table>
         )}
       </section>
+
+      {/* 破坏性操作统一走确认弹窗：吊销 / 断开（并吊销） */}
+      {pending && (
+        <ConfirmDialog
+          title={
+            pending.kind === 'revoke'
+              ? '吊销这个令牌？'
+              : pending.revoke
+                ? '断开并吊销令牌？'
+                : '断开这条连接？'
+          }
+          body={
+            pending.kind === 'revoke' ? (
+              <>
+                吊销 <b>{revokeTarget?.nickname || revokeTarget?.account || '这个令牌'}</b>
+                ：用它连着的客户端会立刻断开，记录被删除、不可恢复（停用可以再启用，吊销不行）。
+              </>
+            ) : pending.revoke ? (
+              <>
+                断开 <b>{kickTarget?.nickname || kickTarget?.id || '这条连接'}</b>
+                ，并把它的令牌一并吊销（不可恢复）。客户端多半会自动重连，但令牌已失效会被拒。
+              </>
+            ) : (
+              <>
+                只断开 <b>{kickTarget?.nickname || kickTarget?.id || '这条连接'}</b>
+                ，不动令牌 —— OneBot 实现通常会自动重连，过几秒它可能又出现在列表里。
+              </>
+            )
+          }
+          confirmText={pending.kind === 'revoke' ? '吊销' : pending.revoke ? '断开并吊销' : '断开'}
+          danger={pending.kind === 'revoke' || pending.revoke}
+          busy={busy}
+          onCancel={() => setPending(null)}
+          onConfirm={() => void confirmPending()}
+        />
+      )}
     </div>
   )
 }

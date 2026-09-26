@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { ApiRequestError, http } from '../../lib/http'
+import { ConfirmDialog } from '../../common/ConfirmDialog'
 import { useAuth } from './authStore'
 import { useToast } from '../../common/Toast'
 import AvatarImage from './AvatarImage'
@@ -52,6 +53,8 @@ export default function ProfilePage() {
   const [uploading, setUploading] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState<{ title: string; detail: string; traceId: string } | null>(null)
+  /** 待确认的动作：改昵称 / 删头像（都要动数据，先问一声） */
+  const [confirm, setConfirm] = useState<'nickname' | 'avatar' | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   /** 从接口拉最新资料（头像信息可能变了）。 */
@@ -97,9 +100,15 @@ export default function ProfilePage() {
   const canSubmitNickname =
     !savingNickname && !nicknameInvalid && nicknameTrimmed !== (profile?.nickname ?? '')
 
-  /** 提交昵称修改。 */
-  async function onSubmitNickname(e: FormEvent) {
+  /** 表单提交：先弹确认，确认后才真的打接口（saveNickname）。 */
+  function onSubmitNickname(e: FormEvent) {
     e.preventDefault()
+    if (!canSubmitNickname) return
+    setConfirm('nickname')
+  }
+
+  /** 真的改昵称。 */
+  async function saveNickname() {
     if (!canSubmitNickname) return
     setSavingNickname(true)
     setError(null)
@@ -120,6 +129,7 @@ export default function ProfilePage() {
       }
     } finally {
       setSavingNickname(false)
+      setConfirm(null)
     }
   }
 
@@ -191,6 +201,7 @@ export default function ProfilePage() {
       }
     } finally {
       setRemoving(false)
+      setConfirm(null)
     }
   }
 
@@ -279,7 +290,7 @@ export default function ProfilePage() {
                     className={`btn ${styles.dangerBtn}`}
                     type="button"
                     disabled={removing}
-                    onClick={() => void onRemoveAvatar()}
+                    onClick={() => setConfirm('avatar')}
                   >
                     {removing ? (
                       <span className={styles.busyInner}>
@@ -377,6 +388,34 @@ export default function ProfilePage() {
           </p>
         </div>
       </div>
+
+      {confirm === 'nickname' && (
+        <ConfirmDialog
+          title="保存昵称？"
+          body={
+            <>
+              展示名称会改成 <b>{nicknameTrimmed}</b>，其他用户立刻能看到（原名
+              「{profile.nickname || '—'}」）。
+            </>
+          }
+          confirmText="保存"
+          danger={false}
+          busy={savingNickname}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => void saveNickname()}
+        />
+      )}
+
+      {confirm === 'avatar' && (
+        <ConfirmDialog
+          title="删除头像？"
+          body={<>头像会被移除，之后显示昵称首字母。此操作不可撤销，但可以重新上传。</>}
+          confirmText="删除头像"
+          busy={removing}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => void onRemoveAvatar()}
+        />
+      )}
     </div>
   )
 }
