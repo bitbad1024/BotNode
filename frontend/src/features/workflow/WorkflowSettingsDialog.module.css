@@ -1,0 +1,188 @@
+/* 工作流设置弹窗：编辑器的一套皮（头部工具栏 + 分段正文 + 底部动作），尺寸只有它一小块 */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(8, 8, 12, 0.5);
+  backdrop-filter: blur(2px);
+  animation: overlayIn 0.16s ease;
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  animation: dialogIn 0.18s var(--ease-out);
+}
+
+/* 头部：与编辑器的 toolbar 同一套（标题在左、关闭在右） */
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 10px 12px 10px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 16px;
+  overflow-y: auto;
+}
+.subject {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 一项设置一块：以后加设置 = 再放一个 .section，其余结构不用动 */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.sectionTitle {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.sectionNote {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.sectionDesc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* 二选一：两块可点的卡片（比一个开关更能说清「选的是哪个」） */
+.choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: border-color 0.14s var(--ease-out), background 0.14s var(--ease-out);
+}
+.choice:hover {
+  border-color: var(--border-strong);
+}
+.choiceOn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+.choiceTitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.radio {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  transition: border-color 0.14s var(--ease-out), box-shadow 0.14s var(--ease-out);
+}
+.choiceOn .radio {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+.choiceDesc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
+.hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.footActions {
+  display: flex;
+  gap: 10px;
+}
+.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

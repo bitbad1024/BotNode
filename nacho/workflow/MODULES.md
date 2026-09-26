@@ -82,7 +82,7 @@ store ──────────────► models
 
 | 名字 | 作用 |
 |---|---|
-| `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针 + **运行开关** `enabled`），`UNIQUE(owner_id, name)` |
+| `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针 + **运行开关** `enabled` + **实例策略** `multi_instance`），`UNIQUE(owner_id, name)` |
 | `WorkflowVersionTable` | `workflow_versions`：每次保存一张**不可变**图快照，`UNIQUE(workflow_id, version)` |
 | `SqlWorkflowStore` | 读写实现：查询走 `AsyncSession`（不手写 SQL；`ensure_schema` 里那一句 `ALTER TABLE` 是给老库补列的迁移，属例外）；按 `owner_id` 隔离 |
 | `WorkflowError` / `WorkflowNameConflict` | 存储层错误（消息直接给人看） |
@@ -91,6 +91,11 @@ store ──────────────► models
 > 要不要真的跑由 `enabled`（运行开关，默认 `False`）说了算 —— 它是**库里的字段**，重启 / 多进程
 > 认的是同一份。老库升级时这一列按 `0` 补（见 `_DEFINITION_ADDED_COLUMNS`），不会因为多了个
 > 开关就突然开始跑。开关怎么拨（接口 / 隔离 / 即时启停）见 `nacho/api/api/workflow/`。
+>
+> **实例策略**（`multi_instance`，就是设置弹窗里的「单实例 / 多实例」，默认 `False`）只管定时
+> 触发**这一拍怎么跑**：上一次还没跑完、到点又到点时，跳过本次（单实例）还是开新实例叠加
+> （多实例）。登记那一趟由 `runtime.register_published_workflow` 读出来交给调度器的
+> `add(..., multi_instance=...)`；老库补列同样按 `0`（单实例）填，升级行为不变。
 
 引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），本模块不建引擎、不读配置。
 

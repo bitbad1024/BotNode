@@ -62,6 +62,7 @@ from .requests import (
     SaveDraftRequest,
     SaveVersionRequest,
     SetEnabledRequest,
+    UpdateSettingsRequest,
     ValidateRequest,
 )
 from .responses import (
@@ -490,6 +491,40 @@ async def set_workflow_enabled(
         workflow_id=record.id,
         enabled=updated.enabled,
         version=updated.published_version,
+        trace_id=trace_id_of(request),
+    )
+    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id_of(request))
+
+
+@router.put("/{workflow_id}/settings")
+async def update_workflow_settings(
+    workflow_id: str,
+    payload: UpdateSettingsRequest,
+    request: Request,
+    store: WorkflowStoreDep,
+    user: CurrentUserDep,
+    triggers: WorkflowTriggersDep,
+) -> ApiResponse[WorkflowData]:
+    """改工作流**设置**（设置弹窗保存时打这里）：现在是「单实例 / 多实例」。
+
+    设置改了**马上生效**：已经在跑的（开关开着 + 已发布）会按新设置**重新登记**一遍 ——
+    登记那一趟会从库里读新值交给调度器（见
+    :func:`nacho.workflow.runtime.register_published_workflow`）；登记本身幂等，同名旧任务
+    会被换成新的那个。还没发布 / 开关关着的就只落库，等拨开关时生效。
+    """
+    record = await get_in_scope(store, user, workflow_id)
+    updated = await store.update_settings(record.id, multi_instance=payload.multi_instance)
+    if updated is None:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR, "没有这个工作流", status_code=status.HTTP_404_NOT_FOUND
+        )
+    if triggers is not None and updated.enabled and updated.published_version > 0:
+        await triggers.start(updated.id, updated.published_version)
+    _audit(
+        "工作流设置已更新",
+        owner_id=record.owner_id,
+        workflow_id=record.id,
+        multi_instance=updated.multi_instance,
         trace_id=trace_id_of(request),
     )
     return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id_of(request))

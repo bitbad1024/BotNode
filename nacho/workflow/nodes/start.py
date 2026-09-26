@@ -150,7 +150,8 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
       的单实例保护也一并失效了。
 
     登记的 task_id 由 :func:`workflow_task_id` 定（``wf-<工作流 id>-<节点 id>``）。登记是幂等
-    的：先移除同名旧任务再添加，改 cron / 改名字后重复登记不会残留旧任务。
+    的：先移除同名旧任务再添加，改 cron / 改名字后重复登记不会残留旧任务。实例策略（单实例 /
+    多实例）是**工作流设置**，经 ``ctx.multi_instance`` 传进来后交给调度器的 ``add``。
     """
     cron = str(node.config.get("cron", "")).strip()
     name = str(node.config.get("name", node.id))
@@ -182,6 +183,7 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
         task_id=task_id,
         name=name,
         description=f"工作流开始节点（时间触发）{node.id}",
+        multi_instance=ctx.multi_instance,  # 工作流设置：单实例（缺省）/ 多实例
     )
     ctx.logger.info(
         f"[start:{node.id}] 已登记到调度器",

@@ -1514,11 +1514,36 @@ async def test_definition_enabled_defaults_off_and_toggles() -> None:
         await engine.dispose()
 
 
-async def test_old_definition_table_gets_the_enabled_column() -> None:
-    """老库（建表时还没有 enabled 列）在 ``ensure_schema`` 时补上，老数据按「不跑」填 0。
+async def test_definition_settings_default_single_instance_and_update() -> None:
+    """工作流**设置**（实例策略）：新建默认**单实例**，能改成多实例再改回来；不存在返回 ``None``。
 
-    补列不能让升级上来的库突然开始跑 —— 所以 ALTER 的默认值必须是 0（见 store 的
-    ``_DEFINITION_ADDED_COLUMNS``）。
+    设置与运行开关 / 发布指针各管各的：改设置不该顺手动了那两样。
+    """
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    try:
+        await store.ensure_schema()
+        created = await store.create("u-admin", "设置流")
+        assert created.multi_instance is False  # 默认单实例
+
+        updated = await store.update_settings(created.id, multi_instance=True)
+        assert updated is not None and updated.multi_instance is True
+        stored = await store.get(created.id)
+        assert stored is not None and stored.multi_instance is True  # 真写进去了
+        assert stored.enabled is False  # 只碰设置：开关没被顺手拨开
+
+        back = await store.update_settings(created.id, multi_instance=False)
+        assert back is not None and back.multi_instance is False
+        assert await store.update_settings("not-exist", multi_instance=True) is None
+    finally:
+        await engine.dispose()
+
+
+async def test_old_definition_table_gets_the_added_columns() -> None:
+    """老库（建表时还没有 enabled / multi_instance 列）在 ``ensure_schema`` 时补上，都填 0。
+
+    补列不能让升级上来的库突然开始跑、也不能让定时任务突然变成多实例 —— 所以 ALTER 的默认值
+    取「关」和「单实例」（见 store 的 ``_DEFINITION_ADDED_COLUMNS``）。
     """
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
@@ -1542,6 +1567,7 @@ async def test_old_definition_table_gets_the_enabled_column() -> None:
         old = await store.get("wf-old")
         assert old is not None
         assert old.enabled is False  # 升级上来默认「不跑」
+        assert old.multi_instance is False  # 实例策略默认「单实例」
         assert old.published_version == 1  # 别的列没被碰
     finally:
         await engine.dispose()
@@ -1905,6 +1931,45 @@ async def test_load_published_workflows_registers_crons() -> None:
         await engine.dispose()
 
 
+async def test_load_published_workflows_passes_the_instance_strategy_to_the_scheduler() -> None:
+    """实例策略是**工作流设置**（定义表里的列）：登记时传给调度器，单 / 多实例各按各的。
+
+    调度器靠 ``Task.multi_instance`` 决定「上一次还没跑完、到点又到点」时是跳过本次还是开新
+    实例，所以这条断言的是「设置真的落到了那个任务上」——登记那一趟读定义表，见
+    :func:`nacho.workflow.runtime.register_published_workflow`。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    plain = await store.create("u-admin", "单实例流")
+    stacked = await store.create("u-admin", "多实例流")
+    for definition in (plain, stacked):
+        await store.add_version(
+            definition,
+            graph_json=canonical_graph_json(graph),
+            checksum=graph_checksum(graph),
+        )
+        assert await store.publish(definition.id, 1) is not None
+        assert await store.set_enabled(definition.id, True) is not None
+    assert await store.update_settings(stacked.id, multi_instance=True) is not None
+
+    scheduler = TaskManager()
+    try:
+        assert await load_published_workflows(store, scheduler) == 2
+        assert scheduler.get(f"wf-{plain.id}-s").multi_instance is False  # 缺省单实例
+        assert scheduler.get(f"wf-{stacked.id}-s").multi_instance is True
+    finally:
+        await engine.dispose()
+
+
 async def test_load_published_workflows_registers_without_running_the_graph() -> None:
     """启动载入**只登记、不执行图**：下游节点一个都不许跑。
 
@@ -2139,6 +2204,60 @@ async def test_api_enabled_switch_and_published_snapshot() -> None:
         )
         assert turned_off.json()["data"]["enabled"] is False
         assert triggers.calls[-1] == ("stop", workflow_id, 1)
+
+
+async def test_api_workflow_settings_apply_and_reregister() -> None:
+    """设置接口：改「实例策略」落库并回在响应里；**已经在跑的**会即时按新设置重新登记。
+
+    这里用假触发器记账 —— 验的是接口层在设置变化后有没有按已发布版本重新登记；
+    「新设置真的传给了调度器」由运行时那条用例（真调度器）覆盖。
+    """
+    triggers = FakeTriggers()
+    async with api_client(api_app_with_triggers(triggers)) as client:
+        token = await login(client, ADMIN)
+        created = await client.post(
+            "/api/workflows", headers=auth(token), json={"name": "设置流"}
+        )
+        workflow_id = created.json()["data"]["id"]
+        assert created.json()["data"]["multi_instance"] is False  # 新建就是单实例
+
+        # 还没发布 / 开关关着：只落库，不碰触发器
+        saved = await client.put(
+            f"/api/workflows/{workflow_id}/settings",
+            headers=auth(token),
+            json={"multi_instance": True},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["data"]["multi_instance"] is True
+        assert triggers.calls == []
+
+        detail = await client.get(f"/api/workflows/{workflow_id}", headers=auth(token))
+        assert detail.json()["data"]["multi_instance"] is True  # 读回来也是新值
+
+        # 发布 + 拨开开关：按已发布版本登记一次
+        await client.post(
+            f"/api/workflows/{workflow_id}/versions",
+            headers=auth(token),
+            json={"graph": _timed_graph(), "note": "首版"},
+        )
+        await client.post(
+            f"/api/workflows/{workflow_id}/publish", headers=auth(token), json={}
+        )
+        await client.put(
+            f"/api/workflows/{workflow_id}/enabled",
+            headers=auth(token),
+            json={"enabled": True},
+        )
+        assert triggers.calls == [("start", workflow_id, 1)]
+
+        # 正在跑的时候改设置：即时按新设置重新登记一遍（登记幂等，同名任务被换掉）
+        again = await client.put(
+            f"/api/workflows/{workflow_id}/settings",
+            headers=auth(token),
+            json={"multi_instance": False},
+        )
+        assert again.json()["data"]["multi_instance"] is False
+        assert triggers.calls == [("start", workflow_id, 1), ("start", workflow_id, 1)]
 
 
 async def test_api_enabled_switch_and_snapshot_are_owner_scoped() -> None:

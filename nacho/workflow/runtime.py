@@ -129,6 +129,8 @@ async def register_published_workflow(
 
     graph = record.graph()
     starts = set(start_ids(graph.nodes))
+    # 实例策略是**工作流级设置**（定义表里的列），与图无关：登记时读一次，由开始节点带给调度器
+    definition = await store.get(workflow_id)
     # 登记时给的到点回调是「跑整条流程」那个（与到点触发同一条路）；
     # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
@@ -136,6 +138,7 @@ async def register_published_workflow(
         run=make_trigger(workflow_id, version, store, scheduler),
         workflow_id=workflow_id,
         register_triggers=True,
+        multi_instance=definition.multi_instance if definition is not None else False,
     )
     primed = 0
     for node in graph.nodes:

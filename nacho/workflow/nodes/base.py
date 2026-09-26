@@ -173,7 +173,10 @@ class NodeExecutionContext:
         ctx 时是 :data:`NO_WORKFLOW_ID`；
     :param register_triggers: 本次是不是「登记触发」那一趟（拨运行开关 / 启动载入 / 发布新版
         走的都是这一趟）：时间触发的 start 节点只有这时才去调度器加任务；整图执行（cron 到点
-        跑整条流程）是 ``False`` —— 任务在调度器里排着，它自己会排下一次。
+        跑整条流程）是 ``False`` —— 任务在调度器里排着，它自己会排下一次；
+    :param multi_instance: 这条工作流的**实例策略**（工作流设置里的「单实例 / 多实例」，来自
+        定义表，与图无关）：``False``（缺省，单实例）上一次还没跑完就跳过本次；``True``（多实例）
+        到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）。
     """
 
     def __init__(
@@ -184,6 +187,7 @@ class NodeExecutionContext:
         run: Callable[[], Awaitable[None]] | None = None,
         workflow_id: str = NO_WORKFLOW_ID,
         register_triggers: bool = False,
+        multi_instance: bool = False,
     ) -> None:
         self.inputs: dict[str, Any] = {}
         self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
@@ -191,6 +195,8 @@ class NodeExecutionContext:
         self.workflow_id: str = workflow_id
         #: 本次是不是「登记触发」那一趟（见类文档）；整图执行时为 ``False``
         self.register_triggers: bool = register_triggers
+        #: 实例策略：多实例时到点就开新实例（见类文档）
+        self.multi_instance: bool = multi_instance
         self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run

@@ -58,3 +58,19 @@ class SetEnabledRequest(_Mutable):
     """
 
     enabled: bool = Field(description="true = 跑起来（登记定时触发）；false = 停下来")
+
+
+class UpdateSettingsRequest(_Mutable):
+    """改工作流**设置**（现在只有「实例策略」一项）。
+
+    以后再加设置就往这个请求体里加字段（``_Mutable`` 允许额外字段，前端先发也不会 422），
+    存储侧跟着补列 / 补关键字参数即可 —— 弹窗那边是一组「一个设置一块」的结构，加一块就行。
+    """
+
+    multi_instance: bool = Field(
+        default=False,
+        description=(
+            "实例策略：false = 单实例（上一次还没跑完就跳过本次）；"
+            "true = 多实例（到点就开新实例，允许叠加）"
+        ),
+    )
