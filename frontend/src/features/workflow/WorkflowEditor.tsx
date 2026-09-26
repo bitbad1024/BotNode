@@ -183,10 +183,12 @@ function triggerOptionsOf(): string[] {
 // --------------------------------------------------------------------------- 布局常量
 
 const NODE_W = 168
-const HEADER_H = 30
-const PORT_ROW_H = 22
-const CONST_GAP = 5
-const CONST_ROW_H = 18
+const HEADER_H = 34
+const PORT_ROW_H = 24
+// 常量区只服务于「框选命中估算」（卡片高度本身已由内容撑开）：按每个胶囊独占一行的
+// 宽裕口径算，框选宁多勿漏
+const CONST_GAP = 13
+const CONST_ROW_H = 22
 
 function nodeHeight(def: NodeTypeDef): number {
   const portRows = Math.max(def.inputs.length, def.outputs.length)
@@ -217,6 +219,15 @@ function portAbsPos(
   const y = pos.y + portCenterY(def, direction, portId)
   const x = direction === 'in' ? pos.x : pos.x + NODE_W
   return { x, y }
+}
+
+/**
+ * 连线的贝塞尔路径：水平控制点让线平滑绕行（目标在左边也画得出自然的 S 形）。
+ * 控制点偏移随水平距离伸缩，太近也不小于 36px，保证曲线不塌成直角。
+ */
+function edgeCurve(x1: number, y1: number, x2: number, y2: number): string {
+  const bend = Math.min(120, Math.max(36, Math.abs(x2 - x1) / 2))
+  return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`
 }
 
 // --------------------------------------------------------------------------- 工具
@@ -324,6 +335,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [zoom, setZoom] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [boxSel, setBoxSel] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+  /** 节点右键菜单：视口坐标 + 这一次要操作的节点集合 */
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null)
   /**
    * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
    * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
@@ -332,9 +345,22 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [catalogFailed, setCatalogFailed] = useState(false)
 
   const canvasRef = useRef<HTMLDivElement>(null)
-  const dragRef = useRef<{ nodeId: string; offsetX: number; offsetY: number } | null>(null)
+  /** 拖节点：offset 是指针相对主节点左上角的偏移；starts 是整组（含主节点）的起始坐标快照 */
+  const dragRef = useRef<{
+    nodeId: string
+    offsetX: number
+    offsetY: number
+    starts: Record<string, { x: number; y: number }>
+  } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
   const boxRef = useRef<{ startX: number; startY: number } | null>(null)
+  /** 本次空白拖拽是否已越过阈值进入框选（松手时区分「点了一下」与「框选完」） */
+  const boxMovedRef = useRef(false)
+  /** 框选结束的松手会被浏览器补发一发 click，用它立牌子吞掉（见 onCanvasMouseUp） */
+  const suppressClickRef = useRef(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  /** 本次右键是否真的拖动过画布（拖过就不弹节点右键菜单） */
+  const panMovedRef = useRef(false)
   /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
   const connectRef = useRef<{
     nodeId: string
@@ -366,12 +392,33 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     return map
   }, [graph.nodes])
 
-  /** 拖节点：直接改节点 x/y（随暂存 / 提交一起持久化）。 */
-  const moveNode = useCallback((id: string, x: number, y: number) => {
+  /** 拖节点（一次可挪一批，组拖动用）：直接改节点 x/y（随暂存 / 提交一起持久化）。 */
+  const moveNodes = useCallback((next: Record<string, { x: number; y: number }>) => {
     setGraph((g) => ({
       ...g,
-      nodes: g.nodes.map((n) => (n.id === id ? { ...n, x, y } : n)),
+      nodes: g.nodes.map((n) => {
+        const p = next[n.id]
+        return p ? { ...n, x: p.x, y: p.y } : n
+      }),
     }))
+  }, [])
+
+  /**
+   * 提到图层最上：把节点挪到数组末尾（渲染序 = DOM 序 = 图层序）。
+   * 不是临时样式——松手 / 取消选中后顺序依然保持，并随暂存一起保存。
+   */
+  const bringToFront = useCallback((ids: Iterable<string>) => {
+    const set = new Set(ids)
+    if (set.size === 0) return
+    setGraph((g) => {
+      const front = g.nodes.filter((n) => set.has(n.id))
+      if (front.length === 0) return g
+      const rest = g.nodes.filter((n) => !set.has(n.id))
+      const next = [...rest, ...front]
+      // 本来就在末尾（相对顺序没变）就不动，省一次重渲染
+      if (next.every((n, i) => n === g.nodes[i])) return g
+      return { ...g, nodes: next }
+    })
   }, [])
 
   /** 拉节点目录：面板 / 端口 / 配置字段都按它渲染（只读后端内存里那张注册表，不碰库）。 */
@@ -458,14 +505,24 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [selectedId],
   )
 
-  const deleteSelected = useCallback(() => {
-    if (selectedIds.size === 0) return
+  /** 按 id 批量删除节点（连带两端连线），并清理指向它们的选中态。Delete 键 / 右键菜单共用。 */
+  const deleteNodesByIds = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
     setGraph((g) => ({
-      nodes: g.nodes.filter((n) => !selectedIds.has(n.id)),
-      edges: g.edges.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)),
+      nodes: g.nodes.filter((n) => !set.has(n.id)),
+      edges: g.edges.filter((e) => !set.has(e.source) && !set.has(e.target)),
     }))
-    setSelectedIds(new Set())
-  }, [selectedIds])
+    setSelectedIds((cur) => {
+      const next = new Set([...cur].filter((id) => !set.has(id)))
+      return next.size === cur.size ? cur : next
+    })
+    setSelectedId((cur) => (cur && set.has(cur) ? null : cur))
+  }, [])
+
+  const deleteSelected = useCallback(() => {
+    deleteNodesByIds([...selectedIds])
+  }, [deleteNodesByIds, selectedIds])
 
   // Delete 键批量删除
   useEffect(() => {
@@ -480,6 +537,24 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedIds, deleteSelected])
+
+  // 右键菜单：点别处（或按 Esc）关闭
+  useEffect(() => {
+    if (!ctxMenu) return
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return
+      setCtxMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [ctxMenu])
 
   const deleteEdge = useCallback((edge: WorkflowEdge) => {
     setGraph((g) => ({
@@ -559,7 +634,22 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }))
   }, [])
 
-  // ---- 拖拽节点 ----
+  // ---- 右键菜单 ----
+  /** 右键节点：点在框选集合内 = 对整组操作；集合外 = 先让它成为当前选择（只它一个） */
+  const openNodeMenu = (e: React.MouseEvent, nodeId: string) => {
+    let ids: string[]
+    if (selectedIds.has(nodeId)) {
+      ids = [...selectedIds]
+      setSelectedId(nodeId)
+    } else {
+      ids = [nodeId]
+      setSelectedId(nodeId)
+      if (selectedIds.size > 0) setSelectedIds(new Set())
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY, ids })
+  }
+
+  // ---- 拖拽节点（按住框选组里的节点 = 整组一起挪）----
   const onNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
     if (e.button !== 0) return // 非左键交给画布处理（右键平移）
     if ((e.target as HTMLElement).dataset.role === 'port') return
@@ -567,18 +657,27 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
     const pos = positions[nodeId] ?? { x: 0, y: 0 }
+    // 按住的节点在框选集合里 → 整组一起拖；不在则框选让位，只拖它自己
+    const group = selectedIds.has(nodeId) ? [...selectedIds] : [nodeId]
+    if (selectedIds.size > 0 && !selectedIds.has(nodeId)) setSelectedIds(new Set())
+    const starts: Record<string, { x: number; y: number }> = {}
+    for (const id of group) starts[id] = positions[id] ?? { x: 0, y: 0 }
     dragRef.current = {
       nodeId,
       offsetX: (e.clientX - rect.left - pan.x) / zoom - pos.x,
       offsetY: (e.clientY - rect.top - pan.y) / zoom - pos.y,
+      starts,
     }
     setSelectedId(nodeId)
+    // 图层固化：按住的这组提到数组末尾（松手 / 取消选中后不再落回原层）
+    bringToFront(group)
   }
 
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
-      // 右键：开始平移
+      // 右键：开始平移（动没动过留给 panMovedRef 记，松手时决定弹不弹节点菜单）
       e.preventDefault()
+      panMovedRef.current = false
       panRef.current = {
         startX: e.clientX,
         startY: e.clientY,
@@ -600,6 +699,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (!rect) return
     if (panRef.current) {
       const { startX, startY, panX, panY } = panRef.current
+      if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 3) panMovedRef.current = true
       setPan({ x: panX + (e.clientX - startX), y: panY + (e.clientY - startY) })
       return
     }
@@ -610,6 +710,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       const dy = y - boxRef.current.startY
       // 拖动超过阈值才显示框选
       if (!boxSel && Math.abs(dx) < 5 && Math.abs(dy) < 5) return
+      boxMovedRef.current = true
       if (!boxSel) {
         setBoxSel({ x0: boxRef.current.startX, y0: boxRef.current.startY, x1: x, y1: y })
       } else {
@@ -634,8 +735,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       return
     }
     if (dragRef.current) {
-      const { nodeId, offsetX, offsetY } = dragRef.current
-      moveNode(nodeId, x - offsetX, y - offsetY)
+      const { nodeId, offsetX, offsetY, starts } = dragRef.current
+      // 以主节点的位移为准，整组同步平移（各成员相对布局保持不变）
+      const anchor = starts[nodeId] ?? { x: 0, y: 0 }
+      const dx = x - offsetX - anchor.x
+      const dy = y - offsetY - anchor.y
+      const next: Record<string, { x: number; y: number }> = {}
+      for (const [id, s] of Object.entries(starts)) next[id] = { x: s.x + dx, y: s.y + dy }
+      moveNodes(next)
     }
     if (connectRef.current) {
       setConnectCursor({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom })
@@ -659,15 +766,18 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }
 
   const onCanvasMouseUp = () => {
-    // 如果没拖出框选，是普通点击——交给 onClick 取消选中
-    if (boxRef.current && !boxSel) {
-      boxRef.current = null
-      return
+    // 真正拖出过框选：松手后浏览器会补发一发 click，先立牌子让 onClick 跳过清空，
+    // 否则刚框选中的节点会被它故意清掉（普通点击不立牌子——那发 click 正是取消选中要用的）
+    if (boxRef.current && boxMovedRef.current) {
+      suppressClickRef.current = true
+      // 框选收尾：整组固化到图层末尾（相对顺序保持原样）
+      bringToFront(selectedIds)
     }
     dragRef.current = null
     connectRef.current = null
     panRef.current = null
     boxRef.current = null
+    boxMovedRef.current = false
     setConnectCursor(null)
     setBoxSel(null)
   }
@@ -991,6 +1101,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           onMouseUp={onCanvasMouseUp}
           onWheel={onCanvasWheel}
           onClick={() => {
+            // 框选刚结束的那发补发 click 不算「点空白」：留着刚框中的选中
+            if (suppressClickRef.current) {
+              suppressClickRef.current = false
+              return
+            }
             setSelectedId(null)
             setSelectedIds(new Set())
           }}
@@ -1029,10 +1144,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
                   return (
                     <g key={i}>
-                      <line
-                        x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2}
+                      <path
+                        d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
+                        fill="none"
                         stroke={color}
                         strokeWidth="2"
+                        strokeLinecap="round"
                       />
                       <circle
                         cx={(c.x1 + c.x2) / 2}
@@ -1052,12 +1169,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   if (!start || !connectCursor) return null
                   const color = connectRef.current ? PORT_COLORS[connectRef.current.portType] : 'var(--accent)'
                   return (
-                    <line
-                      x1={start.x} y1={start.y}
-                      x2={connectCursor.x} y2={connectCursor.y}
+                    <path
+                      d={edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y)}
+                      fill="none"
                       stroke={color}
                       strokeWidth="2"
-                      strokeDasharray="6 4"
+                      strokeDasharray="6 5"
+                      strokeLinecap="round"
                     />
                   )
                 })()}
@@ -1066,19 +1184,25 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               {graph.nodes.map((node) => {
                 const def = nodeDef(node.type, node.config)
                 const pos = positions[node.id] ?? { x: 0, y: 0 }
-                const h = nodeHeight(def)
                 const hasError = errorByNode.has(node.id)
                 const portRows = Math.max(def.inputs.length, def.outputs.length)
                 return (
                   <div
                     key={node.id}
                     className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${selectedIds.has(node.id) ? styles.boxSelected : ''} ${hasError ? styles.hasError : ''}`}
-                    style={{ left: pos.x, top: pos.y, width: NODE_W, height: h }}
+                    style={{ left: pos.x, top: pos.y, width: NODE_W, '--c': def.color } as React.CSSProperties}
                     onMouseDown={(e) => onNodeMouseDown(e, node.id)}
                     onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      // 右键拖动平移刚结束的那一发：不弹菜单
+                      if (panMovedRef.current) return
+                      openNodeMenu(e, node.id)
+                    }}
                   >
                     {/* 头部：色条 + 标签 */}
-                    <div className={styles.nodeHeader} style={{ '--c': def.color } as React.CSSProperties}>
+                    <div className={styles.nodeHeader}>
                       <span className={styles.nodeColorBar} style={{ background: def.color }} />
                       <span className={styles.nodeLabel}>{def.label}</span>
                     </div>
@@ -1097,13 +1221,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   <span
                     data-role="port"
                     className={styles.portCircle}
-                    style={{ left: -7, borderColor: PORT_COLORS[inp.type], background: PORT_COLORS[inp.type] }}
+                    style={{ left: -5, background: PORT_COLORS[inp.type] }}
                     onMouseDown={(e) => onPortMouseDown(e, node.id, inp.id, inp.type, 'in')}
                     onMouseUp={(e) => onPortMouseUp(e, node.id, inp.id, inp.type, 'in')}
                   />
-                  <span className={styles.portLabel} style={{ color: PORT_COLORS[inp.type] }}>
-                    {inp.label}
-                  </span>
+                  <span className={styles.portLabel}>{inp.label}</span>
                 </>
               )}
                             </div>
@@ -1111,13 +1233,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                             <div className={styles.portSideRight}>
               {out && (
                 <>
-                  <span className={styles.portLabel} style={{ color: PORT_COLORS[out.type] }}>
-                    {out.label}
-                  </span>
+                  <span className={styles.portLabel}>{out.label}</span>
                   <span
                     data-role="port"
                     className={styles.portCircle}
-                    style={{ right: -7, borderColor: PORT_COLORS[out.type], background: PORT_COLORS[out.type] }}
+                    style={{ right: -5, background: PORT_COLORS[out.type] }}
                     onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
                     onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
                   />
@@ -1165,6 +1285,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 const y = Math.min(boxSel.y0, boxSel.y1)
                 const w = Math.abs(boxSel.x1 - boxSel.x0)
                 const h = Math.abs(boxSel.y1 - boxSel.y0)
+                // 蒙层渲染在节点之后（DOM 序天然在最上），不需要 z-index
                 return (
                   <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
                     <rect x={x} y={y} width={w} height={h}
@@ -1372,6 +1493,30 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         </aside>
         )}
       </div>
+
+      {/* 节点右键菜单：fixed 定位（视口坐标），点别处 / Esc 关闭 */}
+      {ctxMenu && (
+        <div
+          ref={menuRef}
+          className={styles.ctxMenu}
+          style={{
+            left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 200)),
+            top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 52)),
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button
+            className={`${styles.ctxMenuItem} ${styles.ctxMenuItemDanger}`}
+            onClick={() => {
+              deleteNodesByIds(ctxMenu.ids)
+              setCtxMenu(null)
+            }}
+          >
+            <IconTrash size={14} />
+            {ctxMenu.ids.length > 1 ? `删除选中的 ${ctxMenu.ids.length} 个节点` : '删除节点'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

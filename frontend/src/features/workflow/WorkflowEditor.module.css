@@ -197,51 +197,61 @@
 /* 节点 */
 .node {
   position: absolute;
-  border-radius: var(--r-md);
-  border: 1.5px solid var(--border-strong);
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
   background: var(--surface);
   cursor: grab;
   user-select: none;
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: border-color 0.18s var(--ease-out);
   display: flex;
   flex-direction: column;
   overflow: visible;
+  /* 独立层叠上下文：端口圆点的 z-index 只在卡片内生效，
+     重叠时节点整体按 DOM 顺序堆叠，圆点不会穿透到其它节点上面 */
+  isolation: isolate;
 }
 .node:active {
   cursor: grabbing;
 }
-.node.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+/* 悬停：边框带上类型色（--c 由节点内联传入） */
+.node:hover {
+  border-color: color-mix(in srgb, var(--c, var(--accent)) 42%, var(--border-strong));
 }
+/* 点选 / 框选统一样式：只变边框色（不加光圈阴影） */
+.node.selected,
 .node.boxSelected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .node.hasError {
   border-color: var(--danger);
+  /* 错误态保留红色光圈（状态提示），投影随卡片一起去掉 */
+  box-shadow: 0 0 0 3px var(--danger-bg);
 }
 
-/* 节点头部 */
+/* 节点头部：类型色圆点 + 顶部一抹同色渐变 */
 .nodeHeader {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px 0 0;
+  gap: 8px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
+  border-radius: 11px 11px 0 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, transparent), transparent 82%);
   position: relative;
 }
 .nodeColorBar {
-  width: 5px;
-  height: 100%;
-  border-radius: var(--r-md) 0 0 var(--r-md);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 16%, transparent);
 }
 .nodeLabel {
   font-size: 13px;
   font-weight: 600;
-  padding-left: 8px;
+  letter-spacing: 0.01em;
 }
 
 /* 端口区 */
@@ -253,38 +263,46 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px;
+  padding: 0 10px;
   position: relative;
+  flex-shrink: 0;
 }
 .portSide {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 22px;
+  min-height: 24px;
 }
 .portSideRight {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 22px;
+  min-height: 24px;
 }
+/* 端口圆点：实心类型色 + 表面色描边，悬停放大 */
 .portCircle {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  border: 2px solid;
+  border: 2px solid var(--surface);
   cursor: crosshair;
   z-index: 2;
-  transition: transform 0.1s ease;
+  transition: transform 0.12s var(--ease-out);
 }
 .portCircle:hover {
-  transform: scale(1.4);
+  transform: scale(1.35);
 }
+/* 端口标签弱化为次要信息（类型靠圆点颜色区分），悬停整行时加深 */
 .portLabel {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
+  color: var(--text-3);
   white-space: nowrap;
+  transition: color 0.12s ease;
+}
+.portRow:hover .portLabel {
+  color: var(--text-2);
 }
 
 /* 常量区 */
@@ -292,15 +310,18 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 4px 8px;
-  border-top: 1px dashed var(--border);
+  padding: 5px 9px 7px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .constPill {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 6px;
-  border-radius: 999px;
+  gap: 4px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border-radius: 6px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   font-size: 10px;
@@ -308,10 +329,12 @@
 }
 .constKey {
   color: var(--text-3);
-  font-weight: 600;
+  font-weight: 500;
+  font-family: var(--font-mono);
 }
 .constVal {
   color: var(--text-2);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -320,19 +343,21 @@
 /* 错误角标 */
 .errorBadge {
   position: absolute;
-  top: -8px;
-  right: -8px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  top: -7px;
+  right: -7px;
+  box-sizing: border-box;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
   border-radius: 9px;
   background: var(--danger);
   color: #fff;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 2px solid var(--surface-2);
 }
 
 .empty {
@@ -554,4 +579,41 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 节点右键菜单 */
+.ctxMenu {
+  position: fixed;
+  z-index: 40;
+  min-width: 152px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+.ctxMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+}
+.ctxMenuItem:hover {
+  background: var(--surface-2);
+}
+.ctxMenuItemDanger {
+  color: var(--danger);
+}
+.ctxMenuItemDanger:hover {
+  background: var(--danger-bg);
 }
