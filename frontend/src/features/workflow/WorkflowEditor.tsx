@@ -66,6 +66,9 @@ const PORT_COLORS: Record<PortType, string> = {
   message: '#3b82f6',
 }
 
+//: 边没写端口时的口径：按「触发 -> 触发」读（与后端 graph.DEFAULT_EDGE_PORT 一致）
+const DEFAULT_PORT = 'trigger'
+
 //: 节点配色（皮肤）：后端只给类型名与显示名，颜色由这里定
 const NODE_COLORS: Record<string, string> = {
   start: '#22c55e',
@@ -88,9 +91,9 @@ interface NodeTypeDef {
   defaults: Record<string, unknown>
   inputs: PortSpec[]
   outputs: PortSpec[]
-  /** 卡片底部的常量条：后端声明的字段里，名字**不是**端口的那些 */
+  /** 卡片底部的字段条：后端声明的字段里，名字**不是**端口的那些（手填值，照实显示） */
   constants: string[]
-  /** 配置面板照它渲染（同样不含端口同名字段——那些交给端口交互） */
+  /** 配置面板照它渲染（含与端口同名的字段：那是「没接线时的手填兜底」） */
   fields: NodeFieldSpec[]
 }
 
@@ -104,7 +107,9 @@ function installCatalog(nodes: NodeTypeSpec[]): NodeTypeSpec[] {
 }
 
 /** 后端没登记这个类型时的兜底端口：能画、能接线，保存时被 ``UNKNOWN_NODE_TYPE`` 拦下。 */
-const UNKNOWN_PORTS: PortSpec[] = [{ id: 'trigger', type: 'trigger', label: '触发' }]
+const UNKNOWN_PORTS: PortSpec[] = [
+  { id: 'trigger', type: 'trigger', label: '触发', required: false },
+]
 
 /**
  * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序全部来自后端目录，前端只补颜色，
@@ -133,16 +138,17 @@ function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
     defaults,
     inputs: spec.inputs,
     outputs: spec.outputs,
-    // 卡片底部的常量条：与端口同名的字段（log 的 message）是**消息入口**，卡片上不重复显示
+    // 卡片底部的字段条：与端口同名的字段（log 的 message）是**数据入口**，值从线上来，
+    // 卡片上不重复显示；其余字段（level / method / timeout / value…）是手填值，照实显示
     constants: spec.fields
       .filter((field) => !portIds.has(field.name))
       .map((field) => field.name),
-    // 配置面板**照单全收**：message 既是端口又是必填配置，必须能填（滤掉就永远填不上了）
+    // 配置面板**照单全收**：与端口同名的字段也要能填 —— 那是「没接线时的手填兜底」
     fields: [...spec.fields],
   }
 
   if (spec.type === 'start') {
-    // 例外一：时间形态只出触发端口，卡片上只显示 cron（message 形态两者都不显示）
+    // 例外：时间形态只出触发端口，卡片上只显示 cron（消息形态两者都不显示）
     if (config?.trigger !== 'time') return { ...base, constants: [] }
     return {
       ...base,
@@ -151,10 +157,6 @@ function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
       outputs: base.outputs.filter((port) => port.id === 'trigger'),
       constants: ['cron'],
     }
-  }
-  if (spec.type === 'constant') {
-    // 例外二：常量节点的「常量」就是它的 config，几个键就在卡片上排几条（高度跟着长）
-    return { ...base, constants: Object.keys(config ?? {}) }
   }
   return base
 }
@@ -255,8 +257,8 @@ function emptyGraph(): WorkflowGraph {
 /**
  * 后端形态归一：边的端口字段后端是 source_port/target_port，统一成前端用的驼峰写法。
  *
- * （旧版独立 time-trigger 节点并入 start 的迁移已随旧快照一起删掉了 —— 现在只可能是
- * start + config.trigger=time，见 nodes/start.py。）
+ * 端口留空不在这里补：后端按 ``trigger`` 读（只表达先后的边），画布照同一口径显示 ——
+ * 见 :data:`DEFAULT_PORT`。
  */
 function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
   const normEdge = (e: WorkflowEdge): WorkflowEdge => ({
@@ -267,52 +269,6 @@ function normalizeGraph(g: WorkflowGraph): WorkflowGraph {
   })
 
   return { nodes: g.nodes, edges: g.edges.map(normEdge) }
-}
-
-/**
- * 坐标迁移：旧版坐标只存在 localStorage，节点自身没 x/y。加载旧图时把本地坐标
- * 补到节点上（下次暂存 / 提交就随图持久化到后端）；节点已带坐标的以图里的为准。
- */
-function withLegacyPositions(
-  g: WorkflowGraph,
-  legacy: Record<string, { x: number; y: number }>,
-): WorkflowGraph {
-  return {
-    ...g,
-    nodes: g.nodes.map((n) => {
-      if (typeof n.x === 'number' && typeof n.y === 'number') return n
-      const p = legacy[n.id]
-      return p ? { ...n, x: p.x, y: p.y } : n
-    }),
-  }
-}
-
-function posKey(workflowId: string): string {
-  return `nacho.workflow.pos.${workflowId}`
-}
-
-/** 读旧版本地坐标（仅用于迁移；新坐标随图存取，不再写 localStorage）。 */
-function loadPositions(workflowId: string): Record<string, { x: number; y: number }> {
-  try {
-    const raw = localStorage.getItem(posKey(workflowId))
-    return raw ? (JSON.parse(raw) as Record<string, { x: number; y: number }>) : {}
-  } catch {
-    return {}
-  }
-}
-
-/** 为没有端口信息的旧边推断端口（取第一个类型匹配的端口对）。 */
-function inferPorts(srcType: string, tgtType: string): { sourcePort: string; targetPort: string } | null {
-  const srcDef = nodeDef(srcType)
-  const tgtDef = nodeDef(tgtType)
-  for (const out of srcDef.outputs) {
-    for (const inp of tgtDef.inputs) {
-      if (out.type === inp.type) {
-        return { sourcePort: out.id, targetPort: inp.id }
-      }
-    }
-  }
-  return null
 }
 
 function truncate(s: string, max: number): string {
@@ -408,23 +364,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   } | null>(null)
   const [connectCursor, setConnectCursor] = useState<{ x: number; y: number } | null>(null)
 
-  /** 旧版本地坐标（仅迁移用一次）：节点没带 x/y 时兜底布局 */
-  const legacyPositionsRef = useRef<Record<string, { x: number; y: number }>>(
-    workflowId ? loadPositions(workflowId) : {},
-  )
-
-  /**
-   * 坐标直接从节点 x/y 派生（渲染 / 框选 / 连线都读它）；
-   * 没坐标的旧节点用 localStorage 里的遗留坐标兜底。
-   */
+  /** 坐标直接从节点 x/y 派生（渲染 / 框选 / 连线都读它）；没存过坐标的节点落在原点。 */
   const positions = useMemo(() => {
     const map: Record<string, { x: number; y: number }> = {}
     for (const n of graph.nodes) {
-      if (typeof n.x === 'number' && typeof n.y === 'number') {
-        map[n.id] = { x: n.x, y: n.y }
-      } else {
-        const legacy = legacyPositionsRef.current[n.id]
-        if (legacy) map[n.id] = legacy
+      map[n.id] = {
+        x: typeof n.x === 'number' ? n.x : 0,
+        y: typeof n.y === 'number' ? n.y : 0,
       }
     }
     return map
@@ -543,7 +489,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           // 打开工作流：撤销栈归零（Ctrl+Z 不会跨工作流回退）
           undoStackRef.current = []
           lastUndoRef.current = null
-          setGraph(withLegacyPositions(normalizeGraph(loaded), legacyPositionsRef.current))
+          setGraph(normalizeGraph(loaded))
         }
       } catch (err) {
         pushToast('error', err instanceof ApiRequestError ? err.message : '加载失败')
@@ -564,7 +510,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         id,
         type: def.type,
         config: { ...def.defaults },
-        outputs: [],
         // pos：拖拽落点（鼠标位置，按节点中心换算成左上角）；点击添加沿用随机错开位置
         x: pos ? pos.x - NODE_W / 2 : 80 + Math.random() * 200,
         y: pos ? pos.y - nodeHeight(def) / 2 : 80 + Math.random() * 120,
@@ -687,52 +632,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       nodes: g.nodes.map((n) =>
         n.id === id ? { ...n, config: { ...n.config, [key]: value } } : n,
       ),
-    }))
-  }, [pushUndo])
-
-  // ---- 常量节点：一行一个「名字 -> 值」，名字同步进 outputs（下游 {{名字}} 引用靠它）----
-  const addConstant = useCallback((id: string) => {
-    pushUndo()
-    setGraph((g) => ({
-      ...g,
-      nodes: g.nodes.map((n) => {
-        if (n.id !== id) return n
-        let index = 1
-        while (`name_${index}` in n.config) index += 1
-        const config = { ...n.config, [`name_${index}`]: '' }
-        return { ...n, config, outputs: Object.keys(config) }
-      }),
-    }))
-  }, [pushUndo])
-
-  const renameConstant = useCallback((id: string, from: string, to: string) => {
-    // 连续改名（打字）合并成一步撤销
-    pushUndo(undefined, `ren:${id}`)
-    setGraph((g) => ({
-      ...g,
-      nodes: g.nodes.map((n) => {
-        if (n.id !== id) return n
-        const config: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(n.config)) {
-          config[key === from ? to : key] = value
-        }
-        return { ...n, config, outputs: Object.keys(config) }
-      }),
-    }))
-  }, [pushUndo])
-
-  const removeConstant = useCallback((id: string, name: string) => {
-    pushUndo()
-    setGraph((g) => ({
-      ...g,
-      nodes: g.nodes.map((n) => {
-        if (n.id !== id) return n
-        const config: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(n.config)) {
-          if (key !== name) config[key] = value
-        }
-        return { ...n, config, outputs: Object.keys(config) }
-      }),
     }))
   }, [pushUndo])
 
@@ -1215,6 +1114,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   // ---- 渲染辅助 ----
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
   const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
+  /** 选中节点已经接上线的入口（没写端口的边按 trigger 算） */
+  const selectedWired = new Set(
+    graph.edges
+      .filter((e) => e.target === selectedId)
+      .map((e) => e.targetPort || DEFAULT_PORT),
+  )
   const errorByNode = new Map<string, ValidationIssue[]>()
   if (report) {
     for (const issue of report.errors) {
@@ -1236,17 +1141,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     const sp = posOf(edge.source)
     const tp = posOf(edge.target)
     if (!sp || !tp) return null
-    // 推断端口（旧边可能没有端口信息）
-    let sourcePortId = edge.sourcePort
-    let targetPortId = edge.targetPort
-    if (!sourcePortId || !targetPortId) {
-      const inferred = inferPorts(srcNode.type, tgtNode.type)
-      if (inferred) {
-        sourcePortId ??= inferred.sourcePort
-        targetPortId ??= inferred.targetPort
-      }
-    }
-    if (!sourcePortId || !targetPortId) return null
+    // 没写端口的边按「触发 -> 触发」画（与后端口径一致）
+    const sourcePortId = edge.sourcePort || DEFAULT_PORT
+    const targetPortId = edge.targetPort || DEFAULT_PORT
     const srcDef = nodeDef(srcNode.type, srcNode.config)
     const tgtDef = nodeDef(tgtNode.type, tgtNode.config)
     return {
@@ -1475,6 +1372,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 const pos = positions[node.id] ?? { x: 0, y: 0 }
                 const hasError = errorByNode.has(node.id)
                 const portRows = Math.max(def.inputs.length, def.outputs.length)
+                //: 这个节点已经接上线的入口（没写端口的边按 trigger 算）
+                const wired = new Set(
+                  graph.edges
+                    .filter((e) => e.target === node.id)
+                    .map((e) => e.targetPort || DEFAULT_PORT),
+                )
                 return (
                   <div
                     key={node.id}
@@ -1514,11 +1417,26 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   <span
                     data-role="port"
                     className={styles.portCircle}
-                    style={{ left: -5, background: PORT_COLORS[inp.type] }}
+                    style={{
+                      left: -5,
+                      background: PORT_COLORS[inp.type],
+                      // 必填入口还没接线：红圈提醒（后端也会报 INPUT_NOT_CONNECTED）
+                      ...(inp.required && !wired.has(inp.id)
+                        ? { boxShadow: '0 0 0 3px rgba(239,68,68,.35)' }
+                        : {}),
+                    }}
+                    title={
+                      inp.required
+                        ? `${inp.label}（必填入口）：接线，或在配置面板里用同名字段手填`
+                        : undefined
+                    }
                     onMouseDown={(e) => onPortMouseDown(e, node.id, inp.id, inp.type, 'in')}
                     onMouseUp={(e) => onPortMouseUp(e, node.id, inp.id, inp.type, 'in')}
                   />
-                  <span className={styles.portLabel}>{inp.label}</span>
+                  <span className={styles.portLabel}>
+                    {inp.label}
+                    {inp.required && !wired.has(inp.id) ? ' *' : ''}
+                  </span>
                 </>
               )}
                             </div>
@@ -1755,11 +1673,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 {selectedDef.inputs.length > 0 && (
                   <div className={styles.portInfoSection}>
                     <span className={styles.portInfoLabel}>输入</span>
-                    {selectedDef.inputs.map((p) => (
-                      <span className={styles.portInfoItem} key={p.id} style={{ color: PORT_COLORS[p.type] }}>
-                        ● {p.label}（{p.type}）
-                      </span>
-                    ))}
+                    {selectedDef.inputs.map((p) => {
+                      const connected = selectedWired.has(p.id)
+                      return (
+                        <span
+                          className={styles.portInfoItem}
+                          key={p.id}
+                          style={{ color: PORT_COLORS[p.type] }}
+                        >
+                          ● {p.label}（{p.type}）
+                          {p.type === 'message' ? (connected ? ' · 已接线' : ' · 未接线') : ''}
+                          {p.required && !connected ? ' · 必填！' : ''}
+                        </span>
+                      )
+                    })}
                   </div>
                 )}
                 {selectedDef.outputs.length > 0 && (
@@ -1772,6 +1699,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                     ))}
                   </div>
                 )}
+                <div className={styles.constHint}>
+                  值沿连线走：上游的 message 输出端口接到本节点的 message 输入端口。
+                  带 * 的必填入口没接线时，用下面同名字段手填。
+                </div>
               </div>
 
               <div className={styles.field}>
@@ -1794,106 +1725,64 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   </select>
                 </div>
               )}
-              {selectedNode.type === 'constant' && (
-                <div className={styles.field}>
-                  <label className={styles.label}>常量（名字 → 值）</label>
-                  {Object.entries(selectedNode.config).map(([name, value], index) => (
-                    <div className={styles.constRow} key={index}>
-                      <input
-                        className={styles.input}
-                        value={name}
-                        placeholder="名字"
-                        onChange={(e) => renameConstant(selectedNode.id, name, e.target.value)}
-                      />
-                      <input
-                        className={styles.input}
-                        value={String(value ?? '')}
-                        placeholder="值"
-                        onChange={(e) => updateConfig(selectedNode.id, name, e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className={styles.iconBtn}
-                        aria-label={`删除常量 ${name}`}
-                        onClick={() => removeConstant(selectedNode.id, name)}
-                      >
-                        ×
-                      </button>
+              {/*
+                字段清单来自后端目录（中文名与下拉选项都在里面）。
+                与数据入口同名的字段照常可填 —— 那是「没接线时的手填兜底」，标签上写明当前
+                这个值是线上来的还是自己填的。
+              */}
+              {selectedDef.fields
+                .filter((field) => !hasDedicatedEditor(selectedNode.type, field.name))
+                .map((field) => {
+                  const asInput = selectedDef.inputs.find(
+                    (p) => p.id === field.name && p.type === 'message',
+                  )
+                  const fromWire = asInput !== undefined && selectedWired.has(field.name)
+                  return (
+                    <div className={styles.field} key={field.name}>
+                      <label className={styles.label}>
+                        {field.label}
+                        {asInput &&
+                          (fromWire ? '（来自连线，已覆盖）' : '（没接线时手填）')}
+                      </label>
+                      {field.options ? (
+                        <select
+                          className={styles.input}
+                          value={String(selectedNode.config[field.name] ?? '')}
+                          onChange={(e) => updateConfig(selectedNode.id, field.name, e.target.value)}
+                        >
+                          {field.options.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          className={styles.input}
+                          value={String(selectedNode.config[field.name] ?? '')}
+                          onChange={(e) => updateConfig(selectedNode.id, field.name, e.target.value)}
+                        />
+                      )}
                     </div>
-                  ))}
-                  <button
-                    type="button"
-                    className={styles.ghostBtn}
-                    onClick={() => addConstant(selectedNode.id)}
-                  >
-                    + 加一个常量
-                  </button>
-                  <div className={styles.constHint}>
-                    下游写 {'{{名字}}'} 读取；要连了线才读得到。名字会同步进「输出变量」
-                  </div>
-                </div>
-              )}
-              {/* 字段清单来自后端目录（中文名与下拉选项都在里面）；端口同名字段走端口交互，不列这里 */}
-              {selectedNode.type !== 'constant' &&
-                selectedDef.fields
-                  .filter((field) => !hasDedicatedEditor(selectedNode.type, field.name))
-                  .map((field) => (
-                  <div className={styles.field} key={field.name}>
-                    <label className={styles.label}>{field.label}</label>
-                    {field.options ? (
-                      <select
-                        className={styles.input}
-                        value={String(selectedNode.config[field.name] ?? '')}
-                        onChange={(e) => updateConfig(selectedNode.id, field.name, e.target.value)}
-                      >
-                        {field.options.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        className={styles.input}
-                        value={String(selectedNode.config[field.name] ?? '')}
-                        onChange={(e) => updateConfig(selectedNode.id, field.name, e.target.value)}
-                      />
-                    )}
+                  )
+                })}
+              {/* 后端没声明的键（手写图 / 扩展塞进来的）：照旧给个输入框，别让它在界面上消失 */}
+              {Object.keys(selectedNode.config)
+                .filter(
+                  (key) =>
+                    !hasDedicatedEditor(selectedNode.type, key) &&
+                    !selectedDef.fields.some((f) => f.name === key),
+                )
+                .map((key) => (
+                  <div className={styles.field} key={`extra-${key}`}>
+                    <label className={styles.label}>{key}</label>
+                    <input
+                      className={styles.input}
+                      value={String(selectedNode.config[key] ?? '')}
+                      onChange={(e) => updateConfig(selectedNode.id, key, e.target.value)}
+                    />
                   </div>
                 ))}
-              {/* 后端没声明的键（旧数据 / 手写图）：照旧给个输入框，别让它在界面上消失 */}
-              {selectedNode.type !== 'constant' &&
-                Object.keys(selectedNode.config)
-                  .filter(
-                    (key) =>
-                      !hasDedicatedEditor(selectedNode.type, key) &&
-                      !selectedDef.fields.some((f) => f.name === key),
-                  )
-                  .map((key) => (
-                    <div className={styles.field} key={`extra-${key}`}>
-                      <label className={styles.label}>{key}</label>
-                      <input
-                        className={styles.input}
-                        value={String(selectedNode.config[key] ?? '')}
-                        onChange={(e) => updateConfig(selectedNode.id, key, e.target.value)}
-                      />
-                    </div>
-                  ))}
-              <div className={styles.field}>
-                <label className={styles.label}>输出变量（逗号分隔）</label>
-                <input
-                  className={styles.input}
-                  value={selectedNode.outputs.join(',')}
-                  onChange={(e) => {
-                    pushUndo(undefined, `outputs:${selectedNode.id}`)
-                    const outputs = e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
-                    setGraph((g) => ({
-                      ...g,
-                      nodes: g.nodes.map((n) => (n.id === selectedNode.id ? { ...n, outputs } : n)),
-                    }))
-                  }}
-                />
-              </div>
             </>
           ) : (
             <div className={styles.inspectorEmpty}>选中一个节点以编辑配置</div>

@@ -1,22 +1,21 @@
-"""HTTP 请求节点：发一次 HTTP 请求，把状态码与响应正文交给下游。
+"""HTTP 请求节点：发一次 HTTP 请求，把状态码与响应正文从两个输出端口送给下游。
 
-config:
-    url:      请求地址（必填，可含 ``{{变量}}``）
+config（``url`` / ``body`` 也能被连线覆盖：接到同名入口就用线上的值）:
+    url:      请求地址（必填：接线或手填）
     method:   请求方法（必填，GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS）
-    headers:  请求头（可选，dict；里面的字符串同样支持 ``{{变量}}``）
-    body:     请求体（可选，字符串，支持 ``{{变量}}``）。要发 JSON 就写一段 JSON 串，再加
-              ``Content-Type: application/json``
+    headers:  请求头（可选，dict；只能手写在 config 里 —— 没有对应端口）
+    body:     请求体（可选）。要发 JSON 就写一段 JSON 串，再加 ``Content-Type: application/json``
     timeout:  超时秒数（可选，缺省 10；给 0 或负数表示不超时）
 
-输出（下游用 ``{{名字}}`` 引用，记得在节点的 ``outputs`` 里声明）：
+输出端口（下游把线连到这些端口就拿到值）：
 
     ``http_status``  响应状态码（int）
     ``http_body``    响应正文（str）
 
 **两种失败是分开的**（故意的）：
 
-* HTTP **4xx / 5xx** 是「对方的回答」，不算异常：记一条 warning，状态码与正文照常交给下游
-  —— 将来接上条件节点就能按 ``{{http_status}}`` 分流；
+* HTTP **4xx / 5xx** 是「对方的回答」，不算异常：记一条 warning，状态码与正文照常送到下游
+  —— 把 ``http_status`` 接到 ``log.message`` 就能看见，将来接上分流节点还能按它走不同分支；
 * **连不上 / 超时 / DNS 失败**是环境问题：直接抛出去，整条流程失败并留下堆栈，不让它伪装成
   一次「成功但没内容」的执行。
 
@@ -25,11 +24,10 @@ config:
 """
 from __future__ import annotations
 
-import re
 from typing import Any, cast
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
 
 #: 允许的请求方法（大写），**顺序即画布下拉顺序**
@@ -41,19 +39,11 @@ HTTP_METHODS: frozenset[str] = frozenset(HTTP_METHOD_ORDER)
 #: 缺省超时（秒）
 DEFAULT_TIMEOUT: float = 10.0
 
-#: {{变量}}：method 写成模板时运行期才渲染得出，静态校验放行
-_VARIABLE_RE = re.compile(r"\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
-
 
 def validate_http_node(node: WorkflowNode) -> list[ValidationIssue]:
-    """method 拼错在校验阶段就拦住；写成 ``{{变量}}`` 的放行（运行期才知道）。"""
+    """method 拼错在校验阶段就拦住（方法名是固定枚举，没有「运行期才知道」的说法）。"""
     method = node.config.get("method")
-    if (
-        isinstance(method, str)
-        and method.strip()
-        and _VARIABLE_RE.search(method) is None
-        and method.strip().upper() not in HTTP_METHODS
-    ):
+    if isinstance(method, str) and method.strip() and method.strip().upper() not in HTTP_METHODS:
         return [
             ValidationIssue(
                 node_id=node.id,
@@ -78,14 +68,11 @@ def _import_httpx() -> Any:
     return httpx
 
 
-def _render_headers(raw: object, variables: dict[str, Any]) -> dict[str, str]:
-    """把 ``config.headers`` 渲染成请求头：值统一转字符串，字符串里支持 ``{{变量}}``。"""
+def _plain_headers(raw: object) -> dict[str, str]:
+    """把 ``config.headers`` 收敛成请求头：值统一转字符串（手写的 dict，没有模板替换）。"""
     if not isinstance(raw, dict):
         return {}
-    return {
-        str(key): render_variables(str(value), variables)
-        for key, value in cast("dict[object, object]", raw).items()
-    }
+    return {str(key): str(value) for key, value in cast("dict[object, object]", raw).items()}
 
 
 def _timeout_of(raw: object) -> float | None:
@@ -103,32 +90,43 @@ def _timeout_of(raw: object) -> float | None:
     "http",
     label="HTTP",
     order=60,
-    inputs=[TRIGGER_PORT],
-    outputs=[TRIGGER_PORT, PortSpec("message", "message", "响应")],
+    # url / body 既是字段名也是数据入口：上游把值接到这两个端口，就覆盖 config 里手填的内容
+    inputs=[
+        TRIGGER_PORT,
+        PortSpec("url", "message", "请求地址", required=True),
+        PortSpec("body", "message", "请求体"),
+    ],
+    outputs=[
+        TRIGGER_PORT,
+        PortSpec("http_status", "message", "状态码"),
+        PortSpec("http_body", "message", "响应正文"),
+    ],
     fields=[
-        ConfigField("url", "请求地址", required=True),
+        # url 的「必填」由入口（PortSpec.required）管：接线或手填都行，两个都没有才报错
+        ConfigField("url", "请求地址"),
         # method 缺省 GET（画布一直这么填，这里把它写成后端的事实）；显式给空串仍会被
         # required 拦住，拼错则由 validate_http_node 报 INVALID_HTTP_METHOD
         ConfigField(
             "method", "请求方法", required=True, default="GET", options=HTTP_METHOD_ORDER
         ),
+        ConfigField("body", "请求体"),
         ConfigField("timeout", "超时秒数", default=DEFAULT_TIMEOUT),
     ],
     validator=validate_http_node,
 )
 async def exec_http(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-    """HTTP 请求节点：按配置发一次请求，返回 ``http_status`` / ``http_body``。"""
-    method = render_variables(str(node.config.get("method", "")), ctx.variables).strip().upper()
+    """HTTP 请求节点：发一次请求，产出 ``http_status`` / ``http_body`` 两个端口的值。"""
+    method = str(node.config.get("method", "")).strip().upper()
     if method not in HTTP_METHODS:
         raise ValueError(
             f"节点 {node.id} 的 method 不合法：{method!r}（可选 {', '.join(sorted(HTTP_METHODS))}）"
         )
-    url = render_variables(str(node.config.get("url", "")), ctx.variables).strip()
+    url = str(input_value(node, ctx, "url", default="")).strip()
     if not url:
-        raise ValueError(f"节点 {node.id} 的 url 为空（渲染之后）")
+        raise ValueError(f"节点 {node.id} 的 url 为空（入口没接线，config 里也没填）")
 
-    headers = _render_headers(node.config.get("headers"), ctx.variables)
-    body = render_variables(str(node.config.get("body", "")), ctx.variables)
+    headers = _plain_headers(node.config.get("headers"))
+    body = str(input_value(node, ctx, "body", default=""))
     timeout = _timeout_of(node.config.get("timeout"))
 
     httpx = _import_httpx()

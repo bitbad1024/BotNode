@@ -55,15 +55,25 @@ class ValidationReportData(_Frozen):
 
 
 class NodePortData(_Frozen):
-    """一个端口（画布上的圆点）：``id`` 就是 edge 的 ``source_port`` / ``target_port``。"""
+    """一个端口（画布上的圆点）：``id`` 就是 edge 的 ``source_port`` / ``target_port``。
+
+    ``type`` 决定它传不传值（``message`` 传、``trigger`` 不传），``required`` 只对输入端口
+    有意义：画布把没接线的必填入口标出来（后端也会在语义阶段报 ``INPUT_NOT_CONNECTED``）。
+    """
 
     id: str
     type: str
     label: str
+    required: bool = False
 
     @classmethod
     def from_port(cls, port: PortSpec) -> NodePortData:
-        return cls(id=port.id, type=port.type, label=port.label or port.id)
+        return cls(
+            id=port.id,
+            type=port.type,
+            label=port.label or port.id,
+            required=port.required,
+        )
 
 
 class NodeFieldData(_Frozen):

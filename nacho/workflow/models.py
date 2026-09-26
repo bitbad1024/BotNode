@@ -4,7 +4,8 @@
 （``{"nodes": [...], "edges": [...]}``），记录在各层之间流转用的是冻结模型。
 
 节点类型（``type`` 枚举）与入库前校验的阶段约定见 :mod:`nacho.workflow.validator`；
-变量引用的统一写法是配置字符串里的 ``{{变量名}}``，作用域 = 沿边可达的前置节点。
+**数据值沿边流动**：边的 ``source_port`` / ``target_port`` 指向两端节点声明的端口
+（见 :class:`nacho.workflow.nodes.base.PortSpec`），节点不声明任何「变量名清单」。
 """
 from __future__ import annotations
 
@@ -34,7 +35,6 @@ class WorkflowNode(BaseModel):
     :param type: 节点类型，取值为节点注册表中已登记的类型（见
         :mod:`nacho.workflow.nodes.registry`）；
     :param config: 节点配置（各类型要什么由注册规格里的字段声明把）；
-    :param outputs: 本节点声明的输出变量名清单——下游用 ``{{名字}}`` 引用的凭据；
     :param x/y: 画布坐标（UI 字段）：**随图持久化**，但不参与 :func:`graph_checksum`
         ——只挪动节点位置不产生新版本。
 
@@ -47,7 +47,6 @@ class WorkflowNode(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     type: str
     config: dict[str, Any] = Field(default_factory=dict)
-    outputs: list[str] = Field(default_factory=list)
     #: 画布横坐标（前端布局用，缺省 None = 没存过位置）
     x: float | None = None
     #: 画布纵坐标
@@ -55,10 +54,11 @@ class WorkflowNode(BaseModel):
 
 
 class WorkflowEdge(BaseModel):
-    """一条有向边：``source`` 的输出流向 ``target``（也是变量作用域的传播方向）。
+    """一条有向边：``source`` 的某个**输出端口**接到 ``target`` 的某个**输入端口**。
 
-    ``source_port`` / ``target_port`` 记录两端具体连的是哪个端口（trigger / message 等），
-    入参同时认前端的驼峰写法 ``sourcePort`` / ``targetPort``。
+    * 两端端口必须同类（``trigger`` 是控制流、不送值；``message`` 送值），语义阶段会查；
+    * 端口留空按 ``trigger`` 读（只表达先后的边，见 ``graph.DEFAULT_EDGE_PORT``）；
+    * 入参同时认前端的驼峰写法 ``sourcePort`` / ``targetPort``。
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -91,7 +91,6 @@ class DraftNode(BaseModel):
     id: str = ""
     type: str = ""
     config: dict[str, Any] = Field(default_factory=dict)
-    outputs: list[str] = Field(default_factory=list)
     x: float | None = None
     y: float | None = None
 

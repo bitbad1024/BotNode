@@ -1,18 +1,20 @@
-"""写日志节点：按级别把 message 写进业务日志（支持 ``{{变量}}`` 替换）。
+"""写日志节点：按级别把一条内容写进业务日志。
+
+内容从 **message 入口**来：连了线就用线上送来的值（上游节点的产出），没接线就用同名字段
+``config.message`` 手填的字面量。这是「数据沿连线走」的一个典型消费端 —— 自己不产出值。
 
 config:
-    message: 日志内容（必填，可含 ``{{变量}}``）
+    message: 日志内容（**没接线时**的手填值）
     level:   DEBUG / INFO / WARNING / ERROR / CRITICAL，缺省 INFO（保存时自动补）
 
-必填与默认值在注册规格的 :class:`~nacho.workflow.nodes.base.ConfigField` 里声明，
-level 枚举校验在 :func:`validate_log_node` 里。
+端口与「入口必填」在注册规格里声明，level 枚举校验在 :func:`validate_log_node` 里。
 """
 from __future__ import annotations
 
 from typing import Any
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, render_variables
+from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
 
 #: 合法日志级别，**顺序即画布下拉顺序**（config.level 缺省 INFO）
@@ -41,22 +43,21 @@ def validate_log_node(node: WorkflowNode) -> list[ValidationIssue]:
     "log",
     label="写日志",
     order=40,
-    # message 既是输入端口也是字段名：画布按「字段名 = 端口名」判定它是消息入口，
-    # 不把它当常量条显示
-    inputs=[TRIGGER_PORT, PortSpec("message", "message", "消息")],
+    # message 入口是数据端口（required：必须接线或手填）；同名字段是没接线时的字面量兜底
+    inputs=[TRIGGER_PORT, PortSpec("message", "message", "日志内容", required=True)],
     outputs=[TRIGGER_PORT],
     fields=[
-        ConfigField("message", "日志内容", required=True),
+        ConfigField("message", "日志内容"),
         ConfigField("level", "日志级别", default="INFO", options=LOG_LEVEL_ORDER),
     ],
     validator=validate_log_node,
 )
 async def exec_log(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-    """写日志节点：按级别把 message 写进业务日志（支持 ``{{变量}}`` 替换）。"""
-    message = render_variables(str(node.config.get("message", "")), ctx.variables)
+    """写日志节点：把入口（或手填）的内容按级别写进业务日志；自己不产出值。"""
+    message = str(input_value(node, ctx, "message", default=""))
     level = str(node.config.get("level", "INFO")).upper()
     if level not in LOG_LEVELS:
         level = "INFO"
     getattr(ctx.logger, level.lower())(f"[log:{node.id}] {message}")
     ctx.log.append(f"[{level}] {node.id}: {message}")
-    return {"log_message": message}
+    return {}

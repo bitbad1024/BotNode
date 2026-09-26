@@ -14,12 +14,16 @@ export interface WorkflowNode {
   id: string
   type: string
   config: Record<string, unknown>
-  outputs: string[]
   /** 画布坐标：随图持久化（后端快照 / 暂存区都存），但不参与版本 hash */
   x?: number | null
   y?: number | null
 }
 
+/**
+ * 一条边：上游的**输出端口**接到下游的**输入端口**，值就沿它流。
+ *
+ * 端口留空按 `trigger` 读（只表达先后的边）；两端端口类型必须相同，后端语义阶段会查。
+ */
 export interface WorkflowEdge {
   source: string
   target: string
@@ -38,12 +42,18 @@ export interface WorkflowGraph {
 }
 
 // --------------------------------------------------------------------------- 节点目录
-/** 一个端口（画布上的圆点）：id 就是 edge 的 sourcePort / targetPort。 */
+/**
+ * 一个端口（画布上的圆点）：id 就是 edge 的 sourcePort / targetPort。
+ *
+ * `type` 决定它传不传值（message 传、trigger 不传）；`required` 只对输入端口有意义：
+ * 画布把没接线的必填入口标出来（后端也会报 INPUT_NOT_CONNECTED）。
+ */
 export interface NodePortSpec {
   id: string
   /** 端口类型：连线两端必须同类 */
   type: PortType
   label: string
+  required: boolean
 }
 
 /** config 里的一个字段：画布照它渲染输入框 / 下拉。 */

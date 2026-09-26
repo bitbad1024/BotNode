@@ -9,8 +9,21 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping, Sequence
 
-from .models import WorkflowGraph, WorkflowNode
+from .models import WorkflowEdge, WorkflowGraph, WorkflowNode
 from .nodes.registry import get_spec
+
+#: 边的端口缺省值：没写明端口的边按「触发 -> 触发」读（只表达先后，不送值）
+DEFAULT_EDGE_PORT: str = "trigger"
+
+
+def edge_source_port(edge: WorkflowEdge) -> str:
+    """边的**起点端口**（空 = ``trigger``）。"""
+    return edge.source_port or DEFAULT_EDGE_PORT
+
+
+def edge_target_port(edge: WorkflowEdge) -> str:
+    """边的**终点端口**（空 = ``trigger``）。"""
+    return edge.target_port or DEFAULT_EDGE_PORT
 
 
 def out_targets(graph: WorkflowGraph) -> dict[str, list[str]]:
@@ -47,15 +60,10 @@ def start_ids(nodes: Sequence[WorkflowNode]) -> list[str]:
 
 
 def entry_id(graph: WorkflowGraph) -> str | None:
-    """入口节点：注册角色为 start 的那个。
+    """入口节点：注册角色为 ``start`` 的那个（拓扑阶段要求恰好 1 个）。
 
-    图里没有 start 角色时（直接构造的测试图、最早期快照）退回字面量 ``type == "start"``
-    的旧写法，**再没有**才是 ``None`` —— 此时运行器退回「跑全部节点」，沿用历史行为。
+    没有 start 时返回 ``None``：这种图过不了拓扑校验，运行器据此直接报错 —— 不猜「哪个算
+    入口」（猜错的代价是跑了半张图还看不出问题）。
     """
     starts = start_ids(graph.nodes)
-    if starts:
-        return starts[0]
-    for node in graph.nodes:
-        if node.type == "start":
-            return node.id
-    return None
+    return starts[0] if starts else None

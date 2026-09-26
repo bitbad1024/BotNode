@@ -28,9 +28,11 @@ from nacho.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
 from nacho.workflow import (  # noqa: E402
     ConfigField,
     NodeExecutionContext,
+    PortSpec,
     SimpleWorkflowRunner,
     SqlWorkflowStore,
     ValidationIssue,
+    WorkflowEdge,
     WorkflowGraph,
     WorkflowNameConflict,
     WorkflowNode,
@@ -38,10 +40,10 @@ from nacho.workflow import (  # noqa: E402
     canonical_graph_json,
     declare_node_type,
     graph_checksum,
+    input_value,
     load_node_modules,
     register_node,
     registered_types,
-    render_variables,
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
@@ -56,13 +58,23 @@ _TEST_HASHER = Pbkdf2PasswordHasher(iterations=1_000)
 
 # --------------------------------------------------------------------------- 图夹具
 def node(node_id: str, node_type: str, **config: object) -> dict[str, object]:
-    """造一个节点；outputs 用关键字 ``_outputs`` 传，避免和 config 混。"""
-    outputs = config.pop("_outputs", [])
-    return {"id": node_id, "type": node_type, "config": dict(config), "outputs": list(outputs)}
+    """造一个节点（config 直接平铺传）。"""
+    return {"id": node_id, "type": node_type, "config": dict(config)}
 
 
-def edge(source: str, target: str) -> dict[str, str]:
-    return {"source": source, "target": target}
+def edge(
+    source: str,
+    target: str,
+    source_port: str = "trigger",
+    target_port: str = "trigger",
+) -> dict[str, str]:
+    """造一条边；端口缺省是「触发 -> 触发」（只表达先后的边，见 graph.DEFAULT_EDGE_PORT）。"""
+    return {
+        "source": source,
+        "target": target,
+        "source_port": source_port,
+        "target_port": target_port,
+    }
 
 
 def linear_graph() -> dict[str, object]:
@@ -213,60 +225,134 @@ def test_topology_end_with_outgoing_rejected() -> None:
 
 # --------------------------------------------------------------------------- ③ 语义校验
 def test_semantic_missing_required_config() -> None:
+    """必填分两种：普通字段报 MISSING_CONFIG，数据入口没接线没填值报 INPUT_NOT_CONNECTED。
+
+    ``http.method`` 有默认值（保存时补 GET），所以它不算缺；``constant.value`` 是必填且没有
+    默认值的普通字段，缺了报 MISSING_CONFIG。
+    """
     graph = {
         "nodes": [
             node("s", "start"),
-            node("call", "http"),  # 没给 url / method
-            node("note", "log"),  # 没给 message
+            node("call", "http"),  # url 入口没接线也没填
+            node("note", "log"),  # message 入口没接线也没填
+            node("c", "constant"),  # value 必填、没有默认值
             node("e", "end"),
         ],
-        "edges": [edge("s", "call"), edge("call", "note"), edge("note", "e")],
+        "edges": [
+            edge("s", "call"),
+            edge("call", "note"),
+            edge("note", "c"),
+            edge("c", "e"),
+        ],
     }
     report = validate_graph(graph)
     assert not report.valid and report.stage == STAGE_SEMANTIC
     missing = [issue for issue in report.errors if issue.code == "MISSING_CONFIG"]
-    assert {issue.node_id for issue in missing} == {"call", "note"}
+    assert {issue.node_id for issue in missing} == {"c"}
+    unconnected = [issue for issue in report.errors if issue.code == "INPUT_NOT_CONNECTED"]
+    assert {issue.node_id for issue in unconnected} == {"call", "note"}  # url / message
 
 
-def test_semantic_variable_scope_and_spell_hint() -> None:
+def test_semantic_checks_edge_ports() -> None:
+    """连线就是数据契约：端口名写错 / 两端类型不配，都在语义阶段拦住。"""
+    typo = {
+        "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
+        "edges": [
+            edge("s", "l"),
+            edge("l", "e"),
+            edge("s", "l", "mesage", "message"),  # start 上没有 mesage 这个出口
+        ],
+    }
+    report = validate_graph(typo)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    unknown = next(issue for issue in report.errors if issue.code == "UNKNOWN_PORT")
+    assert unknown.node_id == "s" and "mesage" in unknown.message
+    assert "message" in unknown.suggestion  # 拼错时给「是否想用」
+
+    mismatch = {
+        "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
+        "edges": [edge("s", "l"), edge("l", "e"), edge("s", "l", "trigger", "message")],
+    }
+    codes = {issue.code for issue in validate_graph(mismatch).errors}
+    assert "PORT_TYPE_MISMATCH" in codes
+
+
+def test_semantic_one_data_input_takes_one_edge() -> None:
+    """一个数据入口只允许接一条线（要合并就先汇到一个节点再往下送）。"""
     graph = {
         "nodes": [
-            node("s", "start", _outputs=["orderAmount"]),
-            node("calc", "log", message="{{orderAmount}} * 0.9", _outputs=["price"]),
-            node("typo", "log", message="{{orderAmout}} + 1"),
-            node("side", "log", message="{{price}}"),
+            node("s", "start"),
+            node("c", "constant", value="a"),
+            node("l", "log"),
             node("e", "end"),
         ],
         "edges": [
-            edge("s", "calc"),
-            edge("calc", "typo"),
-            edge("s", "side"),  # price 声明在 calc，side 不在它的下游
-            edge("typo", "e"),
-            edge("side", "e"),
+            edge("s", "c"),
+            edge("c", "l", "value", "message"),
+            edge("s", "l", "message", "message"),  # 第二条线接到同一个入口
+            edge("l", "e"),
         ],
     }
-    report = validate_graph(graph)
-    assert not report.valid and report.stage == STAGE_SEMANTIC
-    by_code: dict[str, str] = {issue.code: issue for issue in report.errors}
-    # orderAmout 没声明：给拼写建议
-    not_declared = next(issue for issue in report.errors if issue.code == "VARIABLE_NOT_DECLARED")
-    assert not_declared.node_id == "typo"
-    assert "orderAmount" in not_declared.suggestion
-    # price 声明了但不在 side 的前置链路上
-    out_of_scope = next(issue for issue in report.errors if issue.code == "VARIABLE_OUT_OF_SCOPE")
-    assert out_of_scope.node_id == "side" and "calc" in out_of_scope.message
-    assert by_code  # 字典非空仅为抑制未用告警
+    codes = {issue.code for issue in validate_graph(graph).errors}
+    assert "DUPLICATE_INPUT_EDGE" in codes
 
 
-def test_semantic_downstream_variable_passes() -> None:
-    """前置节点声明的变量，下游引用应该通过（{{}} 递归进嵌套 config）。"""
-    graph = {
+def test_semantic_trigger_ports_allow_convergence() -> None:
+    """「只接一条线」只管数据入口：控制流端口允许多条入边汇聚（菱形 / 多分支汇流）。
+
+    引擎按入度排序，两条 trigger 边汇到同一个 end 就是「都跑完才轮到它」；校验器不该拦。
+    数据入口（message）照旧只允许一条 —— 两份值进同一个入口没法选。
+    """
+    diamond = {
         "nodes": [
-            node("s", "start", _outputs=["token"]),
-            node("call", "http", url="http://x/{{token}}", method="POST"),
+            node("s", "start"),
+            node("a", "test", message="A"),
+            node("b", "test", message="B"),
             node("e", "end"),
         ],
-        "edges": [edge("s", "call"), edge("call", "e")],
+        "edges": [
+            edge("s", "a"),
+            edge("s", "b"),
+            edge("a", "e"),  # 两条 trigger 边汇到 e.trigger：允许
+            edge("b", "e"),
+        ],
+    }
+    assert validate_graph(diamond).valid
+
+    dup_data = {
+        "nodes": [
+            node("s", "start"),
+            node("t", "test", message="x"),
+            node("l", "log"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "t"),
+            edge("t", "l", "message", "message"),
+            edge("s", "l", "message", "message"),  # 第二条数据线接到同一个入口
+            edge("l", "e"),
+        ],
+    }
+    codes = {issue.code for issue in validate_graph(dup_data).errors}
+    assert "DUPLICATE_INPUT_EDGE" in codes
+
+
+def test_semantic_wired_data_input_passes() -> None:
+    """数据入口接上上游的输出端口（类型也对得上）就通过 —— 不需要在 config 里填值。"""
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("c", "constant", value="https://api.example.com"),
+            node("call", "http", method="POST"),
+            node("note", "log"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "c"),
+            edge("c", "call", "value", "url"),  # 常量 -> http 的 url 入口
+            edge("call", "note", "http_status", "message"),  # 状态码 -> log 的 message 入口
+            edge("call", "e"),
+        ],
     }
     assert validate_graph(graph).valid
 
@@ -315,14 +401,14 @@ def test_semantic_start_time_trigger_requires_cron_and_validates_it() -> None:
 
 
 def test_semantic_log_requires_message_and_validates_level() -> None:
-    """log 缺 message 报 MISSING_CONFIG；level 非法报 INVALID_LOG_LEVEL。"""
+    """log 的 message 入口没接线也没手填 → INPUT_NOT_CONNECTED；level 非法 → INVALID_LOG_LEVEL。"""
     g_missing = {
         "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
         "edges": [edge("s", "l"), edge("l", "e")],
     }
     report = validate_graph(g_missing)
     assert not report.valid and report.stage == STAGE_SEMANTIC
-    assert any(e.code == "MISSING_CONFIG" for e in report.errors)
+    assert any(e.code == "INPUT_NOT_CONNECTED" for e in report.errors)
 
     g_bad_level = {
         "nodes": [node("s", "start"), node("l", "log", message="hi", level="TRACE"), node("e", "end")],
@@ -340,7 +426,7 @@ def test_semantic_log_requires_message_and_validates_level() -> None:
 
 
 def test_semantic_test_node_passes_without_config() -> None:
-    """test 节点无必填配置，应该直接通过。"""
+    """test 节点没有必填项：message 入口可选（没接线时用手填值，连键都没有才用节点 id）。"""
     g = {
         "nodes": [node("s", "start"), node("t", "test"), node("e", "end")],
         "edges": [edge("s", "t"), edge("t", "e")],
@@ -413,13 +499,13 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
 
 
 def test_apply_config_defaults_fills_registered_defaults() -> None:
-    """保存版本前的默认值补全：trigger / level / method / echo 缺失就填，给了值不覆盖。"""
+    """保存版本前的默认值补全：trigger / level / method / message 缺失就填，给了值不覆盖。"""
     raw = {
         "nodes": [
             node("s", "start"),  # trigger 缺
             node("l", "log", message="hi"),  # level 缺
             node("h", "http", url="https://x", timeout=3),  # method 缺、timeout 给了
-            node("t", "test"),  # echo 缺
+            node("t", "test"),  # message 缺
             node("e", "end"),
         ],
         "edges": [edge("s", "l"), edge("l", "h"), edge("h", "t"), edge("t", "e")],
@@ -430,7 +516,7 @@ def test_apply_config_defaults_fills_registered_defaults() -> None:
     assert configs["l"]["level"] == "INFO"
     assert configs["h"]["method"] == "GET"  # 画布一直替它填 GET，现在后端也这么声明
     assert configs["h"]["timeout"] == 3  # 显式值不被覆盖
-    assert configs["t"]["echo"] == "hello"  # test 节点的回显内容（以前前端自己填的）
+    assert configs["t"]["message"] == "hello"  # test 节点的回显内容（没接线时用它）
     # 原 dict 不被修改
     assert "trigger" not in raw["nodes"][0]["config"]
 
@@ -438,25 +524,33 @@ def test_apply_config_defaults_fills_registered_defaults() -> None:
 # --------------------------------------------------------------------------- ④ 节点执行器
 @pytest.mark.asyncio
 async def test_executor_start_end_log_test_run() -> None:
-    """start -> test -> log -> end 全链路：log 内容被 {{变量}} 替换，test 的 echo 进上下文。"""
+    """start -> test -> log -> end 全链路：test 把入口值回显出来，log 收到的是**线上来的**值。
+
+    这里没有全局变量：test 的 ``message`` 是它自己手填的（没接线），它的 ``message`` 出口又
+    接到了 log 的 ``message`` 入口 —— 值真的沿边走了一遍。
+    """
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start", _outputs=["name"]),
-                node("t", "test", echo="hello {{name}}"),
-                node("l", "log", message="echo was: {{echo}}", level="INFO"),
+                node("s", "start"),
+                node("t", "test", message="hello nacho"),
+                node("l", "log", level="INFO"),
                 node("e", "end"),
             ],
-            "edges": [edge("s", "t"), edge("t", "l"), edge("l", "e")],
+            "edges": [
+                edge("s", "t"),
+                edge("t", "l", "message", "message"),  # test 的回显 -> log 的日志内容
+                edge("l", "e"),
+            ],
         }
     )
     ctx = NodeExecutionContext()
-    ctx.variables["name"] = "nacho"
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert ctx.variables["echo"] == "hello nacho"
-    assert ctx.variables["log_message"] == "echo was: hello nacho"
-    # 日志收集器按顺序记了四个节点
-    assert any("hello nacho" in line for line in ctx.log)
+    # 日志收集器按顺序记了节点，log 那行是 test 送过来的值
+    assert any("[test] t: hello nacho" in line for line in ctx.log)
+    assert any("[INFO] l: hello nacho" in line for line in ctx.log)
+    # 最后一个节点（end）没接线的入口：触发边不送值
+    assert ctx.inputs == {}
 
 
 @pytest.mark.asyncio
@@ -484,7 +578,9 @@ async def test_executor_skips_orphan_nodes_entirely() -> None:
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)  # 不因孤儿缺执行器而抛错
     assert ran == []  # 孤儿副作用没发生
-    assert "orphan_var" not in ctx.variables
+    # 主流程照常跑完（start -> end），孤儿一点痕迹都没留下
+    assert any("[start]" in line for line in ctx.log)
+    assert any("[end]" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
@@ -512,6 +608,59 @@ async def test_executor_orphan_edge_into_main_path_does_not_block() -> None:
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)  # 旧实现这里会卡在 e 的入度上
     assert ran == []  # 孤儿依旧不执行
+
+
+@pytest.mark.asyncio
+async def test_executor_ignores_data_edges_from_nodes_that_never_ran() -> None:
+    """孤儿连出来的线**不算数**：别拿空串把手填的兜底值顶掉（与校验器同一口径）。
+
+    constant 没接触发线（孤儿）→ 永不执行，却挂着一根 ``value -> log.message``。那根线不该
+    被当成「上游送来了空串」：校验器认为它不算数（所以手填值满足必填入口），运行器也得这么算，
+    log 才会用手填的 ``config.message``。
+    """
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("l", "log", message="手填的内容"),
+                node("c", "constant", value="孤儿常量"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "l"), edge("l", "e"), edge("c", "l", "value", "message")],
+        }
+    )
+    assert validate_graph(graph).valid  # 校验放行：孤儿那根线不算数，手填值就够了
+
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("[INFO] l: 手填的内容" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_still_sends_empty_for_wired_port_without_value() -> None:
+    """上游**跑过了**、只是那个出口没产出（时间触发的 start 没有 message）→ 照旧送空串。
+
+    这跟「上游根本没跑」是两回事：接的线算数、线上确实没值，空串会盖掉手填值（有意为之，
+    见 ``_inputs_of`` 的文档）。别把这条语义一起改掉了。
+    """
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start", trigger="time", cron="*/5 * * * *"),
+                node("l", "log", message="手填的内容"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "l"),
+                edge("s", "l", "message", "message"),  # 时间触发没有 message 产出
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any(line == "[INFO] l: " for line in ctx.log)  # 线上来了个空串
+    assert not any("手填的内容" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
@@ -560,7 +709,7 @@ async def test_executor_start_message_trigger_does_not_register() -> None:
     ctx = NodeExecutionContext(scheduler=scheduler)
     await SimpleWorkflowRunner().run(graph, ctx)
     assert scheduler.list() == []
-    assert "scheduled" not in ctx.variables
+    assert ctx.inputs == {}  # 触发边不送值，end 什么都没收到
     assert any("消息触发" in line for line in ctx.log)
 
 
@@ -575,7 +724,6 @@ async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() 
     )
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert ctx.variables.get("scheduled") is False
     assert any("未注入调度器" in line for line in ctx.log)
 
 
@@ -660,25 +808,24 @@ def http_node(**config: object) -> WorkflowNode:
     """造一个 http 节点；config 缺省补一份能跑通的（url / method 是必填项）。"""
     merged: dict[str, object] = {"url": "https://api.example.com/items", "method": "GET"}
     merged.update(config)
-    return WorkflowNode.model_construct(id="h1", type="http", config=merged, outputs=[])
+    return WorkflowNode.model_construct(id="h1", type="http", config=merged)
 
 
 @pytest.mark.asyncio
-async def test_http_node_renders_config_and_returns_outputs(
+async def test_http_node_takes_url_and_body_from_wires(
     fake_http: type[FakeAsyncClient],
 ) -> None:
-    """url / headers / body 都过 ``{{变量}}`` 渲染；状态码与正文作为输出交给下游。"""
+    """url / body 可以走连线（线上的值覆盖手填值）；状态码与正文从两个出口产出。"""
     fake_http.status = 201
     fake_http.text = '{"id": 7}'
     node_obj = http_node(
-        url="https://api.example.com/items/{{item_id}}",
+        url="http://ignored.example.com",  # 被线上来的值覆盖
         method="post",
-        headers={"X-Robot": "{{robot}}"},
-        body='{"id": {{item_id}}}',
+        headers={"X-Robot": "r-001"},  # headers 只能手写（没有对应端口）
         timeout=3,
     )
     ctx = NodeExecutionContext()
-    ctx.variables.update({"item_id": "7", "robot": "r-001"})
+    ctx.inputs = {"url": "https://api.example.com/items/7", "body": '{"id": 7}'}
 
     outputs = await exec_http(node_obj, ctx)
 
@@ -687,12 +834,48 @@ async def test_http_node_renders_config_and_returns_outputs(
         {
             "method": "POST",  # 方法大小写不敏感
             "url": "https://api.example.com/items/7",
-            "headers": {"X-Robot": "r-001"},  # 头里也渲染
+            "headers": {"X-Robot": "r-001"},
             "content": '{"id": 7}',
         }
     ]
     assert fake_http.client_kwargs["timeout"] == 3.0
     assert any("POST" in line and "201" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_http_node_uses_config_when_not_wired(fake_http: type[FakeAsyncClient]) -> None:
+    """没接线就用 config 里手填的 url / body：入口值「线上优先，没有才用手填」。"""
+    await exec_http(http_node(url="https://x/y", body="raw"), NodeExecutionContext())
+
+    assert fake_http.calls[0]["url"] == "https://x/y"
+    assert fake_http.calls[0]["content"] == "raw"
+
+
+@pytest.mark.asyncio
+async def test_http_status_reaches_downstream_message_input(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """http 的 ``http_status`` 出口接到 log 的 ``message`` 入口：值真的沿边走完整条链路。"""
+    fake_http.status = 503
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("h", "http", url="https://api.example.com", method="GET"),
+                node("l", "log", level="WARNING"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "h"),
+                edge("h", "l", "http_status", "message"),  # 状态码 -> 日志内容
+                edge("h", "e"),  # 触发边继续往下走
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("[WARNING] l: 503" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
@@ -756,48 +939,61 @@ def test_http_method_is_checked_at_validation() -> None:
     assert validate_graph(graph_with("GET")).valid
 
 
-# ------------------------------------------------------------- ④-C 常量节点
-async def test_constant_node_outputs_its_values_as_variables() -> None:
-    """config 里每一个键就是一个常量：键名作变量名，值原样产出。"""
+# ------------------------------------------------------------- ④-C 常量
+@pytest.mark.asyncio
+async def test_constant_node_produces_one_value_on_its_port() -> None:
+    """一个常量节点就一个值：从 ``value`` 出口送给下游连上来的入口。"""
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node(
-                    "c",
-                    "constant",
-                    base_url="https://api.example.com",
-                    greeting="你好",
-                    _outputs=["base_url", "greeting"],
-                ),
+                node("s", "start"),
+                node("c", "constant", value="https://api.example.com"),
+                node("l", "log"),
+                node("e", "end"),
             ],
-            "edges": [],
+            "edges": [
+                edge("s", "c"),
+                edge("c", "l", "value", "message"),  # 常量 -> log 的日志内容
+                edge("l", "e"),
+            ],
         }
     )
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert ctx.variables["base_url"] == "https://api.example.com"
-    assert ctx.variables["greeting"] == "你好"
+    assert any("https://api.example.com" in line for line in ctx.log)
 
 
-async def test_constant_value_may_reference_upstream_variable() -> None:
-    """常量值也走同一套 ``{{变量}}`` 渲染 —— 与别处口径一致（引用不到在保存时就报）。"""
+@pytest.mark.asyncio
+async def test_multiple_constants_are_multiple_nodes() -> None:
+    """要几个常量就摆几个节点：各自的线互不串（以前是一个节点塞一组「名字 -> 值」）。"""
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start", _outputs=["owner"]),
-                node("c", "constant", who="{{owner}} 的机器人", _outputs=["who"]),
+                node("s", "start"),
+                node("c1", "constant", value="第一"),
+                node("c2", "constant", value="第二"),
+                node("l1", "log", level="INFO"),
+                node("l2", "log", level="WARNING"),
+                node("e", "end"),
             ],
-            "edges": [edge("s", "c")],
+            "edges": [
+                edge("s", "c1"),
+                edge("c1", "l1", "value", "message"),
+                edge("c1", "c2"),  # 触发边：先 c1 再 c2
+                edge("c2", "l2", "value", "message"),
+                edge("l1", "e"),
+                edge("l2", "e"),
+            ],
         }
     )
     ctx = NodeExecutionContext()
-    ctx.variables["owner"] = "nacho"
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert ctx.variables["who"] == "nacho 的机器人"
+    assert any("[INFO] l1: 第一" in line for line in ctx.log)
+    assert any("[WARNING] l2: 第二" in line for line in ctx.log)
 
 
-def test_constant_node_needs_at_least_one_constant() -> None:
-    """一个常量都没写：MISSING_CONFIG。"""
+def test_constant_value_is_required() -> None:
+    """常量节点的 ``value`` 是必填字段：没写报 MISSING_CONFIG。"""
     graph = {
         "nodes": [node("s", "start"), node("c", "constant"), node("e", "end")],
         "edges": [edge("s", "c"), edge("c", "e")],
@@ -807,42 +1003,26 @@ def test_constant_node_needs_at_least_one_constant() -> None:
     assert any(i.node_id == "c" and i.code == "MISSING_CONFIG" for i in report.errors)
 
 
-def test_constant_name_must_work_as_a_variable() -> None:
-    """键名当不了变量名（下游 ``{{名字}}`` 引用不到）：INVALID_CONSTANT_NAME。"""
-    graph = {
-        "nodes": [
-            node("s", "start"),
-            {"id": "c", "type": "constant", "config": {"bad-name": "x"}, "outputs": []},
-            node("e", "end"),
-        ],
-        "edges": [edge("s", "c"), edge("c", "e")],
-    }
-    report = validate_graph(graph)
-    assert not report.valid
-    assert any(
-        issue.node_id == "c" and issue.code == "INVALID_CONSTANT_NAME"
-        for issue in report.errors
-    )
-
-
-def test_constant_is_only_readable_downstream() -> None:
-    """常量沿边往下传：连上了才引用得到；常量节点没接进主流程就没人声明它的变量。"""
+def test_constant_must_be_wired_to_be_read() -> None:
+    """值只能沿边走：常量接到下游才读得到；常量成了孤儿，下游那个入口就是空的。"""
     nodes = [
         node("s", "start"),
-        node("c", "constant", base_url="https://api.example.com", _outputs=["base_url"]),
-        node("l", "log", message="GET {{base_url}}"),
+        node("c", "constant", value="https://api.example.com"),
+        node("l", "log"),
         node("e", "end"),
     ]
-    connected = {"nodes": nodes, "edges": [edge("s", "c"), edge("c", "l"), edge("l", "e")]}
-    assert validate_graph(connected).valid
+    wired = {
+        "nodes": nodes,
+        "edges": [edge("s", "c"), edge("c", "l", "value", "message"), edge("l", "e")],
+    }
+    assert validate_graph(wired).valid
 
-    # 常量节点成了孤儿：它不执行，base_url 也就没有节点声明
+    # 常量没接进主流程（孤儿）：它不执行，log 的 message 入口也就没有线 —— 报没接上
     orphan = {"nodes": nodes, "edges": [edge("s", "l"), edge("l", "e")]}
     report = validate_graph(orphan)
     assert not report.valid
     assert any(
-        issue.node_id == "l" and issue.code == "VARIABLE_NOT_DECLARED"
-        for issue in report.errors
+        issue.node_id == "l" and issue.code == "INPUT_NOT_CONNECTED" for issue in report.errors
     )
 
 
@@ -858,7 +1038,7 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
     """枚举选项与默认值都写在注册表里，画布照单渲染（不再自己填 GET / INFO / hello）。
 
     这几条以前只活在前端的节点表里（后端没声明），是两边最容易各自漂移的地方：
-    ``test`` 的 echo 字段、``http.method`` 的缺省 GET、``log.level`` / ``start.trigger``
+    ``test`` 的 message 字段、``http.method`` 的缺省 GET、``log.level`` / ``start.trigger``
     的可选值。声明清楚了，「后端提供什么、画布显示什么」才立得住。
     """
     from nacho.workflow import get_spec
@@ -887,25 +1067,26 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
 
     test = get_spec("test")
     assert test is not None
-    assert [f.name for f in test.fields] == ["echo"]
+    assert [f.name for f in test.fields] == ["message"]
     assert test.fields[0].default == "hello"
 
 
 def test_builtin_node_ports_and_labels_are_declared() -> None:
     """内置节点的中文名 / 面板顺序 / 端口都在注册表里（画布照它画，不再自己维护一份）。
 
-    端口是**图的连线契约**：edge 的 ``source_port`` / ``target_port`` 存的就是这些 id，连线时
-    按 ``type`` 配对；字段名与端口 id 同名的（``log`` 的 ``message``）在画布上算端口、不算常量。
+    端口是**图的执行契约**：edge 的 ``source_port`` / ``target_port`` 存的就是这些 id，
+    ``message`` 端口送值、``trigger`` 端口只表达先后；字段名与端口 id 同名的（``log`` 的
+    ``message``、``http`` 的 ``url``）就是「可以被连线覆盖的那个入口」。
     """
     from nacho.workflow import get_spec
 
     expected: dict[str, tuple[int, str, list[str], list[str]]] = {
         "start": (10, "开始", [], ["trigger", "message"]),
         "end": (20, "结束", ["trigger"], []),
-        "constant": (30, "常量", ["trigger"], ["trigger", "message"]),
+        "constant": (30, "常量", ["trigger"], ["trigger", "value"]),
         "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
-        "test": (50, "测试", ["trigger"], ["trigger", "message"]),
-        "http": (60, "HTTP", ["trigger"], ["trigger", "message"]),
+        "test": (50, "测试", ["trigger", "message"], ["trigger", "message"]),
+        "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -926,6 +1107,19 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         ("message", "message"),
     ]
     assert log.inputs[0].label == "触发"  # 显示名同样来自后端
+    assert log.inputs[1].required is True  # 必填入口：接线或手填同名字段
+    assert log.inputs[0].required is False  # 触发端口不谈必填
+
+    http = get_spec("http")
+    assert http is not None
+    http_inputs = {p.id: p for p in http.inputs}
+    assert http_inputs["url"].required is True  # url 是必填入口
+    assert http_inputs["body"].required is False  # body 可选
+    assert [(p.id, p.type) for p in http.outputs] == [
+        ("trigger", "trigger"),
+        ("http_status", "message"),
+        ("http_body", "message"),
+    ]
 
 
 def test_declare_node_type_gives_rules_without_executor() -> None:
@@ -965,7 +1159,7 @@ def test_register_node_decorator_registers_and_returns_the_function() -> None:
 
     @register_node("my-echo")
     async def exec_my_echo(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-        return {"echo": node.id, "seen": len(ctx.variables)}
+        return {"echo": node.id, "seen": len(ctx.inputs)}
 
     assert get_executor("my-echo") is exec_my_echo
 
@@ -982,36 +1176,52 @@ def test_load_node_modules_is_idempotent_and_loud_on_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_custom_node_type_runs_end_to_end() -> None:
-    """自写的节点类型：注册进注册表后，运行器按类型就能取到并跑出变量。
+    """自写的节点类型：声明输入 / 输出端口后，引擎按边把值送进来、再按出口送下去。
 
-    这里直接构造图（不经过校验）：本条验的是「注册表 + 运行器」这条链路。
+    这里直接构造图（不经过校验）：本条验的是「注册表 + 引擎投递」这条链路。
     校验那一关的合法性同样查注册表（见 test_validation_rules_are_driven_by_registration_*）。
     """
+    seen: list[str] = []
 
-    @register_node("my-upper")
+    @register_node(
+        "my-upper",
+        inputs=[PortSpec("text", "message", "文本")],
+        outputs=[PortSpec("upper", "message", "大写")],
+    )
     async def exec_my_upper(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-        text = render_variables(str(node.config.get("text", "")), ctx.variables)
+        text = str(input_value(node, ctx, "text"))
+        seen.append(text)
         return {"upper": text.upper()}
 
-    custom = WorkflowNode.model_construct(
-        id="u", type="my-upper", config={"text": "hi {{name}}"}, outputs=["upper"]
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowNode(id="s", type="start", config={}),
+            WorkflowNode(id="c", type="constant", config={"value": "hi nacho"}),
+            WorkflowNode(id="u", type="my-upper", config={}),
+        ],
+        edges=[
+            WorkflowEdge(source="s", target="c", source_port="trigger", target_port="trigger"),
+            # 常量节点的 value 出口 -> 自写节点的 text 入口
+            WorkflowEdge(source="c", target="u", source_port="value", target_port="text"),
+        ],
     )
-    graph = WorkflowGraph(nodes=[custom], edges=[])
     ctx = NodeExecutionContext()
-    ctx.variables["name"] = "nacho"
 
     await SimpleWorkflowRunner().run(graph, ctx)
 
-    assert ctx.variables["upper"] == "HI NACHO"
+    assert seen == ["hi nacho"]  # 值确实沿 c.value -> u.text 送到了
+    assert ctx.inputs == {"text": "hi nacho"}  # 最后一个节点的入口就是它收到的那份
 
 
 # --------------------------------------------------------------------------- checksum
 def test_checksum_stable_under_key_order_and_spacing() -> None:
     """同一张图不同写法（键序、空白）算同一个摘要；内容变了摘要才变。"""
     first = canonical_graph_json(linear_graph())
-    reordered = {"edges": [{"target": "e", "source": "s"}], "nodes": [
-        {"outputs": [], "config": {}, "type": "start", "id": "s"},
-        {"config": {}, "outputs": [], "type": "end", "id": "e"},
+    reordered = {"edges": [
+        {"targetPort": "trigger", "target": "e", "sourcePort": "trigger", "source": "s"},
+    ], "nodes": [
+        {"config": {}, "type": "start", "id": "s"},
+        {"config": {}, "type": "end", "id": "e"},
     ]}
     assert graph_checksum(reordered) == graph_checksum(linear_graph())
     changed = {"nodes": [node("s", "start"), node("e2", "end")], "edges": [edge("s", "e2")]}
@@ -1063,7 +1273,11 @@ def test_edge_ports_round_trip_and_affect_checksum() -> None:
     assert snake_g.edges[0].source_port == "trigger"
     assert graph_checksum(camel_g) == graph_checksum(snake_g)
 
-    no_ports = linear_graph()
+    # 端口是图内容的一部分：同样的连线、没写端口，摘要就不同（缺省端口只影响运行期口径）
+    no_ports = {
+        "nodes": [node("s", "start"), node("e", "end")],
+        "edges": [{"source": "s", "target": "e"}],
+    }
     assert graph_checksum(camel_g) != graph_checksum(no_ports)
 
 
@@ -1352,13 +1566,21 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert http["label"] == "HTTP"
     assert http["role"] == "normal"
     assert http["has_executor"] is True
-    assert [port["id"] for port in http["outputs"]] == ["trigger", "message"]
-    assert http["outputs"][1]["label"] == "响应"  # 端口显示名也来自后端
+    assert [port["id"] for port in http["outputs"]] == ["trigger", "http_status", "http_body"]
+    assert http["outputs"][2]["label"] == "响应正文"  # 端口显示名也来自后端
+    assert [port["type"] for port in http["outputs"]] == ["trigger", "message", "message"]
+    # 输入端口：触发 + url（必填入口）+ body（可选）
+    assert [(port["id"], port["required"]) for port in http["inputs"]] == [
+        ("trigger", False),
+        ("url", True),
+        ("body", False),
+    ]
     method = next(field for field in http["fields"] if field["name"] == "method")
     assert method["default"] == "GET" and method["has_default"] is True
     assert method["options"] == ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
     url = next(field for field in http["fields"] if field["name"] == "url")
-    assert url["required"] is True and url["has_default"] is False and url["default"] is None
+    # url 的「必填」落在入口上：字段本身没默认值，接线或手填都行
+    assert url["required"] is False and url["has_default"] is False and url["default"] is None
 
     end = nodes["end"]
     assert end["max_outgoing"] == 0 and end["outputs"] == []
