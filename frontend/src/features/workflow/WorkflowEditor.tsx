@@ -361,6 +361,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     x: number
     y: number
   } | null>(null)
+  /** 节点库拖出的新节点虚影：x/y = 鼠标的画布坐标（null = 没拖 / 不在画布上） */
+  const [newDrag, setNewDrag] = useState<{ type: string; x: number; y: number } | null>(null)
   /**
    * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
    * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
@@ -554,7 +556,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   // ---- 节点操作 ----
   const addNode = useCallback(
-    (type: string) => {
+    (type: string, pos?: { x: number; y: number }) => {
       const def = nodeDef(type)
       const id = uid(type)
       pushUndo()
@@ -563,14 +565,59 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         type: def.type,
         config: { ...def.defaults },
         outputs: [],
-        x: 80 + Math.random() * 200,
-        y: 80 + Math.random() * 120,
+        // pos：拖拽落点（鼠标位置，按节点中心换算成左上角）；点击添加沿用随机错开位置
+        x: pos ? pos.x - NODE_W / 2 : 80 + Math.random() * 200,
+        y: pos ? pos.y - nodeHeight(def) / 2 : 80 + Math.random() * 120,
       }
       setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }))
       setSelectedId(id)
     },
     [pushUndo],
   )
+
+  /**
+   * 节点库选项按下：拖进画布 → 虚影跟随、松手落子；没拖（纯点击）→ 和以前一样直接添加。
+   * 监听挂在 window 上：拖拽路径大半在画布外（左侧栏），画布上的 mousemove 收不到。
+   */
+  const onPaletteMouseDown = (e: React.MouseEvent, type: string) => {
+    if (e.button !== 0) return
+    e.preventDefault() // 防文本选中 / 原生拖拽
+    const drag = { startX: e.clientX, startY: e.clientY, armed: false }
+    /** 鼠标在画布可视区里就返回画布矩形（用于坐标换算），否则 null */
+    const insideCanvas = (ev: MouseEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return null
+      if (ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) return null
+      return rect
+    }
+    const onMove = (ev: MouseEvent) => {
+      if (!drag.armed) {
+        // 位移超过阈值才算「拖拽」，没超过就还是「点击」
+        if (Math.abs(ev.clientX - drag.startX) + Math.abs(ev.clientY - drag.startY) < 5) return
+        drag.armed = true
+      }
+      const rect = insideCanvas(ev)
+      if (!rect) {
+        setNewDrag(null) // 不在画布上：虚影收起
+        return
+      }
+      setNewDrag({ type, x: (ev.clientX - rect.left - pan.x) / zoom, y: (ev.clientY - rect.top - pan.y) / zoom })
+    }
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      if (!drag.armed) {
+        addNode(type) // 纯点击：和以前一样直接出现
+        return
+      }
+      setNewDrag(null)
+      const rect = insideCanvas(ev)
+      if (!rect) return // 松手在画布外：取消，不添加
+      addNode(type, { x: (ev.clientX - rect.left - pan.x) / zoom, y: (ev.clientY - rect.top - pan.y) / zoom })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   const deleteNode = useCallback(
     (id: string) => {
@@ -1307,7 +1354,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               <button
                 key={spec.type}
                 className={styles.paletteItem}
-                onClick={() => addNode(spec.type)}
+                onMouseDown={(e) => onPaletteMouseDown(e, spec.type)}
+                onClick={(e) => {
+                  // 键盘（Enter/Space）触发的 click：detail 为 0；鼠标的交给 mousedown/mouseup 流程
+                  if (e.detail === 0) addNode(spec.type)
+                }}
               >
                 <span className={styles.paletteDot} style={{ background: def.color }} />
                 {def.label}
@@ -1611,6 +1662,56 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                     </div>
                   )
                 })
+              })()}
+
+              {/* 节点库拖出的新节点虚影（中心跟着鼠标；松手在画布上才真正添加） */}
+              {newDrag && (() => {
+                const def = nodeDef(newDrag.type)
+                const portRows = Math.max(def.inputs.length, def.outputs.length)
+                const h = nodeHeight(def)
+                return (
+                  <div
+                    className={styles.ghostNode}
+                    style={{
+                      left: newDrag.x - NODE_W / 2,
+                      top: newDrag.y - h / 2,
+                      width: NODE_W,
+                      minHeight: h,
+                      '--c': def.color,
+                    } as React.CSSProperties}
+                  >
+                    <div className={styles.nodeHeader}>
+                      <span className={styles.nodeColorBar} style={{ background: def.color }} />
+                      <span className={styles.nodeLabel}>{def.label}</span>
+                    </div>
+                    <div className={styles.ports}>
+                      {Array.from({ length: portRows }).map((_, rowIdx) => {
+                        const inp = def.inputs[rowIdx]
+                        const out = def.outputs[rowIdx]
+                        return (
+                          <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
+                            <div className={styles.portSide}>
+                              {inp && (
+                                <>
+                                  <span className={styles.portCircle} style={{ left: -5, background: PORT_COLORS[inp.type] }} />
+                                  <span className={styles.portLabel}>{inp.label}</span>
+                                </>
+                              )}
+                            </div>
+                            <div className={styles.portSideRight}>
+                              {out && (
+                                <>
+                                  <span className={styles.portLabel}>{out.label}</span>
+                                  <span className={styles.portCircle} style={{ right: -5, background: PORT_COLORS[out.type] }} />
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
               })()}
 
               {boxSel && (() => {
