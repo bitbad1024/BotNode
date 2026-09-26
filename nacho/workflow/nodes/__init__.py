@@ -9,6 +9,7 @@
       test.py            内置节点：test（回显，画布联调用）
       constant.py        内置节点：constant（一个节点一个常量值，从 value 端口送下去）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
+      delay.py           内置节点：delay（异步等待：触发进 / 触发出，秒数可接线覆盖手填）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -58,6 +59,7 @@ from .base import (
     input_value,
 )
 from .constant import exec_constant
+from .delay import exec_delay
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http
 from .log import LOG_LEVELS, exec_log
@@ -111,4 +113,5 @@ __all__ = [
     "exec_test",
     "exec_http",
     "HTTP_METHODS",
+    "exec_delay",
 ]
