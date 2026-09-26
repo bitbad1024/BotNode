@@ -36,6 +36,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from nacho.core.cache import cache as process_cache
 from nacho.core.logger import BaseLogger, get_logger
 from nacho.core.scheduler import TaskManager
 
@@ -118,9 +119,11 @@ class NodeSpec:
     :param fields: :class:`ConfigField` 清单，必填 / 默认值都从这里推导；
     :param validator: 自定义配置校验器（枚举、条件必填这类表格盖不住的规则）；
     :param role: 拓扑角色，start 全图唯一、end 至少一个可达；
-    :param min_outgoing: 出边条数下限（分流类节点要 ≥2）；
+    :param min_outgoing: 出边条数下限（如 condition 的「至少接一个出口」）；
     :param max_outgoing: 出边条数上限（end 为 0），None 不限；
     :param expression_field: 该字段内容要交图级表达式语法检查器过一遍；
+    :param branching: 分流节点（如 condition）：执行后只让**选中端口的出边**保持活着，
+        其余出口的边整段剪枝（对岸节点不执行，级联到它的下游）；普通节点永远 False；
     :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
     :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
     :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
@@ -135,6 +138,7 @@ class NodeSpec:
     min_outgoing: int = 0
     max_outgoing: int | None = None
     expression_field: str | None = None
+    branching: bool = False
     label: str = ""
     order: int = 100
     inputs: tuple[PortSpec, ...] = ()
@@ -160,7 +164,7 @@ def input_value(
 
 
 class NodeExecutionContext:
-    """节点运行时上下文：本节点的入口值 + 日志 + 调度器。
+    """节点运行时上下文：本节点的入口值 + 日志 + 调度器 + 可用的服务（OneBot / 缓存）。
 
     ``inputs`` 是**属性**不是入参：引擎每跑一个节点前，按指向它的边把上游产出投递进来
     （键 = 目标端口名）。要预置入口值（测试 / 手动跑）直接写 ``ctx.inputs["x"] = ...``。
@@ -176,7 +180,16 @@ class NodeExecutionContext:
         跑整条流程）是 ``False`` —— 任务在调度器里排着，它自己会排下一次；
     :param multi_instance: 这条工作流的**实例策略**（工作流设置里的「单实例 / 多实例」，来自
         定义表，与图无关）：``False``（缺省，单实例）上一次还没跑完就跳过本次；``True``（多实例）
-        到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）。
+        到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）；
+    :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：``onebot`` 节点按它挑
+        「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间）；离线跑是空串；
+    :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
+        ``connected_at`` / ``call()`` —— 即 ``nacho.onebot.server.OneBotServer``）。装配层
+        注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
+    :param cache: 缓存门面（鸭子形状：``async get(key) -> str | None`` /
+        ``async set(key, value, ttl=None)`` —— 即 ``nacho.core.cache.Cache``）。
+        **缺省就是进程级那一个**（``nacho.core.cache.cache``，主程序启动时已 ``start()``），
+        测试 / 特殊场合可以注入自己的门面；``cache`` 节点靠它存取变量。
     """
 
     def __init__(
@@ -188,15 +201,24 @@ class NodeExecutionContext:
         workflow_id: str = NO_WORKFLOW_ID,
         register_triggers: bool = False,
         multi_instance: bool = False,
+        owner_id: str = "",
+        onebot: Any | None = None,
+        cache: Any | None = None,
     ) -> None:
         self.inputs: dict[str, Any] = {}
         self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
         self.log: list[str] = []  # 节点产出的文字日志（供测试 / 前端回显）
         self.workflow_id: str = workflow_id
+        #: 这条工作流属于谁（OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
+        self.owner_id: str = owner_id
         #: 本次是不是「登记触发」那一趟（见类文档）；整图执行时为 ``False``
         self.register_triggers: bool = register_triggers
         #: 实例策略：多实例时到点就开新实例（见类文档）
         self.multi_instance: bool = multi_instance
+        #: OneBot 服务端（鸭子形状见类文档）；装配层没注入时是 ``None``
+        self.onebot: Any | None = onebot
+        #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
+        self.cache: Any = cache if cache is not None else process_cache
         self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run

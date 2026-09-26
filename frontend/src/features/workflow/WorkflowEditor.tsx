@@ -78,6 +78,13 @@ const NODE_COLORS: Record<string, string> = {
   http: '#0ea5e9',
   constant: '#eab308',
   delay: '#14b8a6',
+  json: '#f97316',
+  regex: '#ec4899',
+  now: '#84cc16',
+  condition: '#6366f1',
+  onebot: '#d946ef',
+  operator: '#f59e0b',
+  cache: '#06b6d4',
 }
 
 const DEFAULT_COLOR = '#64748b'

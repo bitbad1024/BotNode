@@ -48,7 +48,16 @@ from nacho.workflow import (  # noqa: E402
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
-from nacho.workflow.nodes import exec_http  # noqa: E402
+from nacho.workflow.nodes import (  # noqa: E402
+    exec_cache,
+    exec_condition,
+    exec_http,
+    exec_json,
+    exec_now,
+    exec_onebot,
+    exec_operator,
+    exec_regex,
+)
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -1102,7 +1111,10 @@ async def test_executor_delay_waits_then_passes_control() -> None:
     elapsed = time.monotonic() - started
 
     waited = "[delay] d: 等待 0.05 秒"
-    assert elapsed >= 0.05  # 真的等了，不是立即返回
+    # 真的等了，不是立即返回。阈值不用 0.05：Windows 定时器粒度 15.625ms，
+    # asyncio.sleep(0.05) 实测会在 ~47ms（3 tick）与 ~63ms（4 tick）之间摇摆，
+    # 按请求值卡线会偶发失败；立即返回的话 elapsed 在毫秒级，跟 0.04 差一个量级。
+    assert elapsed >= 0.04
     assert any(waited in line for line in ctx.log)
     assert ctx.log.index(waited) < ctx.log.index("[INFO] l: 等到了")  # 先等完再走下游
 
@@ -1196,12 +1208,704 @@ def test_delay_seconds_is_validated() -> None:
         assert validate_graph(graph_with(good)).valid, good
 
 
+@pytest.mark.asyncio
+async def test_json_extracts_nested_scalar_and_whole_document() -> None:
+    """点路径提取：嵌套 / 数组下标（负数从后往前）/ 留空取整个文档；值统一字符串化。"""
+    doc = (
+        '{"data": {"user": {"name": "小明"}, "items": [{"t": "a"}, {"t": "b"}],'
+        ' "n": 3, "ok": true, "none": null, "s": "文字"}}'
+    )
+
+    async def extract(path: str) -> str:
+        node_ = WorkflowNode(id="j1", type="json", config={"path": path})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"json": doc}  # 线上来的文本（接线场景）
+        result = await exec_json(node_, ctx_)
+        return result["json_value"]
+
+    assert await extract("data.user.name") == "小明"
+    assert await extract("data.s") == "文字"
+    assert await extract("data.items.1.t") == "b"
+    assert await extract("data.items.-1.t") == "b"  # 负索引：从后往前
+    assert await extract("data.n") == "3"  # 数字 -> JSON 字面量
+    assert await extract("data.ok") == "true"
+    assert await extract("data.none") == "null"  # 值真的是 null：算「取到了」
+    # 留空 = 整个文档：紧凑序列化，与输入里的空白无关
+    assert await extract("") == (
+        '{"data":{"user":{"name":"小明"},"items":[{"t":"a"},{"t":"b"}],'
+        '"n":3,"ok":true,"none":null,"s":"文字"}}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_json_soft_fails_yield_empty_string() -> None:
+    """三块「数据不合预期」都记 warning 并送空串（不打断流程）：空文本 / 非法 JSON / 路径不存在。"""
+
+    async def run(text: str, path: str = "") -> tuple[str, list[str]]:
+        node_ = WorkflowNode(id="j1", type="json", config={"path": path})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"json": text}
+        result = await exec_json(node_, ctx_)
+        return result["json_value"], ctx_.log
+
+    value, log = await run("")  # 上游送了空串
+    assert value == "" and any("没拿到" in line for line in log)
+
+    value, log = await run("<html>502 Bad Gateway</html>")  # 对方回了个错误页
+    assert value == "" and any("解析失败" in line for line in log)
+
+    value, log = await run('{"a": {"b": 1}}', "a.c")  # 字段名拼错 / 对方改了结构
+    assert value == "" and any("取不到" in line for line in log)
+
+
+def test_json_fields_are_validated() -> None:
+    """手填值的防呆在语义阶段：路径写法 / JSON 文本语法；必填入口「接线或手填」照常生效。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("j", "json", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "j"), edge("j", "e")],
+        }
+
+    assert validate_graph(graph_with(json='{"a": 1}', path="a.b")).valid  # 手填合法文本即可放行
+
+    report = validate_graph(graph_with(json='{"a": 1}', path="a..b"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_JSON_PATH"]
+
+    report = validate_graph(graph_with(json="{oops}", path="a"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_JSON_TEXT"]
+
+    # 必填入口：接线或手填两个都没有 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with())
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
+@pytest.mark.asyncio
+async def test_regex_extracts_and_replaces() -> None:
+    """提取：无组取整体 / 有组取第 1 组 / 可选组没匹配回落整体 / i 旗标；替换：\1 反向引用。"""
+
+    async def run(
+        text: str, pattern: str, action: str = "extract", replace: str = "", flags: str = ""
+    ) -> str:
+        node_ = WorkflowNode(
+            id="r1",
+            type="regex",
+            config={"action": action, "replace": replace, "flags": flags},
+        )
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"text": text, "pattern": pattern}
+        result = await exec_regex(node_, ctx_)
+        return result["regex_value"]
+
+    assert await run("验证码 123456，5 分钟内有效", r"(\d{4,6})") == "123456"
+    assert await run("id=u-42 已注册", r"id=([\w-]+)") == "u-42"  # 连字符要靠 [\w-] 才吃得住
+    assert await run("123", r"(x)?(\d+)") == "123"  # 第 1 组没参与匹配 -> 回落整体匹配
+    assert await run("XABCx", "abc", flags="i") == "ABC"  # 忽略大小写；没组取整体
+    assert await run("13801234", r"(\d{4})\d{4}", action="replace", replace=r"\1****") == "1380****"
+    assert await run("a  b\tc", r"\s+", action="replace", replace="") == "abc"  # 空替换 = 删掉
+
+
+@pytest.mark.asyncio
+async def test_regex_soft_fails_yield_empty_string() -> None:
+    """抽不到不算事故：没匹配 / 空文本 / 线上来的非法正则都送空串并记 warning，不打断流程。"""
+
+    async def run(text: str, pattern: str) -> tuple[str, list[str]]:
+        node_ = WorkflowNode(id="r1", type="regex", config={})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"text": text, "pattern": pattern}
+        result = await exec_regex(node_, ctx_)
+        return result["regex_value"], ctx_.log
+
+    value, log = await run("没有数字的句子", r"\d+")
+    assert value == "" and any("没有匹配" in line for line in log)
+
+    value, log = await run("", r"\d+")
+    assert value == "" and any("没拿到文本" in line for line in log)
+
+    value, log = await run("abc", "(abc")  # 线上来的正则不合法（手填的会被校验拦住）
+    assert value == "" and any("不合法" in line for line in log)
+
+
+def test_regex_fields_are_validated() -> None:
+    """手填值的防呆在语义阶段：正则语法 / 动作枚举 / 旗标字母；必填入口「接线或手填」照常生效。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("r", "regex", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "r"), edge("r", "e")],
+        }
+
+    assert validate_graph(graph_with(text="hi", pattern="h")).valid
+
+    report = validate_graph(graph_with(text="hi", pattern="(abc"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_REGEX"]
+
+    report = validate_graph(graph_with(text="hi", pattern="h", action="删掉"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_REGEX_ACTION"]
+
+    report = validate_graph(graph_with(text="hi", pattern="h", flags="ix"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_REGEX_FLAGS"]
+
+    # 必填入口：text / pattern 接一个差一个都不行
+    report = validate_graph(graph_with(text="hi"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
+@pytest.mark.asyncio
+async def test_now_outputs_formatted_text_and_timestamp() -> None:
+    """产出当前时刻：格式按手填 / 连线（线上优先），时间戳是整数秒的「现在」。"""
+    node_ = WorkflowNode(id="n1", type="now", config={"format": "%Y%m%d"})
+    result = await exec_now(node_, NodeExecutionContext())
+    assert result["now_text"] == time.strftime("%Y%m%d")  # 手填格式
+    assert isinstance(result["now_ts"], int)
+    assert abs(result["now_ts"] - int(time.time())) <= 5  # 就是「现在」
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"format": "%Y"}  # 线上来的格式覆盖手填
+    result = await exec_now(node_, ctx_)
+    assert result["now_text"] == time.strftime("%Y")
+
+
+@pytest.mark.asyncio
+async def test_condition_picks_branch_and_engine_prunes_skipped_side() -> None:
+    """分流执行：只跑选中分支，没走的整段跳过（[skip] 留痕）；汇合点有活入边照常收尾。"""
+
+    def branch_graph(left: str, operator: str, right: str) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", left=left, operator=operator, right=right),
+                node("yes", "log", message="true 分支"),
+                node("no", "log", message="false 分支"),
+                node("no2", "log", message="false 级联"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "c"),
+                edge("c", "yes", source_port="true"),
+                edge("c", "no", source_port="false"),
+                edge("yes", "e"),
+                edge("no", "no2"),
+                edge("no2", "e"),
+            ],
+        }
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(
+        WorkflowGraph.model_validate(branch_graph("5", ">", "3")), ctx_
+    )
+    assert any("[condition] c: 5 > 3 -> true" in line for line in ctx_.log)
+    assert any("[INFO] yes: true 分支" in line for line in ctx_.log)
+    assert not any("[INFO] no" in line for line in ctx_.log)  # false 侧两个节点都没执行
+    assert any("[skip] no: 分支未选中，未执行" in line for line in ctx_.log)
+    assert any("[skip] no2: 分支未选中，未执行" in line for line in ctx_.log)  # 级联跳过
+    assert any("[end] e 流程结束" in line for line in ctx_.log)  # 汇合点：还有活入边
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(
+        WorkflowGraph.model_validate(branch_graph("2", ">", "3")), ctx_
+    )
+    assert any("[condition] c: 2 > 3 -> false" in line for line in ctx_.log)
+    assert any("[INFO] no: false 分支" in line for line in ctx_.log)  # 这次走 false
+    assert not any("[INFO] yes" in line for line in ctx_.log)  # true 侧被剪掉
+    assert any("[skip] yes: 分支未选中，未执行" in line for line in ctx_.log)
+    assert any("[end] e 流程结束" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_condition_compares_by_operator() -> None:
+    """比较口径：==/!= 比文本，>/>=/</<= 要比数字，contains/not_contains 比子串。"""
+
+    async def pick(left: str, operator: str, right: str) -> str:
+        node_ = WorkflowNode(id="c1", type="condition", config={"operator": operator})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_condition(node_, ctx_)
+        return "true" if result.get("true") else "false"
+
+    assert await pick("5", ">", "3") == "true"
+    assert await pick("3", ">=", "3") == "true"
+    assert await pick("2.5", "<=", "3") == "true"  # 小数也认
+    assert await pick("3", "<", "3") == "false"
+    assert await pick("abc", "==", "abc") == "true"
+    assert await pick("abc", "!=", "abc") == "false"
+    assert await pick("开播了，快来看", "contains", "开播") == "true"
+    assert await pick("开播了", "not_contains", "下播") == "true"
+
+
+@pytest.mark.asyncio
+async def test_condition_soft_fails_go_false() -> None:
+    """拿不到值不算事故（warning + 走 false）：左值空 / 要数字却是文本 / contains 右值空。"""
+
+    async def run(left: str, operator: str, right: str) -> tuple[bool, list[str]]:
+        node_ = WorkflowNode(id="c1", type="condition", config={"operator": operator})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_condition(node_, ctx_)
+        return bool(result.get("false")), ctx_.log
+
+    gone_false, log = await run("", "==", "x")  # 上游没送值或送了空串
+    assert gone_false and any("左值为空" in line for line in log)
+
+    gone_false, log = await run("一会儿", ">", "3")  # 数值比较符遇到了文本
+    assert gone_false and any("非数字" in line for line in log)
+
+    gone_false, log = await run("有现货", "contains", "")  # 子串比较没给右值
+    assert gone_false and any("右值为空" in line for line in log)
+
+    gone_false, log = await run("x", "≈", "y")  # 没走过校验的图：非法比较符兜底
+    assert gone_false and any("比较符" in line for line in log)
+
+
+def test_condition_fields_are_validated() -> None:
+    """手填值防呆：比较符枚举 / 必填入口「接线或手填」；一个出口都不接由拓扑阶段拦住。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "c"), edge("c", "e", source_port="true")],
+        }
+
+    assert validate_graph(graph_with(left="x", right="y")).valid
+
+    report = validate_graph(graph_with(left="x", operator="≈", right="y"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_CONDITION_OPERATOR"]
+
+    # 必填入口 left：接线或手填两个都没有 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with(right="y"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+    # 一个出口都不接：条件节点至少接一个出口（分流节点的出边下限，拓扑阶段）
+    report = validate_graph(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", left="x"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "c"), edge("s", "e")],
+        }
+    )
+    assert not report.valid and report.stage == STAGE_TOPOLOGY
+    assert [issue.code for issue in report.errors] == ["GATEWAY_NEEDS_BRANCHES"]
+
+
+# ------------------------------------------------------------- ④-E OneBot 节点
+class _FakeActionResponse:
+    """假的动作回应（形状对齐 ``nacho.onebot.models.ActionResponse``：``ok`` = status/retcode 都成功）。"""
+
+    def __init__(self, status: str = "ok", retcode: int = 0, data: object = None) -> None:
+        self.status = status
+        self.retcode = retcode
+        self.data = data
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "ok" and self.retcode == 0
+
+
+class _FakeConnection:
+    """假的 OneBot 连接：记下每次 ``call`` 的动作与参数，按给定回应回执。
+
+    不 import ``nacho.onebot``（``server.py`` 顶层要 websockets，是可选的）—— 节点只认
+    鸭子形状，假对象照着那个形状写即可。
+    """
+
+    def __init__(
+        self,
+        id: str = "",
+        *,
+        connected_at: float = 0.0,
+        response: _FakeActionResponse | None = None,
+    ) -> None:
+        self.id = id
+        self.account = "bot"
+        self.connected_at = connected_at
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self._response = response if response is not None else _FakeActionResponse()
+
+    async def call(self, action: str, /, **params: object) -> _FakeActionResponse:
+        self.calls.append((action, dict(params)))
+        return self._response
+
+
+class _FakeOneBotServer:
+    """假的 OneBot 服务端：节点只用 ``connections`` 属性（鸭子形状见 onebot.py 模块文档）。"""
+
+    def __init__(self, connections: list[_FakeConnection]) -> None:
+        self.connections: tuple[_FakeConnection, ...] = tuple(connections)
+
+
+@pytest.mark.asyncio
+async def test_onebot_sends_via_owned_connection_and_shows_receipt() -> None:
+    """对「归属的」连接发动作：群发 / 私聊 / 撤回的参数按动作组装，回执从两个输出端口送下去。"""
+    conn = _FakeConnection(id="u-admin", response=_FakeActionResponse(data={"message_id": 7}))
+    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+
+    async def run(action: str, **inputs: str) -> dict[str, Any]:
+        conn.calls.clear()
+        node_ = WorkflowNode(id="ob1", type="onebot", config={"action": action})
+        ctx_.inputs = dict(inputs)
+        return await exec_onebot(node_, ctx_)
+
+    result = await run("send_group_msg", message="开播了", group_id="123456")
+    assert conn.calls == [("send_group_msg", {"group_id": 123456, "message": "开播了"})]
+    assert result["onebot_retcode"] == 0
+    assert result["onebot_data"] == '{"message_id":7}'  # 回执数据：紧凑 JSON
+    assert any("[onebot] ob1: send_group_msg -> retcode 0" in line for line in ctx_.log)
+
+    await run("send_private_msg", message="悄悄话", user_id="10001")
+    assert conn.calls == [("send_private_msg", {"user_id": 10001, "message": "悄悄话"})]
+
+    await run("delete_msg", message_id="42")
+    assert conn.calls == [("delete_msg", {"message_id": 42})]  # 号类参数转成整数
+
+
+@pytest.mark.asyncio
+async def test_onebot_send_msg_prefers_group_then_private() -> None:
+    """send_msg 智能分流：填了群号发群，群号空则发私聊；两样都没给当场抛。"""
+    conn = _FakeConnection(id="u-admin")
+    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+
+    async def run(**inputs: str) -> None:
+        conn.calls.clear()
+        node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_msg"})
+        ctx_.inputs = dict(inputs)
+        await exec_onebot(node_, ctx_)
+
+    await run(message="hi", group_id="9", user_id="7")
+    assert conn.calls == [("send_msg", {"message_type": "group", "group_id": 9, "message": "hi"})]
+
+    await run(message="hi", user_id="7")
+    assert conn.calls == [("send_msg", {"message_type": "private", "user_id": 7, "message": "hi"})]
+
+    with pytest.raises(ValueError, match="至少要给"):
+        await run(message="hi")
+
+
+@pytest.mark.asyncio
+async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
+    """对方收下了但回执不成功（status / retcode 非成功）：不抛，回执原样送下游自己判断。"""
+    conn = _FakeConnection(
+        id="u-admin",
+        response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"}),
+    )
+    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+    node_ = WorkflowNode(
+        id="ob1", type="onebot", config={"action": "send_group_msg", "group_id": "1"}
+    )
+    ctx_.inputs = {"message": "hi"}
+    result = await exec_onebot(node_, ctx_)  # 不抛
+
+    assert result["onebot_retcode"] == 1200
+    assert "账号被禁言" in result["onebot_data"]
+    assert any("[onebot] ob1: send_group_msg -> retcode 1200" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_onebot_raises_when_service_or_connection_missing() -> None:
+    """环境问题当场抛：没注入 OneBot 服务 / 归属下没有在线连接（提示里带上在线的是谁）。"""
+    node_ = WorkflowNode(
+        id="ob1", type="onebot", config={"action": "send_group_msg", "group_id": "1"}
+    )
+    ctx_ = NodeExecutionContext(owner_id="u-admin")  # 装配层没接 OneBot
+    ctx_.inputs = {"message": "hi"}
+    with pytest.raises(ConnectionError, match="需要 OneBot 服务"):
+        await exec_onebot(node_, ctx_)
+
+    other = _FakeConnection(id="u-robot")  # 在线的是别人家的
+    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([other]))
+    ctx_.inputs = {"message": "hi"}
+    with pytest.raises(ConnectionError, match="u-admin"):
+        await exec_onebot(node_, ctx_)
+    assert other.calls == []  # 没乱发
+
+
+@pytest.mark.asyncio
+async def test_onebot_rejects_bad_params_and_picks_newest_connection() -> None:
+    """配置问题当场抛：参数没给 / 号不是整数；同一归属多条连接取最近连上的那条。"""
+    conn = _FakeConnection(id="u-admin")
+    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+
+    ctx_.inputs = {"message": "hi"}  # 群号没接线也没手填
+    node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_group_msg"})
+    with pytest.raises(ValueError, match="group_id"):
+        await exec_onebot(node_, ctx_)
+
+    ctx_.inputs = {"message_id": "四十二"}  # 线上送来的号不像整数
+    node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "delete_msg"})
+    with pytest.raises(ValueError, match="不是整数"):
+        await exec_onebot(node_, ctx_)
+
+    old = _FakeConnection(id="u-admin", connected_at=1.0)
+    new = _FakeConnection(id="u-admin", connected_at=2.0)
+    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([old, new]))
+    node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_private_msg"})
+    ctx_.inputs = {"message": "hi", "user_id": "7"}
+    await exec_onebot(node_, ctx_)
+    assert new.calls == [("send_private_msg", {"user_id": 7, "message": "hi"})]
+    assert old.calls == []  # 取了最近连上的那条
+
+
+def test_onebot_action_is_validated() -> None:
+    """动作枚举在语义阶段拦住（拼错保存就报 INVALID_ONEBOT_ACTION），合法值放行。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("ob", "onebot", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "ob"), edge("ob", "e")],
+        }
+
+    assert validate_graph(graph_with(action="send_group_msg", group_id="1", message="hi")).valid
+
+    report = validate_graph(graph_with(action="发消息", group_id="1", message="hi"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_ONEBOT_ACTION"]
+
+
+# ------------------------------------------------------------- ④-F 运算节点
+@pytest.mark.asyncio
+async def test_operator_does_arithmetic_and_formats_result() -> None:
+    """加减乘除取余都能算：两边转数字；结果文本化——整数值不带小数点，除法是真除法。"""
+
+    async def compute(symbol: str, left: str, right: str) -> str:
+        node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_operator(node_, ctx_)
+        return str(result["operator_result"])
+
+    assert await compute("+", "2", "3") == "5"
+    assert await compute("-", "7", "10") == "-3"
+    assert await compute("*", "2.5", "4") == "10"  # 整数值不带小数点
+    assert await compute("/", "7", "2") == "3.5"  # 真除法（不是整除）
+    assert await compute("/", "6", "2") == "3"
+    assert await compute("%", "7", "3") == "1"
+    assert await compute("%", "-7", "3") == "2"  # Python 语义：符号跟随除数
+    assert await compute("+", "0.1", "0.2") == "0.30000000000000004"  # 不做「善意」四舍五入
+
+
+@pytest.mark.asyncio
+async def test_operator_takes_operands_from_wire_with_hand_fallback() -> None:
+    """线上的值优先；没接线才用手填兜底（left / right 就是「可被连线覆盖的入口」）。"""
+    node_ = WorkflowNode(id="m1", type="operator", config={"operator": "+", "left": "3", "right": "4"})
+
+    # 没接线：手填的 left / right 生效
+    ctx_ = NodeExecutionContext()
+    result = await exec_operator(node_, ctx_)
+    assert result["operator_result"] == "7"
+
+    # 接线了：线上的值覆盖手填
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"left": "9", "right": "4"}
+    result = await exec_operator(node_, ctx_)
+    assert result["operator_result"] == "13"  # 9 + 4（若手填生效会是 3 + 4 = 7）
+
+
+@pytest.mark.asyncio
+async def test_operator_soft_fails_to_empty_string() -> None:
+    """算不出来不算事故（warning + 空串，不打断流程）：空值 / 非数字 / 除数为 0 / 运算符不合法。"""
+
+    async def run(symbol: str, left: str, right: str) -> tuple[str, list[str]]:
+        node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_operator(node_, ctx_)
+        return str(result["operator_result"]), ctx_.log
+
+    value, log = await run("+", "", "1")  # 左值空
+    assert value == "" and any("左值为空" in line for line in log)
+
+    value, log = await run("*", "一会儿", "2")  # 非数字
+    assert value == "" and any("不是数字" in line for line in log)
+
+    value, log = await run("/", "1", "0")  # 除数为 0
+    assert value == "" and any("除数为 0" in line for line in log)
+    value, log = await run("%", "1", "0")  # 取余同管
+    assert value == "" and any("除数为 0" in line for line in log)
+
+    value, log = await run("≈", "1", "2")  # 没走过校验的图：非法运算符也走这条
+    assert value == "" and any("不合法" in line for line in log)
+
+
+def test_operator_symbol_is_validated() -> None:
+    """运算符枚举在语义阶段拦住（拼错保存就报 INVALID_OPERATOR_SYMBOL）；必填入口照常。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("m", "operator", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "m"), edge("m", "e")],
+        }
+
+    assert validate_graph(graph_with(left="1", operator="*", right="2")).valid
+
+    report = validate_graph(graph_with(left="1", operator="≈", right="2"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_OPERATOR_SYMBOL"]
+
+    # 必填入口 right：接线或手填两个都没有 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with(operator="+", left="1"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
+# ------------------------------------------------------------- ④-G 缓存节点
+class _FakeCache:
+    """假的缓存门面（鸭子形状对齐 ``nacho.core.cache.Cache``：``get`` / ``set`` 两个异步方法）。
+
+    单元测试里不碰进程级单例（它没 ``start()``，直接调会抛 ``CacheError``）—— 给 ctx
+    注入这个假对象即可。
+    """
+
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.data.get(key)
+
+    async def set(self, key: str, value: str, ttl: float | None = None) -> None:
+        self.data[key] = value
+
+
+@pytest.mark.asyncio
+async def test_cache_set_then_get_roundtrip_with_scoped_prefixes() -> None:
+    """set 写、get 读（值按文本存）；缓存键用前缀区分作用域：账号级带归属、图级带图 id。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
+
+    async def run(action: str, **inputs: object) -> dict[str, Any]:
+        node_ = WorkflowNode(id="ca1", type="cache", config={"action": action, "scope": "account"})
+        ctx_.inputs = dict(inputs)
+        return await exec_cache(node_, ctx_)
+
+    # set：写进归属前缀下，输出把写进去的值回传（下游接着用）
+    result = await run("set", key="日签", value="上班")
+    assert fake.data == {"workflow:acct:u-admin:日签": "上班"}
+    assert result["cache_value"] == "上班"
+    assert any("[cache] ca1: set workflow:acct:u-admin:日签 = 上班" in line for line in ctx_.log)
+
+    # get：同一个键读回来
+    result = await run("get", key="日签")
+    assert result["cache_value"] == "上班"
+    assert any("-> 上班" in line for line in ctx_.log)
+
+    # 图级作用域换前缀；线上送整数（now_ts 那种）也会转成文本
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "set", "scope": "workflow"})
+    ctx_.inputs = {"key": "计数", "value": 42}
+    await exec_cache(node_, ctx_)
+    assert fake.data["workflow:graph:w1:计数"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_cache_get_miss_returns_empty_without_alarm() -> None:
+    """没存过不算事故：送空串、流程继续（日志留一行「还没存过」）。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", cache=fake)
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get"})
+    ctx_.inputs = {"key": "没存过的"}
+    result = await exec_cache(node_, ctx_)
+
+    assert result["cache_value"] == ""
+    assert any("还没存过" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_cache_raises_on_missing_key_and_owner_or_bad_enums() -> None:
+    """环境 / 配置问题当场抛：key 空 / 账号作用域没有归属 / 非法的动作、作用域（兜底）。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", cache=fake)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get"})
+    ctx_.inputs = {"key": ""}  # key 没接线也没手填
+    with pytest.raises(ValueError, match="key 为空"):
+        await exec_cache(node_, ctx_)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get", "scope": "account"})
+    ctx_no_owner = NodeExecutionContext(cache=fake)  # 离线跑，没归属
+    ctx_no_owner.inputs = {"key": "x"}
+    with pytest.raises(ValueError, match="owner_id"):
+        await exec_cache(node_, ctx_no_owner)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "remove", "scope": "workflow"})
+    ctx_.inputs = {"key": "x"}
+    with pytest.raises(ValueError, match="动作不合法"):
+        await exec_cache(node_, ctx_)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get", "scope": "全局"})
+    with pytest.raises(ValueError, match="作用域不合法"):
+        await exec_cache(node_, ctx_)
+
+
+def test_cache_fields_are_validated() -> None:
+    """两块枚举在语义阶段拦住（INVALID_CACHE_ACTION / INVALID_CACHE_SCOPE）；key 必填照常。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("ca", "cache", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "ca"), edge("ca", "e")],
+        }
+
+    assert validate_graph(graph_with(action="set", scope="account", key="x", value="1")).valid
+
+    report = validate_graph(graph_with(action="remove", scope="account", key="x"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_CACHE_ACTION"]
+
+    report = validate_graph(graph_with(action="get", scope="全局", key="x"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_CACHE_SCOPE"]
+
+    # key 是必填入口：没接线也没手填 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with(action="get"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "http", "constant", "delay"):
+    for node_type in (
+        "start", "end", "log", "test", "http", "constant", "delay",
+        "json", "regex", "now", "condition", "onebot", "operator", "cache",
+    ):
         assert get_executor(node_type) is not None
-    assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant", "delay"}
+    assert set(registered_types()) >= {
+        "start", "end", "log", "test", "http", "constant", "delay",
+        "json", "regex", "now", "condition", "onebot", "operator", "cache",
+    }
 
 
 def test_builtin_field_metadata_is_declared_in_backend() -> None:
@@ -1258,6 +1962,18 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "test": (50, "测试", ["trigger", "message"], ["trigger", "message"]),
         "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
         "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
+        "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),
+        "regex": (90, "正则", ["trigger", "text", "pattern", "replace"], ["trigger", "regex_value"]),
+        "now": (100, "当前时间", ["trigger", "format"], ["trigger", "now_text", "now_ts"]),
+        "condition": (110, "条件", ["trigger", "left", "right"], ["true", "false"]),
+        "onebot": (
+            120,
+            "OneBot",
+            ["trigger", "message", "group_id", "user_id", "message_id"],
+            ["trigger", "onebot_retcode", "onebot_data"],
+        ),
+        "operator": (130, "运算", ["trigger", "left", "right"], ["trigger", "operator_result"]),
+        "cache": (140, "缓存", ["trigger", "key", "value"], ["trigger", "cache_value"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1290,6 +2006,79 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         ("trigger", "trigger"),
         ("http_status", "message"),
         ("http_body", "message"),
+    ]
+
+    json = get_spec("json")
+    assert json is not None
+    json_inputs = {p.id: p for p in json.inputs}
+    assert json_inputs["json"].required is True  # json 文本：接线或手填的必填入口
+    assert json_inputs["path"].required is False  # path 可选（留空 = 取整个文档）
+    assert [(p.id, p.type) for p in json.outputs] == [
+        ("trigger", "trigger"),
+        ("json_value", "message"),
+    ]
+
+    regex = get_spec("regex")
+    assert regex is not None
+    regex_inputs = {p.id: p for p in regex.inputs}
+    assert regex_inputs["text"].required is True  # 待处理文本：接线或手填
+    assert regex_inputs["pattern"].required is True  # 正则：接线或手填
+    assert regex_inputs["replace"].required is False  # 替换文本可选
+    assert [(p.id, p.type) for p in regex.outputs] == [
+        ("trigger", "trigger"),
+        ("regex_value", "message"),
+    ]
+
+    now = get_spec("now")
+    assert now is not None
+    now_inputs = {p.id: p for p in now.inputs}
+    assert now_inputs["format"].required is False  # 格式有缺省，可选
+    assert [(p.id, p.type) for p in now.outputs] == [
+        ("trigger", "trigger"),
+        ("now_text", "message"),
+        ("now_ts", "message"),
+    ]
+
+    condition = get_spec("condition")
+    assert condition is not None
+    condition_inputs = {p.id: p for p in condition.inputs}
+    assert condition_inputs["left"].required is True  # 左值：接线或手填
+    assert condition_inputs["right"].required is False  # 右值可选（也能接线）
+    assert [(p.id, p.type) for p in condition.outputs] == [
+        ("true", "trigger"),
+        ("false", "trigger"),
+    ]
+    assert condition.branching is True  # 分流节点：引擎按选中出口剪枝
+    assert condition.min_outgoing == 1  # 至少接一个出口才谈得上分支
+
+    onebot = get_spec("onebot")
+    assert onebot is not None
+    onebot_inputs = {p.id: p for p in onebot.inputs}
+    assert onebot_inputs["message"].required is False  # 参数按动作在运行期查，入口都不标必填
+    assert [(p.id, p.type) for p in onebot.outputs] == [
+        ("trigger", "trigger"),
+        ("onebot_retcode", "message"),
+        ("onebot_data", "message"),
+    ]
+
+    operator = get_spec("operator")
+    assert operator is not None
+    operator_inputs = {p.id: p for p in operator.inputs}
+    assert operator_inputs["left"].required is True  # 左值：接线或手填
+    assert operator_inputs["right"].required is True  # 右值同样必填（算术缺一边算不了）
+    assert [(p.id, p.type) for p in operator.outputs] == [
+        ("trigger", "trigger"),
+        ("operator_result", "message"),
+    ]
+
+    cache = get_spec("cache")
+    assert cache is not None
+    cache_inputs = {p.id: p for p in cache.inputs}
+    assert cache_inputs["key"].required is True  # 变量名：接线或手填
+    assert cache_inputs["value"].required is False  # 写入值：set 才要，运行期用
+    assert [(p.id, p.type) for p in cache.outputs] == [
+        ("trigger", "trigger"),
+        ("cache_value", "message"),
     ]
 
 
@@ -2133,6 +2922,92 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
         assert await load_published_workflows(store, scheduler) == 1
         assert scheduler.get(f"wf-{definition.id}-s") is not None  # 定时开始节点登记上了
         assert ran == []  # 而下游（probe）一次都没跑
+    finally:
+        await engine.dispose()
+
+
+async def test_make_trigger_injects_onebot_into_the_workflow_context() -> None:
+    """到点直接执行这条路：``make_trigger(onebot=...)`` 透传到 ctx（含归属 owner_id）。
+
+    ``onebot`` 服务端在这一层就得带上 —— 调度器到点执行的是登记时构造的闭包本身。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import make_trigger
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("ob", "onebot", action="send_private_msg", user_id="10001", message="到点提醒"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "ob"), edge("ob", "e")],
+    }
+    definition = await store.create("u-admin", "发私聊的流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+    assert await store.publish(definition.id, 1) is not None
+
+    conn = _FakeConnection(id="u-admin")  # 归属对上定义表里的 owner_id
+    scheduler = TaskManager()
+    trigger = make_trigger(
+        definition.id, 1, store, scheduler, onebot=_FakeOneBotServer([conn])
+    )
+    try:
+        await trigger()
+        assert conn.calls == [("send_private_msg", {"user_id": 10001, "message": "到点提醒"})]
+    finally:
+        await engine.dispose()
+
+
+async def test_registered_cron_carries_onebot_through_to_the_connection() -> None:
+    """登记链路：带上的 OneBot 服务端跟着到点闭包走到连接上（到点执行的是登记时那个闭包）。
+
+    调度器到点执行的是**登记那一趟构造的闭包**（任务的 ``func``）—— 服务端必须从
+    ``register_published_workflow`` 就传下去；这里手动调 ``func`` 模拟「到点」。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import register_published_workflow
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [
+            node("s", "start", trigger="time", cron="*/5 * * * *"),
+            node("ob", "onebot", action="send_group_msg", group_id="9", message="到点了"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "ob"), edge("ob", "e")],
+    }
+    definition = await store.create("u-admin", "定时播报流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+    assert await store.publish(definition.id, 1) is not None
+
+    conn = _FakeConnection(id="u-admin")
+    scheduler = TaskManager()
+    try:
+        primed = await register_published_workflow(
+            definition.id, 1, store, scheduler, onebot=_FakeOneBotServer([conn])
+        )
+        assert primed == 1
+        assert conn.calls == []  # 登记只给 start 点名，不碰连接
+
+        # 模拟「到点」：调度器到点执行的就是登记那一趟构造的闭包（Task.func 是协程）
+        func: Any = scheduler.get(f"wf-{definition.id}-s").func
+        await func()
+        assert conn.calls == [("send_group_msg", {"group_id": 9, "message": "到点了"})]
     finally:
         await engine.dispose()
 

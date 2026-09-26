@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nacho.core.logger import BaseLogger, get_logger
 from nacho.core.scheduler import TaskManager
@@ -45,15 +45,20 @@ def make_trigger(
     version: int,
     store: SqlWorkflowStore,
     scheduler: TaskManager,
+    *,
+    onebot: Any | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """构造到点触发回调：重新加载版本图并执行整条流程。
 
     每次触发都重新加载该版本的图跑一遍。开始节点在这一趟**不再动调度器**（任务在它触发之前
     就已经排好了下一次），所以不会因为重复触发而在调度器里堆积任务。
+
+    ``onebot``（OneBot 服务端，可选）在这里就得带上：调度器到点执行的是**这一趟构造的
+    闭包**，错过这儿后面没机会再补（见 :func:`register_published_workflow`）。
     """
 
     async def trigger() -> None:
-        await run_published_workflow(workflow_id, version, store, scheduler)
+        await run_published_workflow(workflow_id, version, store, scheduler, onebot=onebot)
 
     return trigger
 
@@ -63,11 +68,14 @@ async def run_published_workflow(
     version: int,
     store: SqlWorkflowStore,
     scheduler: TaskManager,
+    *,
+    onebot: Any | None = None,
 ) -> None:
     """加载指定版本的图并**执行整条流程**；到点回调走它（见 :func:`make_trigger`）。
 
     启动载入**不走这里** —— 那一步只登记触发、不执行图，见
-    :func:`register_published_workflow`。
+    :func:`register_published_workflow`。``onebot`` 从这里注进节点上下文：``onebot``
+    节点靠它发动作（挑连接的归属 ``ctx.owner_id`` 来自定义表）。
     """
     record = await store.get_version(workflow_id, version)
     if record is None:
@@ -80,9 +88,17 @@ async def run_published_workflow(
 
     graph = record.graph()
     # 到点回调：这个版本下次再到点，还是从这儿跑一遍（与本次同一个入口）
-    trigger = make_trigger(workflow_id, version, store, scheduler)
+    trigger = make_trigger(workflow_id, version, store, scheduler, onebot=onebot)
+    # 归属（定义表的 owner_id）：onebot 节点按它挑「谁的」连接
+    definition = await store.get(workflow_id)
     # 执行那一趟（register_triggers 缺省 False）：开始节点不碰调度器，它自己排下一次
-    ctx = NodeExecutionContext(scheduler=scheduler, run=trigger, workflow_id=workflow_id)
+    ctx = NodeExecutionContext(
+        scheduler=scheduler,
+        run=trigger,
+        workflow_id=workflow_id,
+        owner_id=definition.owner_id if definition is not None else "",
+        onebot=onebot,
+    )
     runner = SimpleWorkflowRunner()
     try:
         await runner.run(graph, ctx)
@@ -106,6 +122,8 @@ async def register_published_workflow(
     version: int,
     store: SqlWorkflowStore,
     scheduler: TaskManager,
+    *,
+    onebot: Any | None = None,
 ) -> int:
     """**只跑开始节点、不跑下游**：把这一版的触发登记好，返回跑过的开始节点数量。
 
@@ -117,6 +135,9 @@ async def register_published_workflow(
 
     这是**登记那一趟**（``ctx.register_triggers=True``）：加 / 摘任务只在这儿发生；真正整图
     执行（cron 到点走 :func:`run_published_workflow`）那一趟不碰调度器，它自己会排下一次。
+
+    ``onebot``（OneBot 服务端，可选）要在这里就带上：交给调度器的到点回调是**这一趟构造
+    的**（``make_trigger`` 闭包），到点执行那一趟没机会再补。
     """
     record = await store.get_version(workflow_id, version)
     if record is None:
@@ -135,10 +156,12 @@ async def register_published_workflow(
     # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
         scheduler=scheduler,
-        run=make_trigger(workflow_id, version, store, scheduler),
+        run=make_trigger(workflow_id, version, store, scheduler, onebot=onebot),
         workflow_id=workflow_id,
         register_triggers=True,
         multi_instance=definition.multi_instance if definition is not None else False,
+        owner_id=definition.owner_id if definition is not None else "",
+        onebot=onebot,
     )
     primed = 0
     for node in graph.nodes:
@@ -201,16 +224,26 @@ class WorkflowTriggers:
     :mod:`nacho.api.api.workflow.protocols`），**不 import 本模块**；装配时由主程序把这一份
     传进 ``create_app(workflow_triggers=...)``。没传的场合（直接 ``create_app`` 的测试 / 示例）
     开关照样落库，只是生效点在下次启动载入。
+
+    ``onebot``（OneBot 服务端，可选）装配时给：拨开关即时生效走的是这儿的登记，登记构造的
+    到点闭包要带上它（见 :func:`make_trigger`）。
     """
 
-    def __init__(self, store: SqlWorkflowStore, scheduler: TaskManager) -> None:
+    def __init__(
+        self,
+        store: SqlWorkflowStore,
+        scheduler: TaskManager,
+        *,
+        onebot: Any | None = None,
+    ) -> None:
         self._store: SqlWorkflowStore = store
         self._scheduler: TaskManager = scheduler
+        self._onebot: Any | None = onebot
 
     async def start(self, workflow_id: str, version: int) -> int:
         """登记这一版的时间触发（重复调用幂等），返回跑过的开始节点数量。"""
         return await register_published_workflow(
-            workflow_id, version, self._store, self._scheduler
+            workflow_id, version, self._store, self._scheduler, onebot=self._onebot
         )
 
     async def stop(self, workflow_id: str, version: int) -> int:
@@ -224,6 +257,7 @@ async def load_published_workflows(
     store: SqlWorkflowStore,
     scheduler: TaskManager,
     *,
+    onebot: Any | None = None,
     limit: int = 500,
 ) -> int:
     """启动时把**开着运行开关**的已发布工作流登记就绪，返回载入的开始节点数量。
@@ -232,6 +266,9 @@ async def load_published_workflows(
     已发布版本的**开始节点**（时间触发的据此把整条流程登记到 cron；**下游一个都不执行**，见
     :func:`register_published_workflow`）。发布 ≠ 运行：刚发布的（开关默认关）不在这里被跑。
     单个失败不影响其他工作流，异常只记 error。
+
+    ``onebot``（OneBot 服务端，可选）由装配层传进来，跟着登记一起进到点闭包（见
+    :func:`make_trigger`）；没接 OneBot 的场合不传，``onebot`` 节点跑到时当场报错。
     """
     definitions = await store.list(owner_id=None, limit=limit)
     primed = 0
@@ -242,7 +279,7 @@ async def load_published_workflows(
             continue  # 已发布但开关关着：不登记、不跑（新发布默认就是这个状态）
         try:
             primed += await register_published_workflow(
-                definition.id, definition.published_version, store, scheduler
+                definition.id, definition.published_version, store, scheduler, onebot=onebot
             )
         except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
             _log().error(
