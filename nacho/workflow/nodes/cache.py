@@ -5,17 +5,19 @@
 值写进缓存、下一趟取得回来。
 
 config:
-    action: 动作（缺省 ``get``）：``get`` = 读一个键；``set`` = 写一个键
-    scope:  作用域（缺省 ``workflow``）：``workflow`` = 图级（只有这张图看得见）；
-            ``account`` = 账号级（同一账号的工作流共享）
-    key:    变量名（必填：接线或手填）
-    value:  写入的值（``set`` 用；手填兜底，也能接线）
+    action:  动作（缺省 ``get``）：``get`` = 读一个键；``set`` = 写一个键
+    scope:   作用域（缺省 ``workflow``）：``workflow`` = 图级（只有这张图看得见）；
+             ``account`` = 账号级（同一账号的工作流共享）
+    key:     变量名（必填：接线或手填）
+    value:   写入的值（``set`` 用；手填兜底，也能接线）
+    default: 读不到时的默认值（``get`` 用；手填兜底，也能接线）
 
 端口（数据沿连线走）：
 
     ``key``           数据入口：变量名（也能从上游来 —— 按消息内容动态挑槽位）；
     ``value``         数据入口：要写的值（``now`` / ``operator`` 的输出接过来都行）；
-    ``cache_value``   出口：``get`` 取到的值 / ``set`` 写下去的值（没取到就是空串）。
+    ``default``       数据入口：``get`` 读不到时用的默认值（手填兜底，也能接线）；
+    ``cache_value``   出口：``get`` 取到的值 / ``set`` 写下去的值（读不到就是默认值，没填才是空串）。
 
 缓存键**用前缀区分作用域**（同一个缓存里互不打扰）::
 
@@ -26,7 +28,8 @@ config:
 
 * 值按**文本**存（线上送整数会转成字符串）—— 这是缓存层的约定（``nacho.core.cache``，
   内存与 Redis 两个后端一致）；
-* ``get`` 没取到（键还没存过）**不算事故**：往 ``cache_value`` 送空串，流程继续；
+* ``get`` 没取到（键还没存过）**不算事故**：往 ``cache_value`` 送 ``default`` 默认值
+  （没填就是空串），流程继续；
 * ``set`` 空值 = 把变量清成空串（「清空」是合法操作，不是错误）；
 * ``key`` 为空（没接线也没手填）当场抛（同 ``http.url``：不知道操作哪个键）；
 * 缓存后端不可用（没 ``start()`` / Redis 掉了且没降级）会抛 ``CacheError``：环境问题
@@ -36,6 +39,7 @@ config:
 小抄::
 
     每趟 +1:   get 计数 -> operator(+) 1 -> set 计数
+    初值:      get 计数（默认值填 1）—— 第一趟还没存过也能往下走
     开关:      get 日签开关 -> condition(== 开) …
     跨图传值:  scope 选 account —— 另一个工作流 get 同一个键就拿到了
 """
@@ -116,6 +120,7 @@ def _clip(raw: str) -> str:
         TRIGGER_PORT,
         PortSpec("key", "message", "变量名", required=True),
         PortSpec("value", "message", "写入的值"),
+        PortSpec("default", "message", "读不到时的默认值"),
     ],
     outputs=[
         TRIGGER_PORT,
@@ -127,6 +132,7 @@ def _clip(raw: str) -> str:
         # key 的「必填」由入口（PortSpec.required）管；这里只声明手填兜底
         ConfigField("key", "变量名"),
         ConfigField("value", "写入的值"),
+        ConfigField("default", "默认值"),
     ],
     validator=validate_cache_node,
 )
@@ -156,6 +162,13 @@ async def exec_cache(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
 
     value = await ctx.cache.get(cache_key)
     if value is None:
+        # 没存过不算事故：有默认值就用默认值（手填兜底 / 也能接线），没有才送空串
+        raw_default = input_value(node, ctx, "default", default="")
+        fallback = "" if raw_default is None else str(raw_default)
+        if fallback:
+            ctx.logger.info(f"[cache:{node.id}] {cache_key} 还没存过 -> 用默认值 {_clip(fallback)}")
+            ctx.log.append(f"[cache] {node.id}: get {cache_key} -> (还没存过，用默认值) {_clip(fallback)}")
+            return {"cache_value": fallback}
         ctx.logger.info(f"[cache:{node.id}] {cache_key} 还没存过")
         ctx.log.append(f"[cache] {node.id}: get {cache_key} -> (还没存过)")
         return {"cache_value": ""}
