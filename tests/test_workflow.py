@@ -1839,6 +1839,33 @@ async def test_cache_get_miss_returns_empty_without_alarm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cache_get_miss_falls_back_to_default_value() -> None:
+    """读不到回默认值：手填 / 接线都行（线上优先）；存过了默认值就不生效。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get", "default": "1"})
+
+    # 没存过 + 手填默认值：输出默认值，日志留一行
+    ctx_.inputs = {"key": "计数"}
+    result = await exec_cache(node_, ctx_)
+    assert result["cache_value"] == "1"
+    assert any("还没存过，用默认值" in line for line in ctx_.log)
+
+    # 没存过 + 线上也送默认值：线上优先（手填的 1 被盖掉），整数照样文本化
+    ctx_.inputs = {"key": "计数", "default": 7}
+    result = await exec_cache(node_, ctx_)
+    assert result["cache_value"] == "7"
+
+    # 存过了：默认值不生效，读到什么给什么
+    set_node = WorkflowNode(id="ca1", type="cache", config={"action": "set"})
+    ctx_.inputs = {"key": "计数", "value": "9"}
+    await exec_cache(set_node, ctx_)
+    ctx_.inputs = {"key": "计数"}
+    result = await exec_cache(node_, ctx_)
+    assert result["cache_value"] == "9"
+
+
+@pytest.mark.asyncio
 async def test_cache_raises_on_missing_key_and_owner_or_bad_enums() -> None:
     """环境 / 配置问题当场抛：key 空 / 账号作用域没有归属 / 非法的动作、作用域（兜底）。"""
     fake = _FakeCache()
@@ -1973,7 +2000,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
             ["trigger", "onebot_retcode", "onebot_data"],
         ),
         "operator": (130, "运算", ["trigger", "left", "right"], ["trigger", "operator_result"]),
-        "cache": (140, "缓存", ["trigger", "key", "value"], ["trigger", "cache_value"]),
+        "cache": (140, "缓存", ["trigger", "key", "value", "default"], ["trigger", "cache_value"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -2076,6 +2103,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     cache_inputs = {p.id: p for p in cache.inputs}
     assert cache_inputs["key"].required is True  # 变量名：接线或手填
     assert cache_inputs["value"].required is False  # 写入值：set 才要，运行期用
+    assert cache_inputs["default"].required is False  # 默认值：get 读不到时兜底，运行期用
     assert [(p.id, p.type) for p in cache.outputs] == [
         ("trigger", "trigger"),
         ("cache_value", "message"),
