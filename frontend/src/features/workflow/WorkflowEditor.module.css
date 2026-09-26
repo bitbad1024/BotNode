@@ -228,6 +228,18 @@
   box-shadow: 0 0 0 3px var(--danger-bg);
 }
 
+/* 粘贴虚影（Ctrl+V 放置模式）：半透明轮廓卡片，跟着鼠标走，左键落子；不吃鼠标事件 */
+.ghostNode {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--c, var(--accent)) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--c, var(--accent)) 7%, var(--surface));
+  opacity: 0.72;
+  pointer-events: none;
+}
+
 /* 节点头部：类型色圆点 + 顶部一抹同色渐变 */
 .nodeHeader {
   display: flex;
