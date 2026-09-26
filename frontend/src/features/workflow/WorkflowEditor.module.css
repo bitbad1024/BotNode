@@ -85,14 +85,25 @@
   overflow: hidden;
 }
 
+/* 平移层：只做位移，**不含缩放**。位移不会让文字变糊，可以放心交给合成器加速 */
+.canvasViewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* 缩放层：用 CSS ``zoom``（JSX 里内联给），**不用** ``transform: scale``。
+   区别就在渲染方式：scale 是把已经栅格化好的图层拉大（再叠上 will-change，浏览器干脆
+   一直拿旧图拉伸），所以放大是糊的、要等一次重绘才清楚；zoom 是按新尺寸重新排版，
+   文字与 SVG 都以矢量方式在新尺寸下重画 —— 放到多大都清晰。 */
 .canvasContent {
   position: absolute;
   top: 0;
   left: 0;
   width: 99999px;
   height: 99999px;
-  transform-origin: 0 0;
-  will-change: transform;
 }
 
 /* 节点面板——悬浮左侧 */
