@@ -1326,232 +1326,287 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               )}
             </div>
           ) : (
-            <div className={styles.canvasContent} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-              <svg className={styles.edges}>
-                {graph.edges.map((edge, i) => {
-                  const c = edgeCoords(edge)
-                  if (!c) return null
-                  // 端口颜色
-                  const srcNode = graph.nodes.find((n) => n.id === edge.source)
-                  const srcDef = srcNode ? nodeDef(srcNode.type, srcNode.config) : null
-                  const port = srcDef?.outputs.find((p) => p.id === (edge.sourcePort ?? 'trigger'))
-                  const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
-                  return (
-                    <g key={i}>
-                      <path
-                        d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
-                        fill="none"
-                        stroke={color}
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                      />
-                      <circle
-                        cx={(c.x1 + c.x2) / 2}
-                        cy={(c.y1 + c.y2) / 2}
-                        r="7"
-                        fill="var(--surface)"
-                        stroke="var(--danger)"
-                        strokeWidth="1.5"
-                        className={styles.edgeDelete}
-                        onClick={() => deleteEdge(edge)}
-                      />
-                    </g>
-                  )
-                })}
-                {(() => {
-                  const start = dragStartPos()
-                  if (!start || !connectCursor) return null
-                  const color = connectRef.current ? PORT_COLORS[connectRef.current.portType] : 'var(--accent)'
-                  return (
-                    <path
-                      d={edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y)}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth="2"
-                      strokeDasharray="6 5"
-                      strokeLinecap="round"
-                    />
-                  )
-                })()}
-              </svg>
-
-              {graph.nodes.map((node) => {
-                const def = nodeDef(node.type, node.config)
-                const pos = positions[node.id] ?? { x: 0, y: 0 }
-                const hasError = errorByNode.has(node.id)
-                const portRows = Math.max(def.inputs.length, def.outputs.length)
-                //: 这个节点已经接上线的入口（没写端口的边按 trigger 算）
-                const wired = new Set(
-                  graph.edges
-                    .filter((e) => e.target === node.id)
-                    .map((e) => e.targetPort || DEFAULT_PORT),
-                )
-                return (
-                  <div
-                    key={node.id}
-                    className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${selectedIds.has(node.id) ? styles.boxSelected : ''} ${hasError ? styles.hasError : ''}`}
-                    style={{ left: pos.x, top: pos.y, width: NODE_W, '--c': def.color } as React.CSSProperties}
-                    onMouseDown={(e) => onNodeMouseDown(e, node.id)}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      // 落子虚影带出的补发 click：落在节点上也算消费掉，别留到下次点空白
-                      suppressClickRef.current = false
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      // 右键拖动平移刚结束的那一发：不弹菜单
-                      if (panMovedRef.current) return
-                      openNodeMenu(e, node.id)
-                    }}
-                  >
-                    {/* 头部：色条 + 标签 */}
-                    <div className={styles.nodeHeader}>
-                      <span className={styles.nodeColorBar} style={{ background: def.color }} />
-                      <span className={styles.nodeLabel}>{def.label}</span>
-                    </div>
-
-                    {/* 端口区 */}
-                    <div className={styles.ports}>
-                      {Array.from({ length: portRows }).map((_, rowIdx) => {
-                        const inp = def.inputs[rowIdx]
-                        const out = def.outputs[rowIdx]
-                        return (
-                          <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
-                            {/* 输入端口（左侧） */}
-                            <div className={styles.portSide}>
-              {inp && (
-                <>
-                  <span
-                    data-role="port"
-                    className={styles.portCircle}
-                    style={{
-                      left: -5,
-                      background: PORT_COLORS[inp.type],
-                      // 必填入口还没接线：红圈提醒（后端也会报 INPUT_NOT_CONNECTED）
-                      ...(inp.required && !wired.has(inp.id)
-                        ? { boxShadow: '0 0 0 3px rgba(239,68,68,.35)' }
-                        : {}),
-                    }}
-                    title={
-                      inp.required
-                        ? `${inp.label}（必填入口）：接线，或在配置面板里用同名字段手填`
-                        : undefined
-                    }
-                    onMouseDown={(e) => onPortMouseDown(e, node.id, inp.id, inp.type, 'in')}
-                    onMouseUp={(e) => onPortMouseUp(e, node.id, inp.id, inp.type, 'in')}
-                  />
-                  <span className={styles.portLabel}>
-                    {inp.label}
-                    {inp.required && !wired.has(inp.id) ? ' *' : ''}
-                  </span>
-                </>
-              )}
-                            </div>
-                            {/* 输出端口（右侧） */}
-                            <div className={styles.portSideRight}>
-              {out && (
-                <>
-                  <span className={styles.portLabel}>{out.label}</span>
-                  <span
-                    data-role="port"
-                    className={styles.portCircle}
-                    style={{ right: -5, background: PORT_COLORS[out.type] }}
-                    onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
-                    onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
-                  />
-                </>
-              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-
-                    {/* 常量区 */}
-                    {def.constants.length > 0 && (
-                      <div className={styles.constArea}>
-                        {def.constants.map((key) => {
-                          const val = String(node.config[key] ?? '')
-                          return (
-                            <div className={styles.constPill} key={key}>
-                              <span className={styles.constKey}>{key}</span>
-                              <span className={styles.constVal}>{truncate(val, 16)}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-
-                    {hasError && (
-                      <span
-                        className={styles.errorBadge}
-                        title={errorByNode.get(node.id)?.map((e) => e.message).join('\n')}
-                      >
-                        {errorByNode.get(node.id)?.length}
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
-
-              {graph.nodes.length === 0 && (
-                <div className={styles.empty}>从左侧点节点名添加到画布</div>
-              )}
-
-              {/* 粘贴虚影（Ctrl+V 放置模式）：组内连线 + 节点预览跟着鼠标走，左键落子 / Esc 取消 */}
-              {/* 连线虚影（渲染在虚影节点之前，和真实图一样线在节点下面） */}
-              {placing && (() => {
-                const offX = placing.x - placing.cx
-                const offY = placing.y - placing.cy
-                const nodeById = new Map(placing.nodes.map((n) => [n.id, n]))
-                /** 虚影节点位置（快照坐标 + 当前偏移）：连线按它算端口坐标 */
-                const ghostPosOf = (id: string) => {
-                  const n = nodeById.get(id)
-                  return n ? { x: (n.x ?? 0) + offX, y: (n.y ?? 0) + offY } : undefined
-                }
-                return (
-                  <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
-                    {placing.edges.map((e, i) => {
-                      const c = edgeCoords(e, placing.nodes, ghostPosOf)
-                      if (!c) return null
-                      const srcNode = nodeById.get(e.source)
-                      const srcDef = srcNode ? nodeDef(srcNode.type, srcNode.config) : null
-                      const port = srcDef?.outputs.find((p) => p.id === (e.sourcePort ?? 'trigger'))
-                      const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
-                      return (
+            <div className={styles.canvasViewport} style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}>
+              {/* 缩放走 CSS zoom：按新尺寸重新排版，文字 / 连线都是矢量重绘，放到多大都清晰。
+                  transform: scale 只是把已栅格化的图层拉大（配合 will-change 更会一直拿旧图拉伸），
+                  所以放大是糊的、要等一次重绘（手动点一下）才变清楚 —— 这正是之前的症状。 */}
+              <div className={styles.canvasContent} style={{ zoom: String(zoom) }}>
+                <svg className={styles.edges}>
+                  {graph.edges.map((edge, i) => {
+                    const c = edgeCoords(edge)
+                    if (!c) return null
+                    // 端口颜色
+                    const srcNode = graph.nodes.find((n) => n.id === edge.source)
+                    const srcDef = srcNode ? nodeDef(srcNode.type, srcNode.config) : null
+                    const port = srcDef?.outputs.find((p) => p.id === (edge.sourcePort ?? 'trigger'))
+                    const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
+                    return (
+                      <g key={i}>
                         <path
-                          key={i}
                           d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
                           fill="none"
                           stroke={color}
                           strokeWidth="2"
                           strokeLinecap="round"
-                          strokeOpacity="0.6"
                         />
-                      )
-                    })}
-                  </svg>
-                )
-              })()}
+                        <circle
+                          cx={(c.x1 + c.x2) / 2}
+                          cy={(c.y1 + c.y2) / 2}
+                          r="7"
+                          fill="var(--surface)"
+                          stroke="var(--danger)"
+                          strokeWidth="1.5"
+                          className={styles.edgeDelete}
+                          onClick={() => deleteEdge(edge)}
+                        />
+                      </g>
+                    )
+                  })}
+                  {(() => {
+                    const start = dragStartPos()
+                    if (!start || !connectCursor) return null
+                    const color = connectRef.current ? PORT_COLORS[connectRef.current.portType] : 'var(--accent)'
+                    return (
+                      <path
+                        d={edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y)}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth="2"
+                        strokeDasharray="6 5"
+                        strokeLinecap="round"
+                      />
+                    )
+                  })()}
+                </svg>
 
-              {/* 粘贴虚影节点 */}
-              {placing && (() => {
-                const offX = placing.x - placing.cx
-                const offY = placing.y - placing.cy
-                return placing.nodes.map((n) => {
-                  const def = nodeDef(n.type, n.config)
+                {graph.nodes.map((node) => {
+                  const def = nodeDef(node.type, node.config)
+                  const pos = positions[node.id] ?? { x: 0, y: 0 }
+                  const hasError = errorByNode.has(node.id)
                   const portRows = Math.max(def.inputs.length, def.outputs.length)
+                  //: 这个节点已经接上线的入口（没写端口的边按 trigger 算）
+                  const wired = new Set(
+                    graph.edges
+                      .filter((e) => e.target === node.id)
+                      .map((e) => e.targetPort || DEFAULT_PORT),
+                  )
                   return (
                     <div
-                      // 加前缀：复制场景下虚影 id 与图里原节点相同，直接当 key 会撞车
-                      key={`ghost-${n.id}`}
+                      key={node.id}
+                      className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${selectedIds.has(node.id) ? styles.boxSelected : ''} ${hasError ? styles.hasError : ''}`}
+                      style={{ left: pos.x, top: pos.y, width: NODE_W, '--c': def.color } as React.CSSProperties}
+                      onMouseDown={(e) => onNodeMouseDown(e, node.id)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        // 落子虚影带出的补发 click：落在节点上也算消费掉，别留到下次点空白
+                        suppressClickRef.current = false
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        // 右键拖动平移刚结束的那一发：不弹菜单
+                        if (panMovedRef.current) return
+                        openNodeMenu(e, node.id)
+                      }}
+                    >
+                      {/* 头部：色条 + 标签 */}
+                      <div className={styles.nodeHeader}>
+                        <span className={styles.nodeColorBar} style={{ background: def.color }} />
+                        <span className={styles.nodeLabel}>{def.label}</span>
+                      </div>
+
+                      {/* 端口区 */}
+                      <div className={styles.ports}>
+                        {Array.from({ length: portRows }).map((_, rowIdx) => {
+                          const inp = def.inputs[rowIdx]
+                          const out = def.outputs[rowIdx]
+                          return (
+                            <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
+                              {/* 输入端口（左侧） */}
+                              <div className={styles.portSide}>
+                {inp && (
+                  <>
+                    <span
+                      data-role="port"
+                      className={styles.portCircle}
+                      style={{
+                        left: -5,
+                        background: PORT_COLORS[inp.type],
+                        // 必填入口还没接线：红圈提醒（后端也会报 INPUT_NOT_CONNECTED）
+                        ...(inp.required && !wired.has(inp.id)
+                          ? { boxShadow: '0 0 0 3px rgba(239,68,68,.35)' }
+                          : {}),
+                      }}
+                      title={
+                        inp.required
+                          ? `${inp.label}（必填入口）：接线，或在配置面板里用同名字段手填`
+                          : undefined
+                      }
+                      onMouseDown={(e) => onPortMouseDown(e, node.id, inp.id, inp.type, 'in')}
+                      onMouseUp={(e) => onPortMouseUp(e, node.id, inp.id, inp.type, 'in')}
+                    />
+                    <span className={styles.portLabel}>
+                      {inp.label}
+                      {inp.required && !wired.has(inp.id) ? ' *' : ''}
+                    </span>
+                  </>
+                )}
+                              </div>
+                              {/* 输出端口（右侧） */}
+                              <div className={styles.portSideRight}>
+                {out && (
+                  <>
+                    <span className={styles.portLabel}>{out.label}</span>
+                    <span
+                      data-role="port"
+                      className={styles.portCircle}
+                      style={{ right: -5, background: PORT_COLORS[out.type] }}
+                      onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
+                      onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
+                    />
+                  </>
+                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      {/* 常量区 */}
+                      {def.constants.length > 0 && (
+                        <div className={styles.constArea}>
+                          {def.constants.map((key) => {
+                            const val = String(node.config[key] ?? '')
+                            return (
+                              <div className={styles.constPill} key={key}>
+                                <span className={styles.constKey}>{key}</span>
+                                <span className={styles.constVal}>{truncate(val, 16)}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {hasError && (
+                        <span
+                          className={styles.errorBadge}
+                          title={errorByNode.get(node.id)?.map((e) => e.message).join('\n')}
+                        >
+                          {errorByNode.get(node.id)?.length}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {graph.nodes.length === 0 && (
+                  <div className={styles.empty}>从左侧点节点名添加到画布</div>
+                )}
+
+                {/* 粘贴虚影（Ctrl+V 放置模式）：组内连线 + 节点预览跟着鼠标走，左键落子 / Esc 取消 */}
+                {/* 连线虚影（渲染在虚影节点之前，和真实图一样线在节点下面） */}
+                {placing && (() => {
+                  const offX = placing.x - placing.cx
+                  const offY = placing.y - placing.cy
+                  const nodeById = new Map(placing.nodes.map((n) => [n.id, n]))
+                  /** 虚影节点位置（快照坐标 + 当前偏移）：连线按它算端口坐标 */
+                  const ghostPosOf = (id: string) => {
+                    const n = nodeById.get(id)
+                    return n ? { x: (n.x ?? 0) + offX, y: (n.y ?? 0) + offY } : undefined
+                  }
+                  return (
+                    <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
+                      {placing.edges.map((e, i) => {
+                        const c = edgeCoords(e, placing.nodes, ghostPosOf)
+                        if (!c) return null
+                        const srcNode = nodeById.get(e.source)
+                        const srcDef = srcNode ? nodeDef(srcNode.type, srcNode.config) : null
+                        const port = srcDef?.outputs.find((p) => p.id === (e.sourcePort ?? 'trigger'))
+                        const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
+                        return (
+                          <path
+                            key={i}
+                            d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeOpacity="0.6"
+                          />
+                        )
+                      })}
+                    </svg>
+                  )
+                })()}
+
+                {/* 粘贴虚影节点 */}
+                {placing && (() => {
+                  const offX = placing.x - placing.cx
+                  const offY = placing.y - placing.cy
+                  return placing.nodes.map((n) => {
+                    const def = nodeDef(n.type, n.config)
+                    const portRows = Math.max(def.inputs.length, def.outputs.length)
+                    return (
+                      <div
+                        // 加前缀：复制场景下虚影 id 与图里原节点相同，直接当 key 会撞车
+                        key={`ghost-${n.id}`}
+                        className={styles.ghostNode}
+                        style={{
+                          left: (n.x ?? 0) + offX,
+                          top: (n.y ?? 0) + offY,
+                          width: NODE_W,
+                          minHeight: nodeHeight(def),
+                          '--c': def.color,
+                        } as React.CSSProperties}
+                      >
+                        <div className={styles.nodeHeader}>
+                          <span className={styles.nodeColorBar} style={{ background: def.color }} />
+                          <span className={styles.nodeLabel}>{def.label}</span>
+                        </div>
+                        <div className={styles.ports}>
+                          {Array.from({ length: portRows }).map((_, rowIdx) => {
+                            const inp = def.inputs[rowIdx]
+                            const out = def.outputs[rowIdx]
+                            return (
+                              <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
+                                <div className={styles.portSide}>
+                                  {inp && (
+                                    <>
+                                      <span className={styles.portCircle} style={{ left: -5, background: PORT_COLORS[inp.type] }} />
+                                      <span className={styles.portLabel}>{inp.label}</span>
+                                    </>
+                                  )}
+                                </div>
+                                <div className={styles.portSideRight}>
+                                  {out && (
+                                    <>
+                                      <span className={styles.portLabel}>{out.label}</span>
+                                      <span className={styles.portCircle} style={{ right: -5, background: PORT_COLORS[out.type] }} />
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })
+                })()}
+
+                {/* 节点库拖出的新节点虚影（中心跟着鼠标；松手在画布上才真正添加） */}
+                {newDrag && (() => {
+                  const def = nodeDef(newDrag.type)
+                  const portRows = Math.max(def.inputs.length, def.outputs.length)
+                  const h = nodeHeight(def)
+                  return (
+                    <div
                       className={styles.ghostNode}
                       style={{
-                        left: (n.x ?? 0) + offX,
-                        top: (n.y ?? 0) + offY,
+                        left: newDrag.x - NODE_W / 2,
+                        top: newDrag.y - h / 2,
                         width: NODE_W,
-                        minHeight: nodeHeight(def),
+                        minHeight: h,
                         '--c': def.color,
                       } as React.CSSProperties}
                     >
@@ -1587,76 +1642,26 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                       </div>
                     </div>
                   )
-                })
-              })()}
+                })()}
 
-              {/* 节点库拖出的新节点虚影（中心跟着鼠标；松手在画布上才真正添加） */}
-              {newDrag && (() => {
-                const def = nodeDef(newDrag.type)
-                const portRows = Math.max(def.inputs.length, def.outputs.length)
-                const h = nodeHeight(def)
-                return (
-                  <div
-                    className={styles.ghostNode}
-                    style={{
-                      left: newDrag.x - NODE_W / 2,
-                      top: newDrag.y - h / 2,
-                      width: NODE_W,
-                      minHeight: h,
-                      '--c': def.color,
-                    } as React.CSSProperties}
-                  >
-                    <div className={styles.nodeHeader}>
-                      <span className={styles.nodeColorBar} style={{ background: def.color }} />
-                      <span className={styles.nodeLabel}>{def.label}</span>
-                    </div>
-                    <div className={styles.ports}>
-                      {Array.from({ length: portRows }).map((_, rowIdx) => {
-                        const inp = def.inputs[rowIdx]
-                        const out = def.outputs[rowIdx]
-                        return (
-                          <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
-                            <div className={styles.portSide}>
-                              {inp && (
-                                <>
-                                  <span className={styles.portCircle} style={{ left: -5, background: PORT_COLORS[inp.type] }} />
-                                  <span className={styles.portLabel}>{inp.label}</span>
-                                </>
-                              )}
-                            </div>
-                            <div className={styles.portSideRight}>
-                              {out && (
-                                <>
-                                  <span className={styles.portLabel}>{out.label}</span>
-                                  <span className={styles.portCircle} style={{ right: -5, background: PORT_COLORS[out.type] }} />
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )
-              })()}
-
-              {boxSel && (() => {
-                const x = Math.min(boxSel.x0, boxSel.x1)
-                const y = Math.min(boxSel.y0, boxSel.y1)
-                const w = Math.abs(boxSel.x1 - boxSel.x0)
-                const h = Math.abs(boxSel.y1 - boxSel.y0)
-                // 蒙层渲染在节点之后（DOM 序天然在最上），不需要 z-index
-                return (
-                  <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
-                    <rect x={x} y={y} width={w} height={h}
-                      fill="rgba(99, 102, 241, 0.08)"
-                      stroke="var(--accent)"
-                      strokeWidth="1"
-                      strokeDasharray="4 3"
-                    />
-                  </svg>
-                )
-              })()}
+                {boxSel && (() => {
+                  const x = Math.min(boxSel.x0, boxSel.x1)
+                  const y = Math.min(boxSel.y0, boxSel.y1)
+                  const w = Math.abs(boxSel.x1 - boxSel.x0)
+                  const h = Math.abs(boxSel.y1 - boxSel.y0)
+                  // 蒙层渲染在节点之后（DOM 序天然在最上），不需要 z-index
+                  return (
+                    <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
+                      <rect x={x} y={y} width={w} height={h}
+                        fill="rgba(99, 102, 241, 0.08)"
+                        stroke="var(--accent)"
+                        strokeWidth="1"
+                        strokeDasharray="4 3"
+                      />
+                    </svg>
+                  )
+                })()}
+              </div>
             </div>
           )}
         </div>
