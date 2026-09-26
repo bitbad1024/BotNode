@@ -4,6 +4,7 @@
  * 可以把别的设备下线、退出当前设备、或全部下线（含本机）。
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   listSessions,
@@ -45,7 +46,15 @@ function DeviceIcon({ type, size = 20 }: { type: string; size?: number }) {
   return <IconDevices size={size} />
 }
 
-/** 轻量确认弹窗：受控，动作在确认后执行。 */
+/** 轻量确认弹窗：受控，动作在确认后执行。
+ *
+ * 两个「必须这样写」的点：
+ *
+ * * **挂到 body**：页面根元素带着 `.rise` 入场动画（`transform`），`position: fixed`
+ *   会以它为包含块 —— 遮罩只盖住内容那一列，侧边栏与顶栏露在外面。送到 body 才真的盖满
+ *   整个视口（与工作流那两个弹窗同一条路）；
+ * * **层级 900**：侧边栏 100、顶栏抽屉 101，写低了会被它们压在下面，看着也像没盖住。
+ */
 function ConfirmDialog({
   title,
   body,
@@ -63,7 +72,16 @@ function ConfirmDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
-  return (
+  // Esc 关闭（处理中不关，免得吊销到一半被关掉）
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !busy) onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [busy, onCancel])
+
+  return createPortal(
     <div className={styles.modalOverlay} onClick={busy ? undefined : onCancel}>
       <div
         className={styles.modal}
@@ -86,7 +104,8 @@ function ConfirmDialog({
         </div>
         <div className={styles.modalBody}>{body}</div>
         <div className={styles.modalFoot}>
-          <button type="button" className="btn" onClick={onCancel} disabled={busy}>
+          {/* 危险动作：焦点默认落在「取消」，回车 / 空格不会误触下线 */}
+          <button type="button" className="btn" onClick={onCancel} disabled={busy} autoFocus>
             取消
           </button>
           <button
@@ -106,7 +125,8 @@ function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

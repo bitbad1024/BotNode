@@ -171,11 +171,12 @@
   }
 }
 
-/* 确认弹窗 */
+/* 确认弹窗：挂到 body（脱离带入场动画的页面根，fixed 才盖满视口）；
+   900 与其它弹窗同一档 —— 压得住侧边栏（100）与顶栏抽屉（101） */
 .modalOverlay {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 900;
   display: flex;
   align-items: center;
   justify-content: center;
