@@ -10,6 +10,7 @@
       constant.py        内置节点：constant（一个节点一个常量值，从 value 端口送下去）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
       delay.py           内置节点：delay（异步等待：触发进 / 触发出，秒数可接线覆盖手填）
+      json.py            内置节点：json（解析 JSON 文本 + 点路径取值，取不到送空串不打断流程）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -62,6 +63,7 @@ from .constant import exec_constant
 from .delay import exec_delay
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http
+from .json import exec_json
 from .log import LOG_LEVELS, exec_log
 from .registry import (
     declare_node_type,
@@ -114,4 +116,5 @@ __all__ = [
     "exec_http",
     "HTTP_METHODS",
     "exec_delay",
+    "exec_json",
 ]

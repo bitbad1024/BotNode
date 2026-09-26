@@ -48,7 +48,7 @@ from nacho.workflow import (  # noqa: E402
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
-from nacho.workflow.nodes import exec_http  # noqa: E402
+from nacho.workflow.nodes import exec_http, exec_json  # noqa: E402
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -1196,12 +1196,93 @@ def test_delay_seconds_is_validated() -> None:
         assert validate_graph(graph_with(good)).valid, good
 
 
+@pytest.mark.asyncio
+async def test_json_extracts_nested_scalar_and_whole_document() -> None:
+    """点路径提取：嵌套 / 数组下标（负数从后往前）/ 留空取整个文档；值统一字符串化。"""
+    doc = (
+        '{"data": {"user": {"name": "小明"}, "items": [{"t": "a"}, {"t": "b"}],'
+        ' "n": 3, "ok": true, "none": null, "s": "文字"}}'
+    )
+
+    async def extract(path: str) -> str:
+        node_ = WorkflowNode(id="j1", type="json", config={"path": path})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"json": doc}  # 线上来的文本（接线场景）
+        result = await exec_json(node_, ctx_)
+        return result["json_value"]
+
+    assert await extract("data.user.name") == "小明"
+    assert await extract("data.s") == "文字"
+    assert await extract("data.items.1.t") == "b"
+    assert await extract("data.items.-1.t") == "b"  # 负索引：从后往前
+    assert await extract("data.n") == "3"  # 数字 -> JSON 字面量
+    assert await extract("data.ok") == "true"
+    assert await extract("data.none") == "null"  # 值真的是 null：算「取到了」
+    # 留空 = 整个文档：紧凑序列化，与输入里的空白无关
+    assert await extract("") == (
+        '{"data":{"user":{"name":"小明"},"items":[{"t":"a"},{"t":"b"}],'
+        '"n":3,"ok":true,"none":null,"s":"文字"}}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_json_soft_fails_yield_empty_string() -> None:
+    """三块「数据不合预期」都记 warning 并送空串（不打断流程）：空文本 / 非法 JSON / 路径不存在。"""
+
+    async def run(text: str, path: str = "") -> tuple[str, list[str]]:
+        node_ = WorkflowNode(id="j1", type="json", config={"path": path})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"json": text}
+        result = await exec_json(node_, ctx_)
+        return result["json_value"], ctx_.log
+
+    value, log = await run("")  # 上游送了空串
+    assert value == "" and any("没拿到" in line for line in log)
+
+    value, log = await run("<html>502 Bad Gateway</html>")  # 对方回了个错误页
+    assert value == "" and any("解析失败" in line for line in log)
+
+    value, log = await run('{"a": {"b": 1}}', "a.c")  # 字段名拼错 / 对方改了结构
+    assert value == "" and any("取不到" in line for line in log)
+
+
+def test_json_fields_are_validated() -> None:
+    """手填值的防呆在语义阶段：路径写法 / JSON 文本语法；必填入口「接线或手填」照常生效。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("j", "json", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "j"), edge("j", "e")],
+        }
+
+    assert validate_graph(graph_with(json='{"a": 1}', path="a.b")).valid  # 手填合法文本即可放行
+
+    report = validate_graph(graph_with(json='{"a": 1}', path="a..b"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_JSON_PATH"]
+
+    report = validate_graph(graph_with(json="{oops}", path="a"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_JSON_TEXT"]
+
+    # 必填入口：接线或手填两个都没有 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with())
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "http", "constant", "delay"):
+    for node_type in ("start", "end", "log", "test", "http", "constant", "delay", "json"):
         assert get_executor(node_type) is not None
-    assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant", "delay"}
+    assert set(registered_types()) >= {
+        "start", "end", "log", "test", "http", "constant", "delay", "json",
+    }
 
 
 def test_builtin_field_metadata_is_declared_in_backend() -> None:
@@ -1258,6 +1339,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "test": (50, "测试", ["trigger", "message"], ["trigger", "message"]),
         "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
         "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
+        "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1290,6 +1372,16 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         ("trigger", "trigger"),
         ("http_status", "message"),
         ("http_body", "message"),
+    ]
+
+    json = get_spec("json")
+    assert json is not None
+    json_inputs = {p.id: p for p in json.inputs}
+    assert json_inputs["json"].required is True  # json 文本：接线或手填的必填入口
+    assert json_inputs["path"].required is False  # path 可选（留空 = 取整个文档）
+    assert [(p.id, p.type) for p in json.outputs] == [
+        ("trigger", "trigger"),
+        ("json_value", "message"),
     ]
 
 
