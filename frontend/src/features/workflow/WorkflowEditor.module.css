@@ -202,34 +202,30 @@
   background: var(--surface);
   cursor: grab;
   user-select: none;
-  transition: box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
+  transition: border-color 0.18s var(--ease-out);
   display: flex;
   flex-direction: column;
   overflow: visible;
   /* 独立层叠上下文：端口圆点的 z-index 只在卡片内生效，
      重叠时节点整体按 DOM 顺序堆叠，圆点不会穿透到其它节点上面 */
   isolation: isolate;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 12px 32px -20px rgba(0, 0, 0, 0.4);
 }
 .node:active {
   cursor: grabbing;
 }
-/* 悬停：边框带上类型色（--c 由节点内联传入），阴影加深 */
+/* 悬停：边框带上类型色（--c 由节点内联传入） */
 .node:hover {
   border-color: color-mix(in srgb, var(--c, var(--accent)) 42%, var(--border-strong));
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), 0 16px 36px -22px rgba(0, 0, 0, 0.5);
 }
-.node.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 12px 32px -20px rgba(0, 0, 0, 0.4);
-}
+/* 点选 / 框选统一样式：只变边框色（不加光圈阴影） */
+.node.selected,
 .node.boxSelected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .node.hasError {
   border-color: var(--danger);
-  box-shadow: 0 0 0 3px var(--danger-bg), 0 12px 32px -20px rgba(0, 0, 0, 0.4);
+  /* 错误态保留红色光圈（状态提示），投影随卡片一起去掉 */
+  box-shadow: 0 0 0 3px var(--danger-bg);
 }
 
 /* 节点头部：类型色圆点 + 顶部一抹同色渐变 */
@@ -583,4 +579,41 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 节点右键菜单 */
+.ctxMenu {
+  position: fixed;
+  z-index: 40;
+  min-width: 152px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+.ctxMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+}
+.ctxMenuItem:hover {
+  background: var(--surface-2);
+}
+.ctxMenuItemDanger {
+  color: var(--danger);
+}
+.ctxMenuItemDanger:hover {
+  background: var(--danger-bg);
 }

@@ -335,6 +335,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [zoom, setZoom] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [boxSel, setBoxSel] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+  /** 节点右键菜单：视口坐标 + 这一次要操作的节点集合 */
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null)
   /**
    * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
    * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
@@ -356,6 +358,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const boxMovedRef = useRef(false)
   /** 框选结束的松手会被浏览器补发一发 click，用它立牌子吞掉（见 onCanvasMouseUp） */
   const suppressClickRef = useRef(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  /** 本次右键是否真的拖动过画布（拖过就不弹节点右键菜单） */
+  const panMovedRef = useRef(false)
   /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
   const connectRef = useRef<{
     nodeId: string
@@ -500,14 +505,24 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [selectedId],
   )
 
-  const deleteSelected = useCallback(() => {
-    if (selectedIds.size === 0) return
+  /** 按 id 批量删除节点（连带两端连线），并清理指向它们的选中态。Delete 键 / 右键菜单共用。 */
+  const deleteNodesByIds = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
     setGraph((g) => ({
-      nodes: g.nodes.filter((n) => !selectedIds.has(n.id)),
-      edges: g.edges.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)),
+      nodes: g.nodes.filter((n) => !set.has(n.id)),
+      edges: g.edges.filter((e) => !set.has(e.source) && !set.has(e.target)),
     }))
-    setSelectedIds(new Set())
-  }, [selectedIds])
+    setSelectedIds((cur) => {
+      const next = new Set([...cur].filter((id) => !set.has(id)))
+      return next.size === cur.size ? cur : next
+    })
+    setSelectedId((cur) => (cur && set.has(cur) ? null : cur))
+  }, [])
+
+  const deleteSelected = useCallback(() => {
+    deleteNodesByIds([...selectedIds])
+  }, [deleteNodesByIds, selectedIds])
 
   // Delete 键批量删除
   useEffect(() => {
@@ -522,6 +537,24 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedIds, deleteSelected])
+
+  // 右键菜单：点别处（或按 Esc）关闭
+  useEffect(() => {
+    if (!ctxMenu) return
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return
+      setCtxMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [ctxMenu])
 
   const deleteEdge = useCallback((edge: WorkflowEdge) => {
     setGraph((g) => ({
@@ -601,6 +634,21 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }))
   }, [])
 
+  // ---- 右键菜单 ----
+  /** 右键节点：点在框选集合内 = 对整组操作；集合外 = 先让它成为当前选择（只它一个） */
+  const openNodeMenu = (e: React.MouseEvent, nodeId: string) => {
+    let ids: string[]
+    if (selectedIds.has(nodeId)) {
+      ids = [...selectedIds]
+      setSelectedId(nodeId)
+    } else {
+      ids = [nodeId]
+      setSelectedId(nodeId)
+      if (selectedIds.size > 0) setSelectedIds(new Set())
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY, ids })
+  }
+
   // ---- 拖拽节点（按住框选组里的节点 = 整组一起挪）----
   const onNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
     if (e.button !== 0) return // 非左键交给画布处理（右键平移）
@@ -627,8 +675,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
-      // 右键：开始平移
+      // 右键：开始平移（动没动过留给 panMovedRef 记，松手时决定弹不弹节点菜单）
       e.preventDefault()
+      panMovedRef.current = false
       panRef.current = {
         startX: e.clientX,
         startY: e.clientY,
@@ -650,6 +699,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (!rect) return
     if (panRef.current) {
       const { startX, startY, panX, panY } = panRef.current
+      if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 3) panMovedRef.current = true
       setPan({ x: panX + (e.clientX - startX), y: panY + (e.clientY - startY) })
       return
     }
@@ -1143,6 +1193,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                     style={{ left: pos.x, top: pos.y, width: NODE_W, '--c': def.color } as React.CSSProperties}
                     onMouseDown={(e) => onNodeMouseDown(e, node.id)}
                     onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      // 右键拖动平移刚结束的那一发：不弹菜单
+                      if (panMovedRef.current) return
+                      openNodeMenu(e, node.id)
+                    }}
                   >
                     {/* 头部：色条 + 标签 */}
                     <div className={styles.nodeHeader}>
@@ -1436,6 +1493,30 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         </aside>
         )}
       </div>
+
+      {/* 节点右键菜单：fixed 定位（视口坐标），点别处 / Esc 关闭 */}
+      {ctxMenu && (
+        <div
+          ref={menuRef}
+          className={styles.ctxMenu}
+          style={{
+            left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 200)),
+            top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 52)),
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button
+            className={`${styles.ctxMenuItem} ${styles.ctxMenuItemDanger}`}
+            onClick={() => {
+              deleteNodesByIds(ctxMenu.ids)
+              setCtxMenu(null)
+            }}
+          >
+            <IconTrash size={14} />
+            {ctxMenu.ids.length > 1 ? `删除选中的 ${ctxMenu.ids.length} 个节点` : '删除节点'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
