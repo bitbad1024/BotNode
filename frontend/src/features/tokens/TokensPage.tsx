@@ -160,7 +160,6 @@ export default function TokensPage() {
       <section className={`card ${styles.panel}`}>
         <div className={styles.panelHead}>
           <h3 className={styles.panelTitle}>签发令牌</h3>
-          <span className={styles.panelNote}>POST /api/onebot/tokens</span>
         </div>
 
         <form className={styles.form} onSubmit={submit}>
@@ -221,7 +220,6 @@ export default function TokensPage() {
       <section className={`card ${styles.panel}`}>
         <div className={styles.panelHead}>
           <h3 className={styles.panelTitle}>在线客户端</h3>
-          <span className={styles.panelNote}>GET /api/onebot/clients</span>
         </div>
         {loading ? (
           <div className={styles.loading}>
@@ -311,7 +309,6 @@ export default function TokensPage() {
       <section className={`card ${styles.panel}`}>
         <div className={styles.panelHead}>
           <h3 className={styles.panelTitle}>令牌列表</h3>
-          <span className={styles.panelNote}>GET /api/onebot/tokens</span>
         </div>
         {loading ? (
           <div className={styles.loading}>

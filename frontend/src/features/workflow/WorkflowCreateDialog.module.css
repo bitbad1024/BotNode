@@ -84,17 +84,12 @@
 .foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   flex-shrink: 0;
   padding: 12px 16px;
   background: var(--surface-2);
   border-top: 1px solid var(--border);
-}
-.note {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-3);
 }
 .footActions {
   display: flex;

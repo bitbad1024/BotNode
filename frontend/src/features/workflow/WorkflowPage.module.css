@@ -33,12 +33,7 @@
 .panelTitle {
   font-size: 15px;
 }
-.panelNote {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-3);
-}
-/* 标题与接口说明成一组靠左，「新建」被 space-between 顶到最右 */
+/* 标题靠左，「新建」被 space-between 顶到最右 */
 .panelHeadText {
   display: flex;
   align-items: baseline;

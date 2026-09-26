@@ -158,7 +158,6 @@ export default function WorkflowPage() {
         <div className={styles.panelHead}>
           <div className={styles.panelHeadText}>
             <h3 className={styles.panelTitle}>工作流列表</h3>
-            <span className={styles.panelNote}>GET /api/workflows</span>
           </div>
           <button className={`btn ${styles.primary}`} onClick={() => setCreating(true)}>
             <IconPlus size={15} />

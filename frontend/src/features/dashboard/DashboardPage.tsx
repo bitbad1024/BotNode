@@ -13,7 +13,6 @@ import { useNavigate } from 'react-router-dom'
 import { NAV_ITEMS } from '../layout/nav'
 import {
   IconKey,
-  IconSchedule,
   IconLogs,
   IconTerminal,
   IconDevices,
@@ -27,7 +26,6 @@ import styles from './DashboardPage.module.css'
 const MODULE_ICONS = {
   '/sessions': IconDevices,
   '/tokens': IconKey,
-  '/schedule': IconSchedule,
   '/logs': IconLogs,
   '/debug': IconTerminal,
 } as const
@@ -136,7 +134,6 @@ export default function DashboardPage() {
         <div className={`card ${styles.card}`}>
           <div className={styles.cardHead}>
             <h3 className={styles.cardTitle}>用户资料</h3>
-            <span className={styles.cardNote}>GET /api/auth/me</span>
           </div>
           <div className={styles.profileRow}>
             <AvatarImage
@@ -230,7 +227,6 @@ export default function DashboardPage() {
                   <span className={styles.moduleHint}>
                     {m.path === '/sessions' && '查看登录设备，远程下线其他会话'}
                     {m.path === '/tokens' && 'OneBot 令牌签发、吊销与在线客户端'}
-                    {m.path === '/schedule' && 'cron 定时任务编排'}
                     {m.path === '/logs' && '运行日志检索'}
                     {m.path === '/debug' && 'OneBot 反向 WS 收发模拟器'}
                   </span>

@@ -88,7 +88,6 @@ export default function WorkflowCreateDialog({ onClose, onCreated }: Props) {
           </div>
 
           <div className={styles.foot}>
-            <span className={styles.note}>POST /api/workflows</span>
             <div className={styles.footActions}>
               <button className="btn" type="button" onClick={onClose} disabled={saving}>
                 取消

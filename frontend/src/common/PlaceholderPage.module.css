@@ -60,9 +60,10 @@
   color: var(--text-2);
 }
 
+/* 只剩「计划能力」一块：单列铺开，不再按两栏分 */
 .body {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 28px;
   padding: 26px 32px 30px;
 }
@@ -95,25 +96,6 @@
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
-}
-
-.endpoint {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  color: var(--accent);
-  transition: border-color 0.16s ease;
-}
-.endpoint:hover {
-  border-color: var(--accent-border);
-}
-.endpoint code {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
 }
 
 @media (max-width: 720px) {

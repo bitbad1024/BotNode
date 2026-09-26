@@ -37,11 +37,6 @@
 .panelTitle {
   font-size: 15px;
 }
-.panelNote {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-3);
-}
 
 /* 签发表单 */
 .form {
