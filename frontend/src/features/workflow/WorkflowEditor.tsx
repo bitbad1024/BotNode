@@ -183,10 +183,12 @@ function triggerOptionsOf(): string[] {
 // --------------------------------------------------------------------------- 布局常量
 
 const NODE_W = 168
-const HEADER_H = 30
-const PORT_ROW_H = 22
-const CONST_GAP = 5
-const CONST_ROW_H = 18
+const HEADER_H = 34
+const PORT_ROW_H = 24
+// 常量区只服务于「框选命中估算」（卡片高度本身已由内容撑开）：按每个胶囊独占一行的
+// 宽裕口径算，框选宁多勿漏
+const CONST_GAP = 13
+const CONST_ROW_H = 22
 
 function nodeHeight(def: NodeTypeDef): number {
   const portRows = Math.max(def.inputs.length, def.outputs.length)
@@ -217,6 +219,15 @@ function portAbsPos(
   const y = pos.y + portCenterY(def, direction, portId)
   const x = direction === 'in' ? pos.x : pos.x + NODE_W
   return { x, y }
+}
+
+/**
+ * 连线的贝塞尔路径：水平控制点让线平滑绕行（目标在左边也画得出自然的 S 形）。
+ * 控制点偏移随水平距离伸缩，太近也不小于 36px，保证曲线不塌成直角。
+ */
+function edgeCurve(x1: number, y1: number, x2: number, y2: number): string {
+  const bend = Math.min(120, Math.max(36, Math.abs(x2 - x1) / 2))
+  return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`
 }
 
 // --------------------------------------------------------------------------- 工具
@@ -335,6 +346,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const dragRef = useRef<{ nodeId: string; offsetX: number; offsetY: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
   const boxRef = useRef<{ startX: number; startY: number } | null>(null)
+  /** 本次空白拖拽是否已越过阈值进入框选（松手时区分「点了一下」与「框选完」） */
+  const boxMovedRef = useRef(false)
+  /** 框选结束的松手会被浏览器补发一发 click，用它立牌子吞掉（见 onCanvasMouseUp） */
+  const suppressClickRef = useRef(false)
   /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
   const connectRef = useRef<{
     nodeId: string
@@ -610,6 +625,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       const dy = y - boxRef.current.startY
       // 拖动超过阈值才显示框选
       if (!boxSel && Math.abs(dx) < 5 && Math.abs(dy) < 5) return
+      boxMovedRef.current = true
       if (!boxSel) {
         setBoxSel({ x0: boxRef.current.startX, y0: boxRef.current.startY, x1: x, y1: y })
       } else {
@@ -659,15 +675,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }
 
   const onCanvasMouseUp = () => {
-    // 如果没拖出框选，是普通点击——交给 onClick 取消选中
-    if (boxRef.current && !boxSel) {
-      boxRef.current = null
-      return
-    }
+    // 真正拖出过框选：松手后浏览器会补发一发 click，先立牌子让 onClick 跳过清空，
+    // 否则刚框选中的节点会被它故意清掉（普通点击不立牌子——那发 click 正是取消选中要用的）
+    if (boxRef.current && boxMovedRef.current) suppressClickRef.current = true
     dragRef.current = null
     connectRef.current = null
     panRef.current = null
     boxRef.current = null
+    boxMovedRef.current = false
     setConnectCursor(null)
     setBoxSel(null)
   }
@@ -991,6 +1006,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           onMouseUp={onCanvasMouseUp}
           onWheel={onCanvasWheel}
           onClick={() => {
+            // 框选刚结束的那发补发 click 不算「点空白」：留着刚框中的选中
+            if (suppressClickRef.current) {
+              suppressClickRef.current = false
+              return
+            }
             setSelectedId(null)
             setSelectedIds(new Set())
           }}
@@ -1029,10 +1049,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
                   return (
                     <g key={i}>
-                      <line
-                        x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2}
+                      <path
+                        d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
+                        fill="none"
                         stroke={color}
                         strokeWidth="2"
+                        strokeLinecap="round"
                       />
                       <circle
                         cx={(c.x1 + c.x2) / 2}
@@ -1052,12 +1074,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   if (!start || !connectCursor) return null
                   const color = connectRef.current ? PORT_COLORS[connectRef.current.portType] : 'var(--accent)'
                   return (
-                    <line
-                      x1={start.x} y1={start.y}
-                      x2={connectCursor.x} y2={connectCursor.y}
+                    <path
+                      d={edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y)}
+                      fill="none"
                       stroke={color}
                       strokeWidth="2"
-                      strokeDasharray="6 4"
+                      strokeDasharray="6 5"
+                      strokeLinecap="round"
                     />
                   )
                 })()}
@@ -1066,19 +1089,18 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               {graph.nodes.map((node) => {
                 const def = nodeDef(node.type, node.config)
                 const pos = positions[node.id] ?? { x: 0, y: 0 }
-                const h = nodeHeight(def)
                 const hasError = errorByNode.has(node.id)
                 const portRows = Math.max(def.inputs.length, def.outputs.length)
                 return (
                   <div
                     key={node.id}
                     className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${selectedIds.has(node.id) ? styles.boxSelected : ''} ${hasError ? styles.hasError : ''}`}
-                    style={{ left: pos.x, top: pos.y, width: NODE_W, height: h }}
+                    style={{ left: pos.x, top: pos.y, width: NODE_W, '--c': def.color } as React.CSSProperties}
                     onMouseDown={(e) => onNodeMouseDown(e, node.id)}
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* 头部：色条 + 标签 */}
-                    <div className={styles.nodeHeader} style={{ '--c': def.color } as React.CSSProperties}>
+                    <div className={styles.nodeHeader}>
                       <span className={styles.nodeColorBar} style={{ background: def.color }} />
                       <span className={styles.nodeLabel}>{def.label}</span>
                     </div>
@@ -1097,13 +1119,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   <span
                     data-role="port"
                     className={styles.portCircle}
-                    style={{ left: -7, borderColor: PORT_COLORS[inp.type], background: PORT_COLORS[inp.type] }}
+                    style={{ left: -5, background: PORT_COLORS[inp.type] }}
                     onMouseDown={(e) => onPortMouseDown(e, node.id, inp.id, inp.type, 'in')}
                     onMouseUp={(e) => onPortMouseUp(e, node.id, inp.id, inp.type, 'in')}
                   />
-                  <span className={styles.portLabel} style={{ color: PORT_COLORS[inp.type] }}>
-                    {inp.label}
-                  </span>
+                  <span className={styles.portLabel}>{inp.label}</span>
                 </>
               )}
                             </div>
@@ -1111,13 +1131,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                             <div className={styles.portSideRight}>
               {out && (
                 <>
-                  <span className={styles.portLabel} style={{ color: PORT_COLORS[out.type] }}>
-                    {out.label}
-                  </span>
+                  <span className={styles.portLabel}>{out.label}</span>
                   <span
                     data-role="port"
                     className={styles.portCircle}
-                    style={{ right: -7, borderColor: PORT_COLORS[out.type], background: PORT_COLORS[out.type] }}
+                    style={{ right: -5, background: PORT_COLORS[out.type] }}
                     onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
                     onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
                   />
