@@ -30,7 +30,8 @@ nacho/workflow/
 │   ├── regex.py         内置：regex（正则提取 / 替换；抽不到不打断流程）
 │   ├── now.py           内置：now（当前时间：格式化文本 + Unix 时间戳）
 │   ├── condition.py     内置：condition（条件分支：true / false 双出口；引擎按选中出口剪枝）
-│   └── onebot.py        内置：onebot（对归属连接发动作：发消息 / 撤回；回执不成功不打断流程）
+│   ├── onebot.py        内置：onebot（对归属连接发动作：发消息 / 撤回；回执不成功不打断流程）
+│   └── operator.py      内置：operator（算术：+ - * / %；结果文本化，算不出来送空串）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据** + **按选中出口剪枝**
 └── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
@@ -123,6 +124,7 @@ store ──────────────► models
 | `now.py` | **当前时间**：产出「现在」（服务器本地时区）——格式化文本 + Unix 时间戳（整数秒）；没有失败分支 | `trigger` / `format` → `trigger` / `now_text` / `now_ts` | `format`（strftime 指令，缺省 `%Y-%m-%d %H:%M:%S`，可接线覆盖） |
 | `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（有活入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
 | `onebot.py` | **OneBot**：对「这条工作流归属的」在线连接发动作（`send_msg` 智能发消息 / 群发 / 私聊 / 撤回）；回执（`retcode` / `data`）照常送下游，失败回执只记 warning **不打断流程**；没接 OneBot 服务 / 归属下没有在线连接 / 参数没给 / 号不是整数 → 当场抛（环境 / 配置问题） | `trigger` / `message` / `group_id` / `user_id` / `message_id` → `trigger` / `onebot_retcode` / `onebot_data` | `action`（缺省 `send_msg`，枚举由自注册校验器把）、`message` / `group_id` / `user_id` / `message_id`（手填兜底，也能接线；**哪个必填取决于动作**，运行期判） |
+| `operator.py` | **运算**：对两个操作数做一次算术（`+` / `-` / `*` / `/` / `%`）；`/` 是真除法、`%` 按 Python 语义，结果文本化（整数值不带小数点）；算不出来（空值 / 非数字 / 除数为 0 / 运算符不合法）只记 warning 并送空串，不打断流程 | `trigger` / `left` / `right` → `trigger` / `operator_result` | `left` / `right`（**入口**必填：接线或手填）、`operator`（缺省 `+`，枚举由自注册校验器把） |
 
 > **「入口」= 字段名与端口 id 同名的那个数据端口**：`log.message` / `http.url` / `http.body` 都能
 > 被连线覆盖 —— **线上的值优先，没接线才用 config 里手填的**（`input_value` 就是这个口径）。
@@ -247,7 +249,7 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 
 | 情况 | 怎么办 | 例子 |
 |---|---|---|
-| **业务结果**（对方回了错、查不到、校验不过） | 记日志（`ctx.logger.warning`）+ 正常返回，让流程继续往下走 | `http` 节点的 4xx / 5xx；`onebot` 节点的失败回执 |
+| **业务结果**（对方回了错、查不到、校验不过） | 记日志（`ctx.logger.warning`）+ 正常返回，让流程继续往下走 | `http` 节点的 4xx / 5xx；`onebot` 节点的失败回执；`operator` 节点算不出来（送空串） |
 | **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 入口没接线也没填；`onebot` 没接服务 / 归属下没在线连接 |
 
 跑图的失败长这样（`executor.py`）：执行函数一抛，`SimpleWorkflowRunner.run` 就中断，

@@ -54,6 +54,7 @@ from nacho.workflow.nodes import (  # noqa: E402
     exec_json,
     exec_now,
     exec_onebot,
+    exec_operator,
     exec_regex,
 )
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
@@ -1686,17 +1687,107 @@ def test_onebot_action_is_validated() -> None:
     assert [issue.code for issue in report.errors] == ["INVALID_ONEBOT_ACTION"]
 
 
+# ------------------------------------------------------------- ④-F 运算节点
+@pytest.mark.asyncio
+async def test_operator_does_arithmetic_and_formats_result() -> None:
+    """加减乘除取余都能算：两边转数字；结果文本化——整数值不带小数点，除法是真除法。"""
+
+    async def compute(symbol: str, left: str, right: str) -> str:
+        node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_operator(node_, ctx_)
+        return str(result["operator_result"])
+
+    assert await compute("+", "2", "3") == "5"
+    assert await compute("-", "7", "10") == "-3"
+    assert await compute("*", "2.5", "4") == "10"  # 整数值不带小数点
+    assert await compute("/", "7", "2") == "3.5"  # 真除法（不是整除）
+    assert await compute("/", "6", "2") == "3"
+    assert await compute("%", "7", "3") == "1"
+    assert await compute("%", "-7", "3") == "2"  # Python 语义：符号跟随除数
+    assert await compute("+", "0.1", "0.2") == "0.30000000000000004"  # 不做「善意」四舍五入
+
+
+@pytest.mark.asyncio
+async def test_operator_takes_operands_from_wire_with_hand_fallback() -> None:
+    """线上的值优先；没接线才用手填兜底（left / right 就是「可被连线覆盖的入口」）。"""
+    node_ = WorkflowNode(id="m1", type="operator", config={"operator": "+", "left": "3", "right": "4"})
+
+    # 没接线：手填的 left / right 生效
+    ctx_ = NodeExecutionContext()
+    result = await exec_operator(node_, ctx_)
+    assert result["operator_result"] == "7"
+
+    # 接线了：线上的值覆盖手填
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"left": "9", "right": "4"}
+    result = await exec_operator(node_, ctx_)
+    assert result["operator_result"] == "13"  # 9 + 4（若手填生效会是 3 + 4 = 7）
+
+
+@pytest.mark.asyncio
+async def test_operator_soft_fails_to_empty_string() -> None:
+    """算不出来不算事故（warning + 空串，不打断流程）：空值 / 非数字 / 除数为 0 / 运算符不合法。"""
+
+    async def run(symbol: str, left: str, right: str) -> tuple[str, list[str]]:
+        node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_operator(node_, ctx_)
+        return str(result["operator_result"]), ctx_.log
+
+    value, log = await run("+", "", "1")  # 左值空
+    assert value == "" and any("左值为空" in line for line in log)
+
+    value, log = await run("*", "一会儿", "2")  # 非数字
+    assert value == "" and any("不是数字" in line for line in log)
+
+    value, log = await run("/", "1", "0")  # 除数为 0
+    assert value == "" and any("除数为 0" in line for line in log)
+    value, log = await run("%", "1", "0")  # 取余同管
+    assert value == "" and any("除数为 0" in line for line in log)
+
+    value, log = await run("≈", "1", "2")  # 没走过校验的图：非法运算符也走这条
+    assert value == "" and any("不合法" in line for line in log)
+
+
+def test_operator_symbol_is_validated() -> None:
+    """运算符枚举在语义阶段拦住（拼错保存就报 INVALID_OPERATOR_SYMBOL）；必填入口照常。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("m", "operator", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "m"), edge("m", "e")],
+        }
+
+    assert validate_graph(graph_with(left="1", operator="*", right="2")).valid
+
+    report = validate_graph(graph_with(left="1", operator="≈", right="2"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_OPERATOR_SYMBOL"]
+
+    # 必填入口 right：接线或手填两个都没有 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with(operator="+", left="1"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in (
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "onebot",
+        "json", "regex", "now", "condition", "onebot", "operator",
     ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "onebot",
+        "json", "regex", "now", "condition", "onebot", "operator",
     }
 
 
@@ -1764,6 +1855,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
             ["trigger", "message", "group_id", "user_id", "message_id"],
             ["trigger", "onebot_retcode", "onebot_data"],
         ),
+        "operator": (130, "运算", ["trigger", "left", "right"], ["trigger", "operator_result"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1849,6 +1941,16 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         ("trigger", "trigger"),
         ("onebot_retcode", "message"),
         ("onebot_data", "message"),
+    ]
+
+    operator = get_spec("operator")
+    assert operator is not None
+    operator_inputs = {p.id: p for p in operator.inputs}
+    assert operator_inputs["left"].required is True  # 左值：接线或手填
+    assert operator_inputs["right"].required is True  # 右值同样必填（算术缺一边算不了）
+    assert [(p.id, p.type) for p in operator.outputs] == [
+        ("trigger", "trigger"),
+        ("operator_result", "message"),
     ]
 
 
