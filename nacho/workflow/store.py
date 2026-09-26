@@ -32,17 +32,20 @@
 from __future__ import annotations
 
 import time
+from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import Column, Text, UniqueConstraint, inspect, text
+from sqlalchemy import Column, Connection, Text, UniqueConstraint, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.sql import func
-from sqlmodel import Field, SQLModel, select
+from sqlmodel import Field, SQLModel, col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .models import (
+    CurrentRef,
     WorkflowDefinitionRecord,
+    WorkflowStatus,
     WorkflowVersionRecord,
 )
 
@@ -113,13 +116,14 @@ def _definition_to_record(row: WorkflowDefinitionTable) -> WorkflowDefinitionRec
         id=row.id,
         owner_id=row.owner_id,
         name=row.name,
-        status=row.status,
+        # 表里是 VARCHAR，记录上是 Literal：落库时校验过，这里断言回字面量类型
+        status=cast(WorkflowStatus, row.status),
         current_version=int(row.current_version),
         published_version=int(row.published_version),
         enabled=bool(row.enabled),
         draft_graph_json=row.draft_graph_json or "",
         draft_updated_at=float(row.draft_updated_at or 0.0),
-        current_ref=row.current_ref or "draft",
+        current_ref=cast(CurrentRef, row.current_ref or "draft"),
         created_at=float(row.created_at),
         updated_at=float(row.updated_at),
     )
@@ -166,7 +170,7 @@ class SqlWorkflowStore:
         "enabled": "BOOLEAN NOT NULL DEFAULT 0",
     }
 
-    def _migrate_definition_columns(self, conn: object) -> None:
+    def _migrate_definition_columns(self, conn: Connection) -> None:
         """给已存在的 ``workflow_definitions`` 表幂等补新增列（新库 create_all 已建齐）。"""
         inspector = inspect(conn)
         existing = {col["name"] for col in inspector.get_columns("workflow_definitions")}
@@ -221,7 +225,7 @@ class SqlWorkflowStore:
         statement = select(WorkflowDefinitionTable)
         if owner_id is not None:
             statement = statement.where(WorkflowDefinitionTable.owner_id == owner_id)
-        statement = statement.order_by(WorkflowDefinitionTable.updated_at.desc())
+        statement = statement.order_by(col(WorkflowDefinitionTable.updated_at).desc())
         statement = statement.limit(limit).offset(offset)
         async with self._sessions() as session:
             rows = await session.exec(statement)
@@ -325,7 +329,7 @@ class SqlWorkflowStore:
                 await session.exec(
                     select(WorkflowVersionTable)
                     .where(WorkflowVersionTable.workflow_id == definition.id)
-                    .order_by(WorkflowVersionTable.version.desc())
+                    .order_by(col(WorkflowVersionTable.version).desc())
                     .limit(1)
                 )
             ).first()
@@ -367,7 +371,7 @@ class SqlWorkflowStore:
             rows = await session.exec(
                 select(WorkflowVersionTable)
                 .where(WorkflowVersionTable.workflow_id == workflow_id)
-                .order_by(WorkflowVersionTable.version.desc())
+                .order_by(col(WorkflowVersionTable.version).desc())
             )
             return [_version_to_record(row) for row in rows.all()]
 

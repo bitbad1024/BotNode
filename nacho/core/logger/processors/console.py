@@ -84,7 +84,7 @@ class ConsoleLogProcessor(BaseLogProcessor):
 
     def _write_sync(self, text: str) -> None:
         stream: TextIO = self._stream if self._stream is not None else sys.stdout
-        stream.write(text)  # pyright: ignore[reportUnusedCallResult]
+        stream.write(text)
         stream.flush()
 
     def _format(self, record: LogRecord) -> str:

@@ -15,7 +15,13 @@ from typing import TextIO, cast, override
 
 from ..models import LogLevel, LogRecord, TimestampLike
 from ..queue import OverflowPolicy
-from .base import BaseLogProcessor
+from .base import BaseLogProcessor, ProcessorStats
+
+
+class LocalProcessorStats(ProcessorStats):
+    """:attr:`LocalFileLogProcessor.stats` 的形状：基类的那些字段 + 落盘路径。"""
+
+    path: str
 
 
 class LocalFileLogProcessor(BaseLogProcessor):
@@ -189,7 +195,5 @@ class LocalFileLogProcessor(BaseLogProcessor):
     # ------------------------------------------------------------------ 状态
     @property
     @override
-    def stats(self) -> dict[str, object]:
-        data: dict[str, object] = super().stats
-        data["path"] = str(self._path)
-        return data
+    def stats(self) -> LocalProcessorStats:
+        return {**super().stats, "path": str(self._path)}

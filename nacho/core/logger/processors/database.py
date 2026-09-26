@@ -12,7 +12,13 @@ from typing import override
 from ..interfaces import LogStore
 from ..models import LogLevel, LogRecord, TimestampLike
 from ..queue import OverflowPolicy
-from .base import BaseLogProcessor
+from .base import BaseLogProcessor, ProcessorStats
+
+
+class DatabaseProcessorStats(ProcessorStats):
+    """:attr:`DatabaseLogProcessor.stats` 的形状：基类的那些字段 + 用的存储类名。"""
+
+    store: str
 
 
 class DatabaseLogProcessor(BaseLogProcessor):
@@ -91,7 +97,5 @@ class DatabaseLogProcessor(BaseLogProcessor):
     # ------------------------------------------------------------------ 状态
     @property
     @override
-    def stats(self) -> dict[str, object]:
-        data = super().stats
-        data["store"] = type(self._store).__name__
-        return data
+    def stats(self) -> DatabaseProcessorStats:
+        return {**super().stats, "store": type(self._store).__name__}

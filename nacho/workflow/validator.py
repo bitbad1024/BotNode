@@ -76,7 +76,8 @@ def validate_graph(
     :param expression_checker: 表达式语法检查器，默认全放行（占位，见类文档）。
     """
     graph, structure_errors = _structure_stage(raw)
-    if structure_errors:
+    # 结构阶段要么给图、要么给错误（见它的返回值约定），所以「没图」就等于有结构错误
+    if graph is None:
         return ValidationReport.reject(STAGE_STRUCTURE, structure_errors)
 
     # 默认值字段先补到解析出的图上再进拓扑 / 语义：节点的自定义校验器看到的是补全后的
@@ -128,9 +129,11 @@ def _structure_stage(raw: dict[str, Any] | WorkflowGraph) -> tuple[WorkflowGraph
     if isinstance(raw, WorkflowGraph):
         graph, errors = raw, []
     else:
-        graph, errors = _parse_graph(raw)
-        if errors:
+        parsed, errors = _parse_graph(raw)
+        # 解析不出来（有错）就直接回错误；过了这一步 graph 一定在
+        if errors or parsed is None:
             return None, errors
+        graph = parsed
 
     seen: set[str] = set()
     for node in graph.nodes:

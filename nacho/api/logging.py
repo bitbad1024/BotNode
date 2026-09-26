@@ -91,4 +91,6 @@ def keep_access_off_audit(channel: str = DATABASE_CHANNEL_NAME) -> BaseLogger:
     :param channel: 要静音的通道名，默认落库出口那个（``"database"``）。
     :return: 静音后的访问日志实例（``api.access``）。
     """
-    return api_logger(ACCESS_LOGGER_NAME).mute(channel)
+    logger = api_logger(ACCESS_LOGGER_NAME)
+    logger.mute(channel)  # mute 是就地改过滤器（返回 None），logger 本身照旧返回
+    return logger

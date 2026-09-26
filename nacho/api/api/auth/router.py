@@ -35,7 +35,6 @@ from ...common.models import ApiResponse, ErrorResponse
 from ...options import ApiOptions
 from ...services.auth.models import Credentials, LoginResult
 from ...services.profile.models import ProfileView
-from ...services.profile.service import ProfileService
 from ...services.user.models import UserProfile
 from ..profile.responses import ProfileData
 from .dependencies import (

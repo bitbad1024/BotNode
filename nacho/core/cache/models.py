@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 #: 支持的后端名：``"redis"`` 走 Redis 服务，``"memory"`` 走进程内存
 BackendName: TypeAlias = Literal["memory", "redis"]
@@ -20,13 +20,13 @@ class CacheError(RuntimeError):
     """缓存层的错误：后端连不上、命令执行失败、还没启动就调用。"""
 
 
-def _pick(cls: type[object], data: Mapping[str, object]) -> dict[str, object]:
+def _pick(cls: type[Any], data: Mapping[str, object]) -> dict[str, Any]:
     """挑出 ``data`` 里属于这个 dataclass 的字段。
 
     多出来的键直接忽略：缓存层只认自己这两块选项，配置里另写了别的项不该让它炸掉
     （校验那一项归配置系统管，报错也要报在配置那一层）。
     """
-    known = {field.name for field in fields(cls)}  # type: ignore[arg-type]
+    known = {field.name for field in fields(cls)}
     return {key: value for key, value in data.items() if key in known}
 
 
@@ -45,7 +45,7 @@ class RedisOptions:
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> RedisOptions:
         """从一份映射建选项：缺的项用默认值，多出来的键忽略。"""
-        return cls(**_pick(cls, data))  # type: ignore[arg-type]
+        return cls(**_pick(cls, data))
 
 
 @dataclass(frozen=True)
@@ -70,4 +70,4 @@ class CacheOptions:
         redis_data = data.get("redis")
         if isinstance(redis_data, Mapping):
             values["redis"] = RedisOptions.from_mapping(redis_data)
-        return cls(**values)  # type: ignore[arg-type]
+        return cls(**values)
