@@ -14,6 +14,7 @@
       regex.py           内置节点：regex（正则提取 / 替换；抽不到送空串不打断流程）
       now.py             内置节点：now（当前时间：strftime 格式文本 + Unix 时间戳）
       condition.py       内置节点：condition（条件分支：true / false 双出口，引擎按选中出口剪枝）
+      onebot.py          内置节点：onebot（对归属连接发动作：发消息 / 撤回，回执照常送下游）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -70,6 +71,7 @@ from .http import HTTP_METHODS, exec_http
 from .json import exec_json
 from .log import LOG_LEVELS, exec_log
 from .now import exec_now
+from .onebot import exec_onebot
 from .regex import exec_regex
 from .registry import (
     declare_node_type,
@@ -126,4 +128,5 @@ __all__ = [
     "exec_regex",
     "exec_now",
     "exec_condition",
+    "exec_onebot",
 ]

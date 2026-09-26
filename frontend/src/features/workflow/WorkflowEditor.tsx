@@ -82,6 +82,7 @@ const NODE_COLORS: Record<string, string> = {
   regex: '#ec4899',
   now: '#84cc16',
   condition: '#6366f1',
+  onebot: '#d946ef',
 }
 
 const DEFAULT_COLOR = '#64748b'

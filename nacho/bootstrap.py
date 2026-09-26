@@ -157,8 +157,11 @@ async def run(
                 user_store=users,
                 session_store=sessions,
                 onebot=_onebot_server,
-                # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）
-                workflow_triggers=WorkflowTriggers(workflows, scheduler),
+                # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）；
+                # 带上 OneBot 服务端：onebot 节点要对归属连接发动作（登记构造的到点闭包也带）
+                workflow_triggers=WorkflowTriggers(
+                    workflows, scheduler, onebot=_onebot_server
+                ),
                 workflow_store=workflows,
             ),
             host=api_host,
@@ -174,7 +177,8 @@ async def run(
 
     # 把**开着运行开关**的已发布工作流的定时触发登记到调度器：只登记、不执行图（到点才跑）。
     # 发布只挪指针、不执行图；跑不跑看开关，运行期拨开关走接口层那个即时启停。
-    await load_published_workflows(workflows, scheduler)
+    # 带上 OneBot 服务端：onebot 节点要按工作流归属给在线连接发动作（登记构造的到点闭包也带）。
+    await load_published_workflows(workflows, scheduler, onebot=_onebot_server)
 
 
 async def serve_forever() -> None:

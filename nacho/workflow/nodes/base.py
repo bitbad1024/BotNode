@@ -179,7 +179,12 @@ class NodeExecutionContext:
         跑整条流程）是 ``False`` —— 任务在调度器里排着，它自己会排下一次；
     :param multi_instance: 这条工作流的**实例策略**（工作流设置里的「单实例 / 多实例」，来自
         定义表，与图无关）：``False``（缺省，单实例）上一次还没跑完就跳过本次；``True``（多实例）
-        到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）。
+        到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）；
+    :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：``onebot`` 节点按它挑
+        「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间）；离线跑是空串；
+    :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
+        ``connected_at`` / ``call()`` —— 即 ``nacho.onebot.server.OneBotServer``）。装配层
+        注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
     """
 
     def __init__(
@@ -191,15 +196,21 @@ class NodeExecutionContext:
         workflow_id: str = NO_WORKFLOW_ID,
         register_triggers: bool = False,
         multi_instance: bool = False,
+        owner_id: str = "",
+        onebot: Any | None = None,
     ) -> None:
         self.inputs: dict[str, Any] = {}
         self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
         self.log: list[str] = []  # 节点产出的文字日志（供测试 / 前端回显）
         self.workflow_id: str = workflow_id
+        #: 这条工作流属于谁（OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
+        self.owner_id: str = owner_id
         #: 本次是不是「登记触发」那一趟（见类文档）；整图执行时为 ``False``
         self.register_triggers: bool = register_triggers
         #: 实例策略：多实例时到点就开新实例（见类文档）
         self.multi_instance: bool = multi_instance
+        #: OneBot 服务端（鸭子形状见类文档）；装配层没注入时是 ``None``
+        self.onebot: Any | None = onebot
         self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run
