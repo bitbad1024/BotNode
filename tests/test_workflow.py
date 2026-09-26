@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar
@@ -1077,12 +1078,130 @@ def test_constant_must_be_wired_to_be_read() -> None:
     )
 
 
+# ------------------------------------------------------------- ④-D 等待节点
+@pytest.mark.asyncio
+async def test_executor_delay_waits_then_passes_control() -> None:
+    """等待节点：等够秒数再往下走（触发进 / 触发出），自己不产出值。
+
+    真等 0.05 秒量一次耗时：既验它确实等了，也验下游是在它之后才跑的。
+    """
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("d", "delay", seconds=0.05),
+                node("l", "log", message="等到了"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "d"), edge("d", "l"), edge("l", "e")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    started = time.monotonic()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    elapsed = time.monotonic() - started
+
+    waited = "[delay] d: 等待 0.05 秒"
+    assert elapsed >= 0.05  # 真的等了，不是立即返回
+    assert any(waited in line for line in ctx.log)
+    assert ctx.log.index(waited) < ctx.log.index("[INFO] l: 等到了")  # 先等完再走下游
+
+
+@pytest.mark.asyncio
+async def test_executor_delay_zero_passes_through_without_waiting() -> None:
+    """``seconds=0`` = 不等（临时把等待关掉）：照常往下走，只是不写「等待 N 秒」那行。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("d", "delay", seconds=0), node("e", "end")],
+            "edges": [edge("s", "d"), edge("d", "e")],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("[delay] d: 不等待" in line for line in ctx.log)
+    assert not any(line.startswith("[delay] d: 等待") for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_delay_takes_seconds_from_the_wire() -> None:
+    """等待秒数可以**从连线来**：线上优先，没接线才用手填的 ``config.seconds``。
+
+    这条路是给「等多久由上游算」用的（常量 / HTTP 结果 / 别的节点算出来的值都行）。
+    这里手填 2 秒、线上送 0.05 秒：跑完必须远小于 2 秒，证明用的是线上的值。
+    """
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("c", "constant", value="0.05"),
+                node("d", "delay", seconds=2),  # 手填的会被线上值覆盖
+                node("e", "end"),
+            ],
+            # c.value -> d.seconds 是数据线；d -> e 只表达先后
+            "edges": [edge("s", "c"), edge("c", "d", "value", "seconds"), edge("d", "e")],
+        }
+    )
+    assert validate_graph(graph).valid  # 入口不标必填：接线或手填都行，校验放行
+
+    ctx = NodeExecutionContext()
+    started = time.monotonic()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    elapsed = time.monotonic() - started
+
+    assert any("[delay] d: 等待 0.05 秒" in line for line in ctx.log)
+    assert elapsed < 1.0  # 没被手填的 2 秒拖住
+
+
+@pytest.mark.asyncio
+async def test_executor_delay_rejects_bad_wired_seconds() -> None:
+    """线上送来的秒数不合法（不是数字 / 超上限）运行期当场抛 —— 不静默截断成别的值。"""
+
+    def graph_with(value: str) -> WorkflowGraph:
+        return WorkflowGraph.model_validate(
+            {
+                "nodes": [
+                    node("s", "start"),
+                    node("c", "constant", value=value),
+                    node("d", "delay", seconds=1),
+                    node("e", "end"),
+                ],
+                "edges": [edge("s", "c"), edge("c", "d", "value", "seconds"), edge("d", "e")],
+            }
+        )
+
+    with pytest.raises(ValueError, match="不是数字"):
+        await SimpleWorkflowRunner().run(graph_with("一会儿"), NodeExecutionContext())
+    with pytest.raises(ValueError, match="超过上限"):
+        await SimpleWorkflowRunner().run(graph_with("99999"), NodeExecutionContext())
+
+
+def test_delay_seconds_is_validated() -> None:
+    """等待时长：非数字 / 负数 / 超过上限都在语义阶段拦住；``0`` 与正数是合法值。"""
+    def graph_with(seconds: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("d", "delay", seconds=seconds),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "d"), edge("d", "e")],
+        }
+
+    for bad in ("一会儿", -1, 3600.5, 999999):
+        report = validate_graph(graph_with(bad))
+        assert not report.valid and report.stage == STAGE_SEMANTIC, bad
+        assert [issue.code for issue in report.errors] == ["INVALID_DELAY_SECONDS"], bad
+
+    for good in (0, 0.5, 30, "15"):
+        assert validate_graph(graph_with(good)).valid, good
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "http", "constant"):
+    for node_type in ("start", "end", "log", "test", "http", "constant", "delay"):
         assert get_executor(node_type) is not None
-    assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant"}
+    assert set(registered_types()) >= {"start", "end", "log", "test", "http", "constant", "delay"}
 
 
 def test_builtin_field_metadata_is_declared_in_backend() -> None:
@@ -1138,6 +1257,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
         "test": (50, "测试", ["trigger", "message"], ["trigger", "message"]),
         "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
+        "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():

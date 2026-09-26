@@ -24,7 +24,8 @@ nacho/workflow/
 │   ├── log.py           内置：log（按级别写业务日志；内容从 message 入口来）
 │   ├── test.py          内置：test（回显，画布联调用）
 │   ├── constant.py      内置：constant（一个节点一个常量值，从 value 出口送下去）
-│   └── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
+│   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
+│   └── delay.py         内置：delay（异步等待：秒数可接线覆盖手填，不阻塞事件循环）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据**
 └── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
@@ -111,6 +112,7 @@ store ──────────────► models
 | `test.py` | 回显（画布联调）：把入口的值原样从出口送下去，夹在中间看「线上流过了什么」 | `trigger` / `message` → `trigger` / `message` | `message`（缺省 `hello`） |
 | `constant.py` | **常量**：一个节点一个值，从 `value` 出口送下去 | `trigger` → `trigger` / `value` | **`value`**（必填，没有默认值） |
 | `http.py` | 发一次 HTTP 请求 | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
+| `delay.py` | **等待**：异步等一会儿再往下走（`await asyncio.sleep`，**不阻塞事件循环**）；`0` = 不等（临时把等待关掉） | `trigger` / `seconds` → `trigger` | `seconds`（**入口**：接线覆盖手填，缺省 5；`0` 允许，上限 1 小时 —— 手填值由自注册校验器把，线上的值运行期判断） |
 
 > **「入口」= 字段名与端口 id 同名的那个数据端口**：`log.message` / `http.url` / `http.body` 都能
 > 被连线覆盖 —— **线上的值优先，没接线才用 config 里手填的**（`input_value` 就是这个口径）。
