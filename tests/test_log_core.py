@@ -971,3 +971,92 @@ class TestManagerFacade:
         assert manager.root is None
         assert current_default_core() is None
         assert core.running is False  # reset 只解除引用，不停机
+
+
+class RecordingProcessor(CollectingProcessor):
+    """把**整条记录**记下来：断言默认字段时只看消息不够。"""
+
+    name: str = "recording"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[LogRecord] = []
+
+    async def write(self, records: list[LogRecord]) -> None:
+        self.records.extend(records)
+        await super().write(records)
+
+
+class TestBoundDefaults:
+    """默认字段（``bind``）：一段执行打一次标记，之后每条日志自己带着走。
+
+    ``bind`` 得到的是**视图**而不是新实例：共享队列与出口，不进实例注册表。
+    """
+
+    async def test_bound_fields_ride_along_every_record(self) -> None:
+        """每条日志自动带上默认字段；当次传的同名键压过默认的。"""
+        core = LogCore(console=False)
+        processor = RecordingProcessor()
+        core.attach(processor)
+        await core.start()
+        try:
+            log = core.bind(workflow_id="w1", user_id="10001")
+            log.info("开始")
+            log.info("换人", user_id="10002")
+
+            assert await wait_until(lambda: len(processor.records) >= 2)
+            assert [(r.message, r.extra) for r in processor.records] == [
+                ("开始", {"workflow_id": "w1", "user_id": "10001"}),
+                ("换人", {"workflow_id": "w1", "user_id": "10002"}),
+            ]
+        finally:
+            await core.stop()
+
+    async def test_bound_owner_id_is_the_record_owner(self) -> None:
+        """``owner_id`` 也能绑：它是日志的一等字段（进 ``owner_id``，不塞 extra）。"""
+        core = LogCore(console=False)
+        processor = RecordingProcessor()
+        core.attach(processor)
+        await core.start()
+        try:
+            log = core.bind(owner_id="u-admin", workflow_id="w1")
+            log.info("记在归属名下")
+            log.info("临时换个归属", owner_id="u-robot")
+
+            assert await wait_until(lambda: len(processor.records) >= 2)
+            assert [(r.owner_id, r.extra) for r in processor.records] == [
+                ("u-admin", {"workflow_id": "w1"}),
+                ("u-robot", {"workflow_id": "w1"}),
+            ]
+        finally:
+            await core.stop()
+
+    def test_bind_is_a_view_not_another_instance(self) -> None:
+        """视图共享源实例的队列与出口，且不进注册表（``get_logger`` 拿不到它）。"""
+        core = LogCore(console=False)
+        processor = RecordingProcessor()
+        core.attach(processor)
+
+        log = core.bind(workflow_id="w1")
+        assert log.name == core.name  # 不换名字
+        assert dict(log.defaults) == {"workflow_id": "w1"}
+        assert core.get_processor("recording") is processor  # 出口还是那一份
+        assert "nacho" in core.routes and core.routes["nacho"] == [processor]
+        # 叠一层：同名按新的，原视图不变
+        assert dict(log.bind(workflow_id="w2").defaults) == {"workflow_id": "w2"}
+        assert dict(log.defaults) == {"workflow_id": "w1"}
+
+    async def test_write_merges_defaults_into_the_record(self) -> None:
+        """直接 ``write`` 一条记录时同样并上默认字段（当次的优先）。"""
+        core = LogCore(console=False)
+        processor = RecordingProcessor()
+        core.attach(processor)
+        await core.start()
+        try:
+            core.bind(workflow_id="w1", user_id="10001").write(
+                LogRecord(message="手工构造的一条", extra={"user_id": "10002"})
+            )
+            assert await wait_until(lambda: len(processor.records) >= 1)
+            assert processor.records[0].extra == {"workflow_id": "w1", "user_id": "10002"}
+        finally:
+            await core.stop()

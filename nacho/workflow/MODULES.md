@@ -223,11 +223,12 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 |---|---|---|
 | `ctx.inputs` | `dict[str, Any]`，**引擎按入边投递进来的值**（键 = 目标端口名） | 用 `input_value(node, ctx, "名字")` 取；测试里直接 `ctx.inputs["x"] = ...` 预置。**上游没执行过的边不算数**（孤儿连出来的线不送值，`input_value` 回落到同名字段的手填值）；上游跑了但那个出口没产出才送空串 |
 | `ctx.trigger_data` | `dict[str, Any]`，消息触发时外面送进来的数据 | `start` 的 `message` 出口从它取（`ctx.trigger_data["message"]`） |
-| `ctx.logger` | `BaseLogger`（`nacho.core.logger`） | 写业务日志（节点自己的运行痕迹） |
+| `ctx.logger` | `BaseLogger` / `BoundLogger`（`nacho.core.logger`） | 写业务日志（节点自己的运行痕迹）。**默认字段已提前绑好**：每条日志自动带 `workflow_id` / `owner_id` / `user_id`，节点只写自己那句话就认得出是哪条工作流、谁的、给谁跑的 |
 | `ctx.log` | `list[str]` | 节点产出的文字行（给前端回显 / 测试断言，不落日志文件） |
 | `ctx.scheduler` | `TaskManager \| None` | 要把流程挂到 cron 就用它（`start` 的 `trigger=time` 的做法）；没注入时是 `None` |
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `onebot` 节点按它挑「谁的」连接（握手时令牌定下，同一套 id 空间）；离线跑是空串 |
+| `ctx.user_id` | `str`：这一趟**面向哪个用户**（消息触发时是发消息那个人） | 把「同一个工作流在不同人身上的那一份」区分开（按人记状态 / 按人回复 / 按人打日志）。**和 `owner_id` 是两回事**：`owner_id` 是工作流的主人（账号），`user_id` 是被服务的对象。缺省空串（`NO_USER_ID`）—— 目前只有定时触发这一条路，没有「这个人」；等消息入口接上，由构造上下文的那一方给 |
 | `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | `onebot` 节点靠它发动作。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `nacho.onebot.server.OneBotServer` |
 | `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `nacho.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`nacho.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
 

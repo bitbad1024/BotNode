@@ -54,6 +54,7 @@ from __future__ import annotations
 
 from .base import (
     MISSING_DEFAULT,
+    NO_USER_ID,
     TRIGGER_PORT,
     ConfigField,
     NodeConfigValidator,
@@ -106,6 +107,7 @@ __all__ = [
     "PortType",
     "TRIGGER_PORT",
     "MISSING_DEFAULT",
+    "NO_USER_ID",
     "input_value",
     # 注册表
     "register_executor",

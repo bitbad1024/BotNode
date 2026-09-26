@@ -5,6 +5,9 @@
 
 * :meth:`BaseLogger.write`：**写入方法**。默认把日志推到消息队列（非阻塞），
   业务侧永远不会因为落盘 / 落库而卡住；
+* :meth:`BaseLogger.bind`：**默认字段**。得到一份「每条日志都自动带上某几个键」的视图
+  （:class:`BoundLogger`），适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
+  不用每个调用点手抄一遍；
 * 内部分发器从队列批量取日志，扇出给**这条日志所属实例**的处理机；
 * :meth:`BaseLogger.flush`：**刷新缓冲区方法**，刷新所有处理机的缓冲区；
 * :meth:`BaseLogger.search`：**检索方法**，聚合各处理机的检索结果。
@@ -55,8 +58,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import traceback
-from collections.abc import Sequence
-from types import TracebackType
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from types import MappingProxyType, TracebackType
 from typing import TypedDict, cast, override
 
 from .filters import DENY_ALL, LogFilter
@@ -495,6 +499,19 @@ class BaseLogger:
             node.set_level(level)
         return node
 
+    def bind(self, **defaults: object) -> BoundLogger:
+        """派生一份**带默认字段**的视图：之后每条日志自动带上这几个键。
+
+        与 :meth:`child` 的分工：``child`` 换的是**名字与出口**（派生一个新实例），
+        ``bind`` 换的是**每条日志默认带什么**（一个轻视图，共享本实例的队列、出口与级别）。
+        一段执行用它一次打上上下文标记就够了，后面每个调用点只管写自己那句话 —— 详见
+        :class:`BoundLogger`。
+
+        :param defaults: 默认字段（键值对）。``owner_id`` 也是可绑的一等字段，其余进
+            ``extra``；当次调用传了同名键就按当次的。
+        """
+        return BoundLogger(self, **defaults)
+
     @property
     def routes(self) -> dict[str, list[BaseLogProcessor]]:
         """「实例名字 -> 该实例**实际会投**的处理机」快照副本（改它不会影响路由）。"""
@@ -865,3 +882,109 @@ class BaseLogger:
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         names = ", ".join(p.name for p in self._resolved_outputs())
         return f"<BaseLogger name={self.name!r} level={self._level.name} processors=[{names}]>"
+
+
+class BoundLogger:
+    """**带默认字段**的日志视图：每条日志自动并上构造时定的那几个键。
+
+    由 :meth:`BaseLogger.bind` 得到。它**不是另一个通道**：与源实例共享同一个队列、
+    同一份出口与同一个级别，也不进实例注册表 —— ``routes`` / ``stats`` 里看不到它，
+    ``get_logger`` 也拿不到它（同名实例仍然只有一个）。多出来的只有「默认带什么」。
+
+    适合给**一段执行**统一打上下文标记：一趟工作流带上 ``workflow_id`` / ``owner_id`` /
+    ``user_id``，一次请求带上 ``trace_id``，这条路上之后每条日志自己就认得出是谁的，
+    调用点不用一遍遍手抄::
+
+        log = get_logger("workflow").bind(workflow_id="w1", user_id="10001")
+        log.info("开始")                    # extra: workflow_id=w1, user_id=10001
+        log.info("换人", user_id="10002")    # extra: workflow_id=w1, user_id=10002
+
+    合并规则：
+
+    * **当次传的同名键压过默认的** —— 那一次说的更准；
+    * ``owner_id`` 是日志的一等字段（不塞 ``extra``）：``bind(owner_id="u-admin")`` 之后
+      不显式传就按绑定的归属记，显式传了按那次的；
+    * :meth:`write` 直接收记录时也走同一套合并，默认字段并进 ``record.extra``。
+    """
+
+    __slots__ = ("_logger", "_defaults")
+
+    def __init__(self, logger: BaseLogger, **defaults: object) -> None:
+        self._logger: BaseLogger = logger
+        self._defaults: dict[str, object] = dict(defaults)
+
+    @property
+    def name(self) -> str:
+        """底下的实例名（与源实例同名：视图不换名字）。"""
+        return self._logger.name
+
+    @property
+    def defaults(self) -> Mapping[str, object]:
+        """这份视图的默认字段（只读：改它不影响视图，要改就再 ``bind`` 一层）。"""
+        return MappingProxyType(self._defaults)
+
+    def bind(self, **defaults: object) -> BoundLogger:
+        """在既有默认字段上**再叠一层**（同名按新的），返回一份新视图（本视图不变）。"""
+        return BoundLogger(self._logger, **{**self._defaults, **defaults})
+
+    def _merge(
+        self, owner_id: str, extra: Mapping[str, object]
+    ) -> tuple[str, dict[str, object]]:
+        """默认字段并进当次字段：当次同名键压过默认的；``owner_id`` 单独拎出来。"""
+        merged: dict[str, object] = {**self._defaults, **extra}
+        bound_owner: object = merged.pop("owner_id", "")
+        return str(owner_id or bound_owner), merged
+
+    # ------------------------------------------------------------------ 写入
+    def is_enabled_for(self, level: LogLevel | str) -> bool:
+        """本条日志是否达到**源实例**的生效级别。"""
+        return self._logger.is_enabled_for(level)
+
+    def write(self, record: LogRecord) -> bool:
+        """直接写一条记录（走的还是**源实例**的队列与出口）：默认字段并进 ``extra``。"""
+        if not self._defaults:
+            return self._logger.write(record)
+        owner_id, extra = self._merge(record.owner_id, record.extra)
+        return self._logger.write(replace(record, extra=extra, owner_id=owner_id))
+
+    def log(
+        self,
+        level: LogLevel | str,
+        message: object,
+        *,
+        owner_id: str = "",
+        exc_info: object = False,
+        **extra: object,
+    ) -> bool:
+        """写一条日志：``extra`` = 默认字段 + 当次字段（当次同名键优先）。"""
+        merged_owner, merged_extra = self._merge(owner_id, extra)
+        return self._logger.log(
+            level, message, owner_id=merged_owner, exc_info=exc_info, **merged_extra
+        )
+
+    def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
+
+    def info(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.INFO, message, owner_id=owner_id, **extra)
+
+    def warning(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.WARNING, message, owner_id=owner_id, **extra)
+
+    def error(
+        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
+    ) -> bool:
+        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
+
+    def critical(
+        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
+    ) -> bool:
+        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
+
+    def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        """记录一条 ERROR 日志并附带当前异常堆栈（默认字段照带）。"""
+        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        keys = ", ".join(self._defaults)
+        return f"<BoundLogger name={self.name!r} defaults=[{keys}]>"

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from nacho.core.cache import cache as process_cache
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, BoundLogger, get_logger
 from nacho.core.scheduler import TaskManager
 
 from ..models import ValidationIssue, WorkflowNode
@@ -59,6 +59,11 @@ MISSING_DEFAULT: Any = object()
 
 #: 上下文里「没有所属工作流」时的代号：离线跑 / 测试直接构造 ctx 的场合
 NO_WORKFLOW_ID: str = "local"
+
+#: 上下文里「这次执行不针对某个用户」时的代号：定时触发 / 离线跑 / 测试直接构造 ctx 的场合。
+#: 与 :data:`NO_WORKFLOW_ID` 不同，这里用空串——空串同时也是缓存键、日志里「没有这个人」的
+#: 自然写法，别给它一个看着像真 id 的值。
+NO_USER_ID: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,7 +174,10 @@ class NodeExecutionContext:
     ``inputs`` 是**属性**不是入参：引擎每跑一个节点前，按指向它的边把上游产出投递进来
     （键 = 目标端口名）。要预置入口值（测试 / 手动跑）直接写 ``ctx.inputs["x"] = ...``。
 
-    :param logger: 业务日志实例（log 节点写这里）；
+    :param logger: 业务日志实例（log 节点写这里）。**缺省那份预先绑好了默认字段**
+        （``workflow_id`` / ``owner_id`` / ``user_id``）：节点只管写自己那句话，每条日志
+        自己就认得出是哪条工作流、谁的、给谁跑的（见 :meth:`nacho.core.logger.BaseLogger.
+        bind`）。构造时注入的实例同样绑一份；只有不带 ``bind`` 的鸭子形状实例才原样用；
     :param scheduler: 调度器（时间触发的 start 节点把流程图登记到这里）；
     :param run: 触发整条流程的回调，cron 到点时调用；
     :param workflow_id: 这条图属于哪个工作流（时间触发登记任务时要它来保证任务名唯一，
@@ -183,6 +191,10 @@ class NodeExecutionContext:
         到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）；
     :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：``onebot`` 节点按它挑
         「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间）；离线跑是空串；
+    :param user_id: 这一趟**面向哪个用户**（消息触发时就是发消息那个人）：用来把「同一个
+        工作流在不同人身上的那一份」区分开（按人记状态、按人回复、按人打日志）。它与
+        ``owner_id`` 是两回事——``owner_id`` 是**工作流的主人**（账号），``user_id`` 是
+        **被服务的对象**；定时触发没有「这个人」，是 :data:`NO_USER_ID`（空串）；
     :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
         ``connected_at`` / ``call()`` —— 即 ``nacho.onebot.server.OneBotServer``）。装配层
         注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
@@ -202,6 +214,7 @@ class NodeExecutionContext:
         register_triggers: bool = False,
         multi_instance: bool = False,
         owner_id: str = "",
+        user_id: str = NO_USER_ID,
         onebot: Any | None = None,
         cache: Any | None = None,
     ) -> None:
@@ -211,6 +224,8 @@ class NodeExecutionContext:
         self.workflow_id: str = workflow_id
         #: 这条工作流属于谁（OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
         self.owner_id: str = owner_id
+        #: 这一趟面向哪个用户（消息触发时是发消息的人）；定时触发 / 离线跑是 NO_USER_ID
+        self.user_id: str = user_id
         #: 本次是不是「登记触发」那一趟（见类文档）；整图执行时为 ``False``
         self.register_triggers: bool = register_triggers
         #: 实例策略：多实例时到点就开新实例（见类文档）
@@ -219,12 +234,21 @@ class NodeExecutionContext:
         self.onebot: Any | None = onebot
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
         self.cache: Any = cache if cache is not None else process_cache
-        self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
+        base: BaseLogger = logger if logger is not None else get_logger("workflow")
+        # 日志**提前带好默认参数**：这一趟的身份（哪条工作流 / 谁的 / 给谁跑的）在构造上下文
+        # 时就定了，之后每个节点写日志都自动带上，不用谁在调用点手抄一遍。注入的实例不带
+        # bind（鸭子形状）就原样用，不强求。
+        self._logger: BaseLogger | BoundLogger = (
+            base.bind(workflow_id=workflow_id, owner_id=owner_id, user_id=user_id)
+            if isinstance(base, BaseLogger)
+            else base
+        )
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run
 
     @property
-    def logger(self) -> BaseLogger:
+    def logger(self) -> BaseLogger | BoundLogger:
+        """节点写业务日志用的实例：**默认字段已绑好**（工作流 / 归属 / 用户）。"""
         return self._logger
 
     @property
