@@ -84,6 +84,7 @@ const NODE_COLORS: Record<string, string> = {
   condition: '#6366f1',
   onebot: '#d946ef',
   operator: '#f59e0b',
+  cache: '#06b6d4',
 }
 
 const DEFAULT_COLOR = '#64748b'

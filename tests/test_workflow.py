@@ -49,6 +49,7 @@ from nacho.workflow import (  # noqa: E402
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
 from nacho.workflow.nodes import (  # noqa: E402
+    exec_cache,
     exec_condition,
     exec_http,
     exec_json,
@@ -1777,17 +1778,133 @@ def test_operator_symbol_is_validated() -> None:
     assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
 
 
+# ------------------------------------------------------------- ④-G 缓存节点
+class _FakeCache:
+    """假的缓存门面（鸭子形状对齐 ``nacho.core.cache.Cache``：``get`` / ``set`` 两个异步方法）。
+
+    单元测试里不碰进程级单例（它没 ``start()``，直接调会抛 ``CacheError``）—— 给 ctx
+    注入这个假对象即可。
+    """
+
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.data.get(key)
+
+    async def set(self, key: str, value: str, ttl: float | None = None) -> None:
+        self.data[key] = value
+
+
+@pytest.mark.asyncio
+async def test_cache_set_then_get_roundtrip_with_scoped_prefixes() -> None:
+    """set 写、get 读（值按文本存）；缓存键用前缀区分作用域：账号级带归属、图级带图 id。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
+
+    async def run(action: str, **inputs: object) -> dict[str, Any]:
+        node_ = WorkflowNode(id="ca1", type="cache", config={"action": action, "scope": "account"})
+        ctx_.inputs = dict(inputs)
+        return await exec_cache(node_, ctx_)
+
+    # set：写进归属前缀下，输出把写进去的值回传（下游接着用）
+    result = await run("set", key="日签", value="上班")
+    assert fake.data == {"workflow:acct:u-admin:日签": "上班"}
+    assert result["cache_value"] == "上班"
+    assert any("[cache] ca1: set workflow:acct:u-admin:日签 = 上班" in line for line in ctx_.log)
+
+    # get：同一个键读回来
+    result = await run("get", key="日签")
+    assert result["cache_value"] == "上班"
+    assert any("-> 上班" in line for line in ctx_.log)
+
+    # 图级作用域换前缀；线上送整数（now_ts 那种）也会转成文本
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "set", "scope": "workflow"})
+    ctx_.inputs = {"key": "计数", "value": 42}
+    await exec_cache(node_, ctx_)
+    assert fake.data["workflow:graph:w1:计数"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_cache_get_miss_returns_empty_without_alarm() -> None:
+    """没存过不算事故：送空串、流程继续（日志留一行「还没存过」）。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", cache=fake)
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get"})
+    ctx_.inputs = {"key": "没存过的"}
+    result = await exec_cache(node_, ctx_)
+
+    assert result["cache_value"] == ""
+    assert any("还没存过" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_cache_raises_on_missing_key_and_owner_or_bad_enums() -> None:
+    """环境 / 配置问题当场抛：key 空 / 账号作用域没有归属 / 非法的动作、作用域（兜底）。"""
+    fake = _FakeCache()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", cache=fake)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get"})
+    ctx_.inputs = {"key": ""}  # key 没接线也没手填
+    with pytest.raises(ValueError, match="key 为空"):
+        await exec_cache(node_, ctx_)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get", "scope": "account"})
+    ctx_no_owner = NodeExecutionContext(cache=fake)  # 离线跑，没归属
+    ctx_no_owner.inputs = {"key": "x"}
+    with pytest.raises(ValueError, match="owner_id"):
+        await exec_cache(node_, ctx_no_owner)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "remove", "scope": "workflow"})
+    ctx_.inputs = {"key": "x"}
+    with pytest.raises(ValueError, match="动作不合法"):
+        await exec_cache(node_, ctx_)
+
+    node_ = WorkflowNode(id="ca1", type="cache", config={"action": "get", "scope": "全局"})
+    with pytest.raises(ValueError, match="作用域不合法"):
+        await exec_cache(node_, ctx_)
+
+
+def test_cache_fields_are_validated() -> None:
+    """两块枚举在语义阶段拦住（INVALID_CACHE_ACTION / INVALID_CACHE_SCOPE）；key 必填照常。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("ca", "cache", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "ca"), edge("ca", "e")],
+        }
+
+    assert validate_graph(graph_with(action="set", scope="account", key="x", value="1")).valid
+
+    report = validate_graph(graph_with(action="remove", scope="account", key="x"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_CACHE_ACTION"]
+
+    report = validate_graph(graph_with(action="get", scope="全局", key="x"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_CACHE_SCOPE"]
+
+    # key 是必填入口：没接线也没手填 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with(action="get"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in (
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "onebot", "operator",
+        "json", "regex", "now", "condition", "onebot", "operator", "cache",
     ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "onebot", "operator",
+        "json", "regex", "now", "condition", "onebot", "operator", "cache",
     }
 
 
@@ -1856,6 +1973,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
             ["trigger", "onebot_retcode", "onebot_data"],
         ),
         "operator": (130, "运算", ["trigger", "left", "right"], ["trigger", "operator_result"]),
+        "cache": (140, "缓存", ["trigger", "key", "value"], ["trigger", "cache_value"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1951,6 +2069,16 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     assert [(p.id, p.type) for p in operator.outputs] == [
         ("trigger", "trigger"),
         ("operator_result", "message"),
+    ]
+
+    cache = get_spec("cache")
+    assert cache is not None
+    cache_inputs = {p.id: p for p in cache.inputs}
+    assert cache_inputs["key"].required is True  # 变量名：接线或手填
+    assert cache_inputs["value"].required is False  # 写入值：set 才要，运行期用
+    assert [(p.id, p.type) for p in cache.outputs] == [
+        ("trigger", "trigger"),
+        ("cache_value", "message"),
     ]
 
 

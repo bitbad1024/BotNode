@@ -36,6 +36,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from nacho.core.cache import cache as process_cache
 from nacho.core.logger import BaseLogger, get_logger
 from nacho.core.scheduler import TaskManager
 
@@ -163,7 +164,7 @@ def input_value(
 
 
 class NodeExecutionContext:
-    """节点运行时上下文：本节点的入口值 + 日志 + 调度器。
+    """节点运行时上下文：本节点的入口值 + 日志 + 调度器 + 可用的服务（OneBot / 缓存）。
 
     ``inputs`` 是**属性**不是入参：引擎每跑一个节点前，按指向它的边把上游产出投递进来
     （键 = 目标端口名）。要预置入口值（测试 / 手动跑）直接写 ``ctx.inputs["x"] = ...``。
@@ -185,6 +186,10 @@ class NodeExecutionContext:
     :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
         ``connected_at`` / ``call()`` —— 即 ``nacho.onebot.server.OneBotServer``）。装配层
         注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
+    :param cache: 缓存门面（鸭子形状：``async get(key) -> str | None`` /
+        ``async set(key, value, ttl=None)`` —— 即 ``nacho.core.cache.Cache``）。
+        **缺省就是进程级那一个**（``nacho.core.cache.cache``，主程序启动时已 ``start()``），
+        测试 / 特殊场合可以注入自己的门面；``cache`` 节点靠它存取变量。
     """
 
     def __init__(
@@ -198,6 +203,7 @@ class NodeExecutionContext:
         multi_instance: bool = False,
         owner_id: str = "",
         onebot: Any | None = None,
+        cache: Any | None = None,
     ) -> None:
         self.inputs: dict[str, Any] = {}
         self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
@@ -211,6 +217,8 @@ class NodeExecutionContext:
         self.multi_instance: bool = multi_instance
         #: OneBot 服务端（鸭子形状见类文档）；装配层没注入时是 ``None``
         self.onebot: Any | None = onebot
+        #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
+        self.cache: Any = cache if cache is not None else process_cache
         self._logger: BaseLogger = logger if logger is not None else get_logger("workflow")
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run

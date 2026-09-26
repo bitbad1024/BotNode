@@ -31,7 +31,8 @@ nacho/workflow/
 │   ├── now.py           内置：now（当前时间：格式化文本 + Unix 时间戳）
 │   ├── condition.py     内置：condition（条件分支：true / false 双出口；引擎按选中出口剪枝）
 │   ├── onebot.py        内置：onebot（对归属连接发动作：发消息 / 撤回；回执不成功不打断流程）
-│   └── operator.py      内置：operator（算术：+ - * / %；结果文本化，算不出来送空串）
+│   ├── operator.py      内置：operator（算术：+ - * / %；结果文本化，算不出来送空串）
+│   └── cache.py         内置：cache（变量存取：get / set；作用域账号 / 图，键前缀区分）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据** + **按选中出口剪枝**
 └── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
@@ -125,6 +126,7 @@ store ──────────────► models
 | `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（有活入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
 | `onebot.py` | **OneBot**：对「这条工作流归属的」在线连接发动作（`send_msg` 智能发消息 / 群发 / 私聊 / 撤回）；回执（`retcode` / `data`）照常送下游，失败回执只记 warning **不打断流程**；没接 OneBot 服务 / 归属下没有在线连接 / 参数没给 / 号不是整数 → 当场抛（环境 / 配置问题） | `trigger` / `message` / `group_id` / `user_id` / `message_id` → `trigger` / `onebot_retcode` / `onebot_data` | `action`（缺省 `send_msg`，枚举由自注册校验器把）、`message` / `group_id` / `user_id` / `message_id`（手填兜底，也能接线；**哪个必填取决于动作**，运行期判） |
 | `operator.py` | **运算**：对两个操作数做一次算术（`+` / `-` / `*` / `/` / `%`）；`/` 是真除法、`%` 按 Python 语义，结果文本化（整数值不带小数点）；算不出来（空值 / 非数字 / 除数为 0 / 运算符不合法）只记 warning 并送空串，不打断流程 | `trigger` / `left` / `right` → `trigger` / `operator_result` | `left` / `right`（**入口**必填：接线或手填）、`operator`（缺省 `+`，枚举由自注册校验器把） |
+| `cache.py` | **缓存**：把一个变量存进缓存 / 取回来 —— **跨执行（跨工作流）传递状态**的通道；`get` 没取到不算事故（送空串），`set` 空值 = 清成空串；`key` 入口没接线也没填 / 账号作用域却没有归属 → 当场抛；缓存键按作用域拼前缀（`workflow:graph:{图 id}:{键}` / `workflow:acct:{账号 id}:{键}`） | `trigger` / `key` / `value` → `trigger` / `cache_value` | `action`（缺省 `get`）、`scope`（缺省 `workflow`；枚举都由自注册校验器把）、`key`（**入口**必填：接线或手填）、`value`（手填兜底，也能接线） |
 
 > **「入口」= 字段名与端口 id 同名的那个数据端口**：`log.message` / `http.url` / `http.body` 都能
 > 被连线覆盖 —— **线上的值优先，没接线才用 config 里手填的**（`input_value` 就是这个口径）。
@@ -227,6 +229,7 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `onebot` 节点按它挑「谁的」连接（握手时令牌定下，同一套 id 空间）；离线跑是空串 |
 | `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | `onebot` 节点靠它发动作。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `nacho.onebot.server.OneBotServer` |
+| `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `nacho.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`nacho.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
 
 `input_value(node, ctx, name, default="")`：取某个数据入口的值 —— **线上的值优先，没接线才用
 config 里同名字段的手填值**，两者都没有才用 `default`。这是「字段名 = 端口名」那条约定的唯一
@@ -250,7 +253,7 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 | 情况 | 怎么办 | 例子 |
 |---|---|---|
 | **业务结果**（对方回了错、查不到、校验不过） | 记日志（`ctx.logger.warning`）+ 正常返回，让流程继续往下走 | `http` 节点的 4xx / 5xx；`onebot` 节点的失败回执；`operator` 节点算不出来（送空串） |
-| **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 入口没接线也没填；`onebot` 没接服务 / 归属下没在线连接 |
+| **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 入口没接线也没填；`onebot` 没接服务 / 归属下没在线连接；`cache` 的 `key` 入口没接线也没填、账号作用域却没有归属 |
 
 跑图的失败长这样（`executor.py`）：执行函数一抛，`SimpleWorkflowRunner.run` 就中断，
 日志里那条异常带着堆栈 —— 比「跑完了但什么都没发生」好查得多。
@@ -386,3 +389,4 @@ async def test_my_node_outputs(...) -> None:
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
 | 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`） |
 | 给 `ctx` 注入新能力（如 OneBot 服务端） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `onebot.py` 模块文档） |
+| 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `nacho.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |

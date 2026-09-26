@@ -16,6 +16,7 @@
       condition.py       内置节点：condition（条件分支：true / false 双出口，引擎按选中出口剪枝）
       onebot.py          内置节点：onebot（对归属连接发动作：发消息 / 撤回，回执照常送下游）
       operator.py        内置节点：operator（算术：+ - * / %，结果文本化；算不出来送空串）
+      cache.py           内置节点：cache（变量存取：get / set；作用域账号 / 图，前缀区分）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -64,6 +65,7 @@ from .base import (
     PortType,
     input_value,
 )
+from .cache import exec_cache
 from .condition import exec_condition
 from .constant import exec_constant
 from .delay import exec_delay
@@ -132,4 +134,5 @@ __all__ = [
     "exec_condition",
     "exec_onebot",
     "exec_operator",
+    "exec_cache",
 ]
