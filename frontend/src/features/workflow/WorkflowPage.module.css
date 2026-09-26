@@ -33,33 +33,22 @@
 .panelTitle {
   font-size: 15px;
 }
-.panelNote {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-3);
+/* 标题靠左，「新建」被 space-between 顶到最右 */
+.panelHeadText {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
-.form {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px 18px;
-  background: var(--surface-2);
-}
-.input {
-  flex: 1;
-  max-width: 360px;
-  padding: 9px 12px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-1);
-  font-size: 13px;
-}
-.input:focus {
-  outline: none;
+.primary {
+  background: var(--accent);
+  color: #fff;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: #fff;
 }
 
 .table {
@@ -129,12 +118,6 @@
   border-color: var(--danger-line);
   background: var(--danger-bg);
 }
-.solidDanger {
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-
 .empty {
   padding: 28px 18px;
   text-align: center;

@@ -37,11 +37,6 @@
 .panelTitle {
   font-size: 15px;
 }
-.panelNote {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-3);
-}
 
 /* 签发表单 */
 .form {
@@ -174,16 +169,6 @@
   border-color: var(--danger-line);
   background: var(--danger-bg);
 }
-.solidDanger {
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-.solidDanger:hover {
-  color: var(--danger);
-  background: var(--danger-bg);
-  border-color: var(--danger);
-}
 
 /* 启用 / 停用开关 */
 .switchRow {
@@ -238,16 +223,6 @@
   color: var(--success);
 }
 
-.confirm {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.confirmText {
-  font-size: 12px;
-  color: var(--text-2);
-}
 
 .empty {
   padding: 28px 18px;

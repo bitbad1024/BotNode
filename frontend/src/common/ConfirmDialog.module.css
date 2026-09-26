@@ -1,0 +1,90 @@
+/* 通用确认弹窗：遮罩铺满视口（挂 body + 900 档），尺寸只有中间一小块 */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(8, 8, 12, 0.5);
+  backdrop-filter: blur(2px);
+  animation: overlayIn 0.16s ease;
+}
+
+.dialog {
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  padding: 18px 20px 16px;
+  animation: dialogIn 0.18s var(--ease-out);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.title {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+.body {
+  margin: 12px 0 18px;
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: var(--text-2);
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.primaryBtn {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+.primaryBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.dangerBtn {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+.dangerBtn:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+.busyInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.busyInner .spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
+
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}

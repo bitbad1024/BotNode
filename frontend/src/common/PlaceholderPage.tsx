@@ -1,18 +1,16 @@
 /**
  * 模块占位页：后端接口尚未开放的模块先用统一、有信息量的骨架，
- * 不是空荡的“建设中”——说明用途、计划能力与待接入接口，之后直接替换内容区。
+ * 不是空荡的“建设中”——说明用途与计划能力，之后直接替换内容区。
+ *
+ * 接口地址一类实现细节不显示在界面上（界面是给人用的，不是给调用方看的）。
  */
 import type { ComponentType, ReactNode } from 'react'
-import { IconExternal } from './icons'
-import { backendUrl } from '../config/env'
 import styles from './PlaceholderPage.module.css'
 
 export interface PlaceholderPageProps {
   icon: ComponentType<{ size?: number }>
   title: string
   description: string
-  /** 待接入的后端接口提示 */
-  endpoint?: string
   /** 计划能力清单 */
   features: string[]
   /** 右上角额外操作（可选） */
@@ -23,7 +21,6 @@ export default function PlaceholderPage({
   icon: Icon,
   title,
   description,
-  endpoint,
   features,
   actions,
 }: PlaceholderPageProps) {
@@ -62,21 +59,6 @@ export default function PlaceholderPage({
               ))}
             </ul>
           </div>
-
-          {endpoint && (
-            <div className={styles.block}>
-              <div className={styles.blockLabel}>待接入接口</div>
-              <a
-                className={styles.endpoint}
-                href={backendUrl('/docs')}
-                target="_blank"
-                rel="noopener"
-              >
-                <code>{endpoint}</code>
-                <IconExternal size={14} />
-              </a>
-            </div>
-          )}
         </div>
       </div>
     </div>

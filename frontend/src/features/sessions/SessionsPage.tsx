@@ -3,7 +3,7 @@
  * 列出我开着的全部登录（设备、浏览器、系统、IP、登录时间、是否记住），
  * 可以把别的设备下线、退出当前设备、或全部下线（含本机）。
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listSessions,
@@ -14,12 +14,12 @@ import {
 import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
 import { useToast } from '../../common/Toast'
+import { ConfirmDialog } from '../../common/ConfirmDialog'
 import {
   IconRefresh,
   IconMonitor,
   IconPhone,
   IconDevices,
-  IconClose,
   IconPin,
   IconClock,
 } from '../../common/icons'
@@ -43,71 +43,6 @@ function DeviceIcon({ type, size = 20 }: { type: string; size?: number }) {
   if (type === 'mobile') return <IconPhone size={size} />
   if (type === 'desktop') return <IconMonitor size={size} />
   return <IconDevices size={size} />
-}
-
-/** 轻量确认弹窗：受控，动作在确认后执行。 */
-function ConfirmDialog({
-  title,
-  body,
-  confirmText,
-  danger = true,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  title: string
-  body: ReactNode
-  confirmText: string
-  danger?: boolean
-  busy: boolean
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  return (
-    <div className={styles.modalOverlay} onClick={busy ? undefined : onCancel}>
-      <div
-        className={styles.modal}
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className={styles.modalHead}>
-          <h3 className={styles.modalTitle}>{title}</h3>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={onCancel}
-            disabled={busy}
-            aria-label="关闭"
-          >
-            <IconClose size={17} />
-          </button>
-        </div>
-        <div className={styles.modalBody}>{body}</div>
-        <div className={styles.modalFoot}>
-          <button type="button" className="btn" onClick={onCancel} disabled={busy}>
-            取消
-          </button>
-          <button
-            type="button"
-            className={`btn ${danger ? styles.dangerBtn : styles.primaryBtn}`}
-            onClick={onConfirm}
-            disabled={busy}
-          >
-            {busy ? (
-              <span className={styles.busyInner}>
-                <span className="spinner" />
-                处理中…
-              </span>
-            ) : (
-              confirmText
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 export default function SessionsPage() {
