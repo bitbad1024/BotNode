@@ -343,7 +343,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [catalogFailed, setCatalogFailed] = useState(false)
 
   const canvasRef = useRef<HTMLDivElement>(null)
-  const dragRef = useRef<{ nodeId: string; offsetX: number; offsetY: number } | null>(null)
+  /** 拖节点：offset 是指针相对主节点左上角的偏移；starts 是整组（含主节点）的起始坐标快照 */
+  const dragRef = useRef<{
+    nodeId: string
+    offsetX: number
+    offsetY: number
+    starts: Record<string, { x: number; y: number }>
+  } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
   const boxRef = useRef<{ startX: number; startY: number } | null>(null)
   /** 本次空白拖拽是否已越过阈值进入框选（松手时区分「点了一下」与「框选完」） */
@@ -381,12 +387,33 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     return map
   }, [graph.nodes])
 
-  /** 拖节点：直接改节点 x/y（随暂存 / 提交一起持久化）。 */
-  const moveNode = useCallback((id: string, x: number, y: number) => {
+  /** 拖节点（一次可挪一批，组拖动用）：直接改节点 x/y（随暂存 / 提交一起持久化）。 */
+  const moveNodes = useCallback((next: Record<string, { x: number; y: number }>) => {
     setGraph((g) => ({
       ...g,
-      nodes: g.nodes.map((n) => (n.id === id ? { ...n, x, y } : n)),
+      nodes: g.nodes.map((n) => {
+        const p = next[n.id]
+        return p ? { ...n, x: p.x, y: p.y } : n
+      }),
     }))
+  }, [])
+
+  /**
+   * 提到图层最上：把节点挪到数组末尾（渲染序 = DOM 序 = 图层序）。
+   * 不是临时样式——松手 / 取消选中后顺序依然保持，并随暂存一起保存。
+   */
+  const bringToFront = useCallback((ids: Iterable<string>) => {
+    const set = new Set(ids)
+    if (set.size === 0) return
+    setGraph((g) => {
+      const front = g.nodes.filter((n) => set.has(n.id))
+      if (front.length === 0) return g
+      const rest = g.nodes.filter((n) => !set.has(n.id))
+      const next = [...rest, ...front]
+      // 本来就在末尾（相对顺序没变）就不动，省一次重渲染
+      if (next.every((n, i) => n === g.nodes[i])) return g
+      return { ...g, nodes: next }
+    })
   }, [])
 
   /** 拉节点目录：面板 / 端口 / 配置字段都按它渲染（只读后端内存里那张注册表，不碰库）。 */
@@ -574,7 +601,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }))
   }, [])
 
-  // ---- 拖拽节点 ----
+  // ---- 拖拽节点（按住框选组里的节点 = 整组一起挪）----
   const onNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
     if (e.button !== 0) return // 非左键交给画布处理（右键平移）
     if ((e.target as HTMLElement).dataset.role === 'port') return
@@ -582,12 +609,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
     const pos = positions[nodeId] ?? { x: 0, y: 0 }
+    // 按住的节点在框选集合里 → 整组一起拖；不在则框选让位，只拖它自己
+    const group = selectedIds.has(nodeId) ? [...selectedIds] : [nodeId]
+    if (selectedIds.size > 0 && !selectedIds.has(nodeId)) setSelectedIds(new Set())
+    const starts: Record<string, { x: number; y: number }> = {}
+    for (const id of group) starts[id] = positions[id] ?? { x: 0, y: 0 }
     dragRef.current = {
       nodeId,
       offsetX: (e.clientX - rect.left - pan.x) / zoom - pos.x,
       offsetY: (e.clientY - rect.top - pan.y) / zoom - pos.y,
+      starts,
     }
     setSelectedId(nodeId)
+    // 图层固化：按住的这组提到数组末尾（松手 / 取消选中后不再落回原层）
+    bringToFront(group)
   }
 
   const onCanvasMouseDown = (e: React.MouseEvent) => {
@@ -650,8 +685,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       return
     }
     if (dragRef.current) {
-      const { nodeId, offsetX, offsetY } = dragRef.current
-      moveNode(nodeId, x - offsetX, y - offsetY)
+      const { nodeId, offsetX, offsetY, starts } = dragRef.current
+      // 以主节点的位移为准，整组同步平移（各成员相对布局保持不变）
+      const anchor = starts[nodeId] ?? { x: 0, y: 0 }
+      const dx = x - offsetX - anchor.x
+      const dy = y - offsetY - anchor.y
+      const next: Record<string, { x: number; y: number }> = {}
+      for (const [id, s] of Object.entries(starts)) next[id] = { x: s.x + dx, y: s.y + dy }
+      moveNodes(next)
     }
     if (connectRef.current) {
       setConnectCursor({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom })
@@ -677,7 +718,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const onCanvasMouseUp = () => {
     // 真正拖出过框选：松手后浏览器会补发一发 click，先立牌子让 onClick 跳过清空，
     // 否则刚框选中的节点会被它故意清掉（普通点击不立牌子——那发 click 正是取消选中要用的）
-    if (boxRef.current && boxMovedRef.current) suppressClickRef.current = true
+    if (boxRef.current && boxMovedRef.current) {
+      suppressClickRef.current = true
+      // 框选收尾：整组固化到图层末尾（相对顺序保持原样）
+      bringToFront(selectedIds)
+    }
     dragRef.current = null
     connectRef.current = null
     panRef.current = null
@@ -1183,6 +1228,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 const y = Math.min(boxSel.y0, boxSel.y1)
                 const w = Math.abs(boxSel.x1 - boxSel.x0)
                 const h = Math.abs(boxSel.y1 - boxSel.y0)
+                // 蒙层渲染在节点之后（DOM 序天然在最上），不需要 z-index
                 return (
                   <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
                     <rect x={x} y={y} width={w} height={h}
