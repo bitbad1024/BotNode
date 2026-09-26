@@ -48,7 +48,7 @@ from nacho.workflow import (  # noqa: E402
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
-from nacho.workflow.nodes import exec_http, exec_json, exec_regex  # noqa: E402
+from nacho.workflow.nodes import exec_http, exec_json, exec_now, exec_regex  # noqa: E402
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -1354,13 +1354,30 @@ def test_regex_fields_are_validated() -> None:
     assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
 
 
+@pytest.mark.asyncio
+async def test_now_outputs_formatted_text_and_timestamp() -> None:
+    """产出当前时刻：格式按手填 / 连线（线上优先），时间戳是整数秒的「现在」。"""
+    node_ = WorkflowNode(id="n1", type="now", config={"format": "%Y%m%d"})
+    result = await exec_now(node_, NodeExecutionContext())
+    assert result["now_text"] == time.strftime("%Y%m%d")  # 手填格式
+    assert isinstance(result["now_ts"], int)
+    assert abs(result["now_ts"] - int(time.time())) <= 5  # 就是「现在」
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"format": "%Y"}  # 线上来的格式覆盖手填
+    result = await exec_now(node_, ctx_)
+    assert result["now_text"] == time.strftime("%Y")
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "http", "constant", "delay", "json", "regex"):
+    for node_type in (
+        "start", "end", "log", "test", "http", "constant", "delay", "json", "regex", "now",
+    ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
-        "start", "end", "log", "test", "http", "constant", "delay", "json", "regex",
+        "start", "end", "log", "test", "http", "constant", "delay", "json", "regex", "now",
     }
 
 
@@ -1420,6 +1437,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
         "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),
         "regex": (90, "正则", ["trigger", "text", "pattern", "replace"], ["trigger", "regex_value"]),
+        "now": (100, "当前时间", ["trigger", "format"], ["trigger", "now_text", "now_ts"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1473,6 +1491,16 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     assert [(p.id, p.type) for p in regex.outputs] == [
         ("trigger", "trigger"),
         ("regex_value", "message"),
+    ]
+
+    now = get_spec("now")
+    assert now is not None
+    now_inputs = {p.id: p for p in now.inputs}
+    assert now_inputs["format"].required is False  # 格式有缺省，可选
+    assert [(p.id, p.type) for p in now.outputs] == [
+        ("trigger", "trigger"),
+        ("now_text", "message"),
+        ("now_ts", "message"),
     ]
 
 
