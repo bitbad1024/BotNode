@@ -49,9 +49,9 @@ class SimpleWorkflowRunner:
     """按拓扑顺序串行跑图的简单执行器。
 
     只执行 start 可达的主流程：先在可达子图上算入度，再按 Kahn 顺序跑；每个节点执行前，
-    引擎按入边把上游产出投进 ``ctx.inputs``（键 = 目标端口名；控制流端口不送值，源端口没
-    产出就送空串）。孤儿节点不在可达集合里，永远不执行（就算它的类型没有执行器也不影响
-    主流程）。并发 / 分支语义留给将来新增的分流类节点。
+    引擎按入边把上游产出投进 ``ctx.inputs``（键 = 目标端口名；控制流端口不送值，上游没跑过
+    的边不算数，跑过但没产出的才送空串）。孤儿节点不在可达集合里，永远不执行（就算它的类型
+    没有执行器也不影响主流程）。并发 / 分支语义留给将来新增的分流类节点。
     """
 
     async def run(self, graph: WorkflowGraph, ctx: NodeExecutionContext) -> None:
@@ -111,13 +111,20 @@ class SimpleWorkflowRunner:
     ) -> dict[str, Any]:
         """按入边拼出这个节点的入口值：键 = 目标端口名，值 = 上游对应端口的产出。
 
-        控制流端口（``trigger``）不送值；上游那个端口没产出（例如 start 的时间触发没有
-        message）就送空串 —— 节点拿到的是「这个入口确实接了线，只是线上没值」。
+        * 控制流端口（``trigger``）不送值；
+        * 上游**没执行**（孤儿 / 从 start 到不了的节点）连出来的边**不算数**：这个键干脆
+          不放进 ``inputs``，让 :func:`~nacho.workflow.nodes.base.input_value` 回落到 config
+          里手填的值 —— 与校验器「孤儿连出来的线不算数」是同一口径（见 ``validator``）；
+        * 上游跑了、只是那个端口没产出（例如 start 的时间触发没有 message）才送空串 ——
+          节点拿到的是「这个入口确实接了线，只是线上没值」。
         """
         inputs: dict[str, Any] = {}
         for edge in in_edges.get(node_id, ()):
+            if edge.source not in produced:  # 上游没执行：这根线不算数，别拿空串顶掉手填值
+                continue
             target_port = edge_target_port(edge)
             if target_port == DEFAULT_EDGE_PORT:
                 continue
-            inputs[target_port] = produced.get(edge.source, {}).get(edge_source_port(edge), "")
+            values = produced[edge.source] or {}  # 执行函数返回 None 时按「没有产出」处理
+            inputs[target_port] = values.get(edge_source_port(edge), "")
         return inputs

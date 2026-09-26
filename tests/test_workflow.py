@@ -297,6 +297,46 @@ def test_semantic_one_data_input_takes_one_edge() -> None:
     assert "DUPLICATE_INPUT_EDGE" in codes
 
 
+def test_semantic_trigger_ports_allow_convergence() -> None:
+    """「只接一条线」只管数据入口：控制流端口允许多条入边汇聚（菱形 / 多分支汇流）。
+
+    引擎按入度排序，两条 trigger 边汇到同一个 end 就是「都跑完才轮到它」；校验器不该拦。
+    数据入口（message）照旧只允许一条 —— 两份值进同一个入口没法选。
+    """
+    diamond = {
+        "nodes": [
+            node("s", "start"),
+            node("a", "test", message="A"),
+            node("b", "test", message="B"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "a"),
+            edge("s", "b"),
+            edge("a", "e"),  # 两条 trigger 边汇到 e.trigger：允许
+            edge("b", "e"),
+        ],
+    }
+    assert validate_graph(diamond).valid
+
+    dup_data = {
+        "nodes": [
+            node("s", "start"),
+            node("t", "test", message="x"),
+            node("l", "log"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "t"),
+            edge("t", "l", "message", "message"),
+            edge("s", "l", "message", "message"),  # 第二条数据线接到同一个入口
+            edge("l", "e"),
+        ],
+    }
+    codes = {issue.code for issue in validate_graph(dup_data).errors}
+    assert "DUPLICATE_INPUT_EDGE" in codes
+
+
 def test_semantic_wired_data_input_passes() -> None:
     """数据入口接上上游的输出端口（类型也对得上）就通过 —— 不需要在 config 里填值。"""
     graph = {
@@ -568,6 +608,59 @@ async def test_executor_orphan_edge_into_main_path_does_not_block() -> None:
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)  # 旧实现这里会卡在 e 的入度上
     assert ran == []  # 孤儿依旧不执行
+
+
+@pytest.mark.asyncio
+async def test_executor_ignores_data_edges_from_nodes_that_never_ran() -> None:
+    """孤儿连出来的线**不算数**：别拿空串把手填的兜底值顶掉（与校验器同一口径）。
+
+    constant 没接触发线（孤儿）→ 永不执行，却挂着一根 ``value -> log.message``。那根线不该
+    被当成「上游送来了空串」：校验器认为它不算数（所以手填值满足必填入口），运行器也得这么算，
+    log 才会用手填的 ``config.message``。
+    """
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("l", "log", message="手填的内容"),
+                node("c", "constant", value="孤儿常量"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "l"), edge("l", "e"), edge("c", "l", "value", "message")],
+        }
+    )
+    assert validate_graph(graph).valid  # 校验放行：孤儿那根线不算数，手填值就够了
+
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("[INFO] l: 手填的内容" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_still_sends_empty_for_wired_port_without_value() -> None:
+    """上游**跑过了**、只是那个出口没产出（时间触发的 start 没有 message）→ 照旧送空串。
+
+    这跟「上游根本没跑」是两回事：接的线算数、线上确实没值，空串会盖掉手填值（有意为之，
+    见 ``_inputs_of`` 的文档）。别把这条语义一起改掉了。
+    """
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start", trigger="time", cron="*/5 * * * *"),
+                node("l", "log", message="手填的内容"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "l"),
+                edge("s", "l", "message", "message"),  # 时间触发没有 message 产出
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any(line == "[INFO] l: " for line in ctx.log)  # 线上来了个空串
+    assert not any("手填的内容" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio

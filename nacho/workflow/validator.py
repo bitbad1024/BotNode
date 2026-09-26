@@ -437,13 +437,17 @@ def _port_wiring(graph: WorkflowGraph, reachable: set[str]) -> list[ValidationIs
     可达）：孤儿节点永不执行，它连出去的线不算数 —— 被孤儿喂着的必填入口照样算「没接上」。
     另外，**某类型完全没声明端口**时不查它的那一端（只 ``declare_node_type`` 占位的扩展
     节点没有「端口名对不对」可言），声明了才查。
+
+    「一个入口只接一条线」这条只放行**控制流端口**（``trigger``）——它的多条入边是「汇聚」：
+    多个上游都跑完才轮到本节点（执行器的入度排序天然如此），菱形 / 多分支汇流都靠它；
+    其余端口（现在的 ``message``、将来新增的类型）都是「一个入口一份值」，多了没法选。
     """
     issues: list[ValidationIssue] = []
     node_type = {node.id: node.type for node in graph.nodes}
     main_edges = [
         edge for edge in graph.edges if edge.source in reachable and edge.target in reachable
     ]
-    #: (目标节点, 目标端口) -> 接在上面的边条数：数据入口只允许一条
+    #: (目标节点, 目标端口) -> 接在上面的边条数：除了控制流端口（trigger），一个入口只允许一条
     incoming: dict[tuple[str, str], int] = {}
 
     for edge in main_edges:
@@ -508,7 +512,9 @@ def _port_wiring(graph: WorkflowGraph, reachable: set[str]) -> list[ValidationIs
             continue
         for port in spec.inputs:
             count = incoming.get((node.id, port.id), 0)
-            if count > 1:
+            # 只放行 trigger：它的多条入边是「汇聚」（上游都跑完才轮到本节点）；其余端口
+            # （message 以及将来新增的类型）按「一个入口一份值」处理，写反了只会更严不会更松
+            if port.type != "trigger" and count > 1:
                 issues.append(
                     ValidationIssue(
                         node_id=node.id,
