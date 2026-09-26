@@ -83,6 +83,8 @@ class WorkflowDefinitionTable(SQLModel, table=True):
     published_version: int = Field(default=0)
     #: 运行开关：发布只挪指针，这里为 True 才会被调度器跑起来（默认关）
     enabled: bool = Field(default=False)
+    #: 实例策略（工作流设置）：False = 单实例（上次没跑完跳过本次），True = 多实例（允许叠加）
+    multi_instance: bool = Field(default=False)
     #: 暂存区图原文（空串 = 没暂存过）；新老库都按可空 / 缺省 '' 建
     draft_graph_json: str = Field(
         default="", sa_column=Column(Text(), nullable=False, server_default="")
@@ -121,6 +123,7 @@ def _definition_to_record(row: WorkflowDefinitionTable) -> WorkflowDefinitionRec
         current_version=int(row.current_version),
         published_version=int(row.published_version),
         enabled=bool(row.enabled),
+        multi_instance=bool(row.multi_instance),
         draft_graph_json=row.draft_graph_json or "",
         draft_updated_at=float(row.draft_updated_at or 0.0),
         current_ref=cast(CurrentRef, row.current_ref or "draft"),
@@ -168,6 +171,9 @@ class SqlWorkflowStore:
         # 运行开关（2026-09 之后加的）：老库补列时一并按「不跑」填 0 —— 升级上来不会
         # 因为多了个开关就突然开始跑，符合「发布 ≠ 运行」这条新口径
         "enabled": "BOOLEAN NOT NULL DEFAULT 0",
+        # 实例策略（工作流设置里的「单 / 多实例」）：老库补列按「单实例」填 0 —— 与调度器的
+        # 缺省（``multi_instance=False``）一致，升级上来行为不变
+        "multi_instance": "BOOLEAN NOT NULL DEFAULT 0",
     }
 
     def _migrate_definition_columns(self, conn: Connection) -> None:
@@ -262,6 +268,24 @@ class SqlWorkflowStore:
             if row is None:
                 return None
             row.enabled = enabled
+            row.updated_at = time.time()
+            session.add(row)
+            await session.commit()
+            return _definition_to_record(row)
+
+    async def update_settings(
+        self, workflow_id: str, *, multi_instance: bool
+    ) -> WorkflowDefinitionRecord | None:
+        """改工作流的**设置**（现在是实例策略：单实例 / 多实例）；不存在返回 ``None``。
+
+        只碰设置本身，不动发布指针 / 运行开关 / 图。以后加设置就往这里加关键字参数
+        （接口那一层跟着补字段），老调用点不用改。
+        """
+        async with self._sessions() as session:
+            row = await session.get(WorkflowDefinitionTable, workflow_id)
+            if row is None:
+                return None
+            row.multi_instance = multi_instance
             row.updated_at = time.time()
             session.add(row)
             await session.commit()

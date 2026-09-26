@@ -157,6 +157,8 @@ class WorkflowData(_Frozen):
     published_version: int
     #: 运行开关：已发布但它是 ``false`` 时不会跑（发布 ≠ 运行）
     enabled: bool = False
+    #: 实例策略（工作流设置）：``false`` = 单实例（上次没跑完跳过本次），``true`` = 多实例（允许叠加）
+    multi_instance: bool = False
     #: 暂存区最近保存时间（0 = 没暂存过）
     draft_updated_at: float = 0.0
     #: 编辑器当前指向：draft（暂存区）/ version（已提交版本）
@@ -174,6 +176,7 @@ class WorkflowData(_Frozen):
             current_version=record.current_version,
             published_version=record.published_version,
             enabled=record.enabled,
+            multi_instance=record.multi_instance,
             draft_updated_at=record.draft_updated_at,
             current_ref=record.current_ref,
             created_at=record.created_at,

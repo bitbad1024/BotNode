@@ -14,6 +14,10 @@ config:
 :class:`~nacho.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；``message`` 被动
 等消息接入（消息源留待后续），发布 / 试跑时只写一条开始日志。
 
+**加 / 摘任务只在「登记那一趟」做**（拨运行开关 / 启动载入 / 发布新版，见
+:attr:`NodeExecutionContext.register_triggers`）；整图执行（cron 到点）那一趟不碰调度器
+—— 它在派发前就已经排好了下一次。
+
 校验规则（trigger 枚举 / time 时 cron 必填且合法）在 :func:`validate_start_node` 里，
 随注册一起挂进注册表，校验器框架代码不认识具体类型。
 """
@@ -122,15 +126,40 @@ def workflow_task_id(workflow_id: str, node_id: str) -> str:
     return f"wf-{workflow_id}-{node_id}"
 
 
-async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-    """把整条流程按 cron 登记到调度器（``trigger=time`` 的行为）。
+def _is_registered(ctx: NodeExecutionContext, task_id: str) -> bool:
+    """调度器里有没有这个任务（没注入调度器 / 没这个 id 都算没有）。"""
+    if ctx.scheduler is None:
+        return False
+    try:
+        ctx.scheduler.get(task_id)
+    except KeyError:
+        return False
+    return True
 
-    调度器没注入时只记日志、不实际登记（测试 / 离线场景）；登记的 task_id 由
-    :func:`workflow_task_id` 定（``wf-<工作流 id>-<节点 id>``），重复执行会先移除再登记（幂等）。
+
+async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+    """``trigger=time`` 的行为：**只在「登记那一趟」**把整条流程按 cron 登记到调度器。
+
+    两趟分得很清（见 :attr:`NodeExecutionContext.register_triggers`）：
+
+    * **登记那一趟**（拨运行开关 / 启动载入 / 发布新版）：加任务，或把同名旧任务换成新定义。
+      调度器没注入时只记日志、不实际登记（测试 / 离线场景）；
+    * **执行那一趟**（cron 到点跑整条流程）：**不碰调度器** —— 任务在里面排着，而调度器在派发
+      前就会重排下一次（``nacho.core.scheduler.core.Scheduler._spawn``）。以前每次跑图都先摘
+      再登记，等于每执行一次就新建一个任务对象：运行统计被清零，连「上一次还没跑完就跳过本次」
+      的单实例保护也一并失效了。
+
+    登记的 task_id 由 :func:`workflow_task_id` 定（``wf-<工作流 id>-<节点 id>``）。登记是幂等
+    的：先移除同名旧任务再添加，改 cron / 改名字后重复登记不会残留旧任务。实例策略（单实例 /
+    多实例）是**工作流设置**，经 ``ctx.multi_instance`` 传进来后交给调度器的 ``add``。
     """
     cron = str(node.config.get("cron", "")).strip()
     name = str(node.config.get("name", node.id))
     task_id = workflow_task_id(ctx.workflow_id, node.id)
+
+    if not ctx.register_triggers:
+        ctx.log.append(f"[start:time] {node.id}: 执行中，调度器自己排下一次（cron={cron}）")
+        return {"scheduled": _is_registered(ctx, task_id), "task_id": task_id, "cron": cron}
 
     if ctx.scheduler is None:
         ctx.logger.warning(
@@ -141,11 +170,7 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
         ctx.log.append(f"[start:time] {node.id}: 未注入调度器，cron={cron}")
         return {"scheduled": False, "task_id": task_id, "cron": cron}
 
-    # 幂等：先移除同名旧任务再登记（流程重跑 / 改 cron 时不残留）
-    try:
-        ctx.scheduler.remove(task_id)
-    except KeyError:
-        pass
+    ctx.scheduler.remove(task_id)  # 幂等：同名旧任务先摘掉（不在就返回 False，不抛）
 
     async def _trigger() -> None:
         """到点回调：跑整条流程。"""
@@ -158,6 +183,7 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
         task_id=task_id,
         name=name,
         description=f"工作流开始节点（时间触发）{node.id}",
+        multi_instance=ctx.multi_instance,  # 工作流设置：单实例（缺省）/ 多实例
     )
     ctx.logger.info(
         f"[start:{node.id}] 已登记到调度器",

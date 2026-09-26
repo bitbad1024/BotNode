@@ -9,8 +9,9 @@
 顺带登记」，代价是每次启动都真的把整条流程执行一遍。停用是对称的，见
 :func:`stop_published_workflow`，同样不跑图。）
 
-调度器到点后走 :func:`make_trigger`：重新加载该版本的图并**跑整条流程**（幂等：
-开始节点会先移除旧任务再重新登记，不会叠加）。
+调度器到点后走 :func:`make_trigger`：重新加载该版本的图并**跑整条流程**。这一趟**不碰调度器**
+（``ctx.register_triggers=False``）—— 任务在调度器里排着，而它在派发前就重排好了下一次；
+加 / 摘任务只发生在「登记那一趟」，见 :func:`register_published_workflow`。
 """
 from __future__ import annotations
 
@@ -47,8 +48,8 @@ def make_trigger(
 ) -> Callable[[], Awaitable[None]]:
     """构造到点触发回调：重新加载版本图并执行整条流程。
 
-    每次触发都重新跑一遍，时间触发的开始节点会幂等地重新登记自己（先移除再添加），
-    所以不会因为重复触发而在调度器里堆积任务。
+    每次触发都重新加载该版本的图跑一遍。开始节点在这一趟**不再动调度器**（任务在它触发之前
+    就已经排好了下一次），所以不会因为重复触发而在调度器里堆积任务。
     """
 
     async def trigger() -> None:
@@ -78,8 +79,9 @@ async def run_published_workflow(
         return
 
     graph = record.graph()
-    # 到点回调：再跑一次同一个版本（时间触发开始节点幂等重登记）
+    # 到点回调：这个版本下次再到点，还是从这儿跑一遍（与本次同一个入口）
     trigger = make_trigger(workflow_id, version, store, scheduler)
+    # 执行那一趟（register_triggers 缺省 False）：开始节点不碰调度器，它自己排下一次
     ctx = NodeExecutionContext(scheduler=scheduler, run=trigger, workflow_id=workflow_id)
     runner = SimpleWorkflowRunner()
     try:
@@ -112,6 +114,9 @@ async def register_published_workflow(
     两种都只需要跑**开始节点自己**，后面的节点一个都不跑 —— 启动载入不是执行。以前这里是
     「跑一遍整张图，靠开始节点顺带登记」，代价是每次开机都真的把整条流程执行一次（下游的
     http / log 全都跟着跑了），而登记本身只是点个名。
+
+    这是**登记那一趟**（``ctx.register_triggers=True``）：加 / 摘任务只在这儿发生；真正整图
+    执行（cron 到点走 :func:`run_published_workflow`）那一趟不碰调度器，它自己会排下一次。
     """
     record = await store.get_version(workflow_id, version)
     if record is None:
@@ -124,11 +129,16 @@ async def register_published_workflow(
 
     graph = record.graph()
     starts = set(start_ids(graph.nodes))
-    # 登记时给的到点回调是「跑整条流程」那个（与到点触发同一条路）
+    # 实例策略是**工作流级设置**（定义表里的列），与图无关：登记时读一次，由开始节点带给调度器
+    definition = await store.get(workflow_id)
+    # 登记时给的到点回调是「跑整条流程」那个（与到点触发同一条路）；
+    # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
         scheduler=scheduler,
         run=make_trigger(workflow_id, version, store, scheduler),
         workflow_id=workflow_id,
+        register_triggers=True,
+        multi_instance=definition.multi_instance if definition is not None else False,
     )
     primed = 0
     for node in graph.nodes:

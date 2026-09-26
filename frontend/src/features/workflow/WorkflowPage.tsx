@@ -16,9 +16,11 @@ import {
   IconEdit,
   IconPlus,
   IconRefresh,
+  IconSettings,
   IconTrash,
 } from '../../common/icons'
 import WorkflowEditor from './WorkflowEditor'
+import WorkflowSettingsDialog from './WorkflowSettingsDialog'
 import styles from './WorkflowPage.module.css'
 
 function describe(err: unknown): string {
@@ -51,6 +53,8 @@ export default function WorkflowPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  /** 打开设置弹窗的那条工作流（null = 没开） */
+  const [settingsFor, setSettingsFor] = useState<WorkflowData | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -275,6 +279,14 @@ export default function WorkflowPage() {
                         </button>
                         <button
                           className="btn"
+                          disabled={busy}
+                          onClick={() => setSettingsFor(w)}
+                        >
+                          <IconSettings size={14} />
+                          设置
+                        </button>
+                        <button
+                          className="btn"
                           disabled={busy || renameId === w.id}
                           onClick={() => {
                             setRenameId(w.id)
@@ -329,6 +341,18 @@ export default function WorkflowPage() {
           onClose={() => {
             setEditingId(null)
             void load()
+          }}
+        />,
+        document.body,
+      )}
+
+      {settingsFor && createPortal(
+        <WorkflowSettingsDialog
+          workflow={settingsFor}
+          onClose={() => setSettingsFor(null)}
+          onSaved={(updated) => {
+            // 就地替换列表里那一行：设置没动图的指针，不必整页重拉
+            setItems((list) => list.map((item) => (item.id === updated.id ? updated : item)))
           }}
         />,
         document.body,

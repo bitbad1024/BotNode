@@ -82,7 +82,7 @@ store ──────────────► models
 
 | 名字 | 作用 |
 |---|---|
-| `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针 + **运行开关** `enabled`），`UNIQUE(owner_id, name)` |
+| `WorkflowDefinitionTable` | `workflow_definitions`：一个工作流一行（元数据 + 版本指针 + **运行开关** `enabled` + **实例策略** `multi_instance`），`UNIQUE(owner_id, name)` |
 | `WorkflowVersionTable` | `workflow_versions`：每次保存一张**不可变**图快照，`UNIQUE(workflow_id, version)` |
 | `SqlWorkflowStore` | 读写实现：查询走 `AsyncSession`（不手写 SQL；`ensure_schema` 里那一句 `ALTER TABLE` 是给老库补列的迁移，属例外）；按 `owner_id` 隔离 |
 | `WorkflowError` / `WorkflowNameConflict` | 存储层错误（消息直接给人看） |
@@ -91,6 +91,11 @@ store ──────────────► models
 > 要不要真的跑由 `enabled`（运行开关，默认 `False`）说了算 —— 它是**库里的字段**，重启 / 多进程
 > 认的是同一份。老库升级时这一列按 `0` 补（见 `_DEFINITION_ADDED_COLUMNS`），不会因为多了个
 > 开关就突然开始跑。开关怎么拨（接口 / 隔离 / 即时启停）见 `nacho/api/api/workflow/`。
+>
+> **实例策略**（`multi_instance`，就是设置弹窗里的「单实例 / 多实例」，默认 `False`）只管定时
+> 触发**这一拍怎么跑**：上一次还没跑完、到点又到点时，跳过本次（单实例）还是开新实例叠加
+> （多实例）。登记那一趟由 `runtime.register_published_workflow` 读出来交给调度器的
+> `add(..., multi_instance=...)`；老库补列同样按 `0`（单实例）填，升级行为不变。
 
 引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），本模块不建引擎、不读配置。
 
@@ -100,7 +105,7 @@ store ──────────────► models
 |---|---|---|---|
 | `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `input_value`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— | —— |
 | `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— | —— |
-| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 | — → `trigger` / `message` | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
+| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 —— **只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版），整图执行那一趟不碰调度器（它自己会排下一次） | — → `trigger` / `message` | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | `trigger` → — | —— |
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | 回显（画布联调）：把入口的值原样从出口送下去，夹在中间看「线上流过了什么」 | `trigger` / `message` → `trigger` / `message` | `message`（缺省 `hello`） |
@@ -359,4 +364,4 @@ async def test_my_node_outputs(...) -> None:
 | 新的 HTTP 接口 | `nacho/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 分支 / 重试） | `executor.py`（现在的 `SimpleWorkflowRunner` 是串行版；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
-| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程） |
+| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`） |

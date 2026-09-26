@@ -110,6 +110,8 @@ export interface WorkflowData {
   status: 'draft' | 'published'
   /** **运行开关**：发布 ≠ 运行 —— 默认关，拨开才真的按已发布版本跑 */
   enabled: boolean
+  /** **实例策略**（工作流设置）：false = 单实例（上次没跑完跳过本次），true = 多实例（允许叠加） */
+  multi_instance: boolean
   current_version: number
   published_version: number
   /** 暂存区最近保存时间（0 = 没暂存过） */
@@ -241,4 +243,21 @@ export function setWorkflowEnabled(id: string, enabled: boolean) {
 /** GET /workflows/{id}/published：已发布的那一份（开关状态 + 版本 + 图）。 */
 export function getPublishedWorkflow(id: string) {
   return http.get<PublishedWorkflowData>(`/workflows/${encodeURIComponent(id)}/published`)
+}
+
+/**
+ * PUT /workflows/{id}/settings：改工作流**设置**（现在只有「实例策略」）。
+ *
+ * 以后加设置就往这个请求体里加字段（后端请求体允许额外字段），函数签名不用动。
+ */
+export interface WorkflowSettings {
+  /** false = 单实例（上一次还没跑完就跳过本次）；true = 多实例（到点就开新实例，允许叠加） */
+  multi_instance: boolean
+}
+
+export function setWorkflowSettings(id: string, settings: WorkflowSettings) {
+  return http.put<WorkflowData, WorkflowSettings>(
+    `/workflows/${encodeURIComponent(id)}/settings`,
+    settings,
+  )
 }

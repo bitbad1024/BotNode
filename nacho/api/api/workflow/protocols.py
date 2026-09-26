@@ -98,6 +98,12 @@ class WorkflowStoreLike(Protocol):
         """拨**运行开关**（发布 ≠ 运行）；不存在返回 ``None``。"""
         ...
 
+    async def update_settings(
+        self, workflow_id: str, *, multi_instance: bool
+    ) -> WorkflowDefinitionRecord | None:
+        """改工作流**设置**（现在是实例策略：单实例 / 多实例）；不存在返回 ``None``。"""
+        ...
+
 
 class WorkflowTriggerLike(Protocol):
     """启停某个已发布版本的定时触发（对应 :class:`nacho.workflow.runtime.WorkflowTriggers`）。
