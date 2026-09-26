@@ -110,7 +110,7 @@
 与 ``examples/child_config_demo.py``（子实例的自层覆盖、回落与冻结）。
 """
 
-from .base import BaseLogger
+from .base import BaseLogger, BoundLogger
 from .core import (
     LogCore,
     attach_mount,
@@ -133,6 +133,7 @@ from .queue import AsyncLogQueue, OverflowPolicy
 __all__ = [
     # 日志系统
     "BaseLogger",
+    "BoundLogger",
     "LogCore",
     "LogManager",
     "configure",

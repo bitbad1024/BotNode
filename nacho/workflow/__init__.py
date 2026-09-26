@@ -60,6 +60,7 @@ from .validator import (
 from .executor import SimpleWorkflowRunner
 from .nodes import (
     MISSING_DEFAULT,
+    NO_USER_ID,
     ConfigField,
     NodeConfigValidator,
     NodeExecutionContext,
@@ -113,6 +114,7 @@ __all__ = [
     "PortType",
     "TRIGGER_PORT",
     "MISSING_DEFAULT",
+    "NO_USER_ID",
     "input_value",
     "register_executor",
     "register_node",

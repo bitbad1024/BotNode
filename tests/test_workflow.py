@@ -759,6 +759,75 @@ async def test_executor_start_message_trigger_does_not_register() -> None:
     assert any("消息触发" in line for line in ctx.log)
 
 
+async def test_context_user_id_identifies_who_the_run_is_for() -> None:
+    """``ctx.user_id`` 标识这一趟**面向哪个用户**：没给是空串（``NO_USER_ID``）。
+
+    它与 ``owner_id`` 是两回事：``owner_id`` 是工作流的主人（账号），``user_id`` 是被服务
+    的那个人 —— 定时触发 / 离线跑没有「这个人」，所以缺省空串而不是某个占位 id。
+    """
+    assert NodeExecutionContext().user_id == ""
+    assert NodeExecutionContext(user_id="10001").user_id == "10001"
+
+    ctx = NodeExecutionContext(owner_id="u-admin", user_id="10001")
+    assert (ctx.owner_id, ctx.user_id) == ("u-admin", "10001")
+
+
+@pytest.mark.asyncio
+async def test_context_logger_binds_who_the_run_is_for() -> None:
+    """``ctx.logger`` **提前绑好了默认字段**：节点只写自己那句话，日志自己认得出是谁的。
+
+    身份（哪条工作流 / 谁的 / 给谁跑的）在构造上下文时就定下来，不用每个节点在调用点
+    手抄一遍 —— ``start`` 之类的节点因此不必回写上下文。
+    """
+    import asyncio
+
+    from nacho.core.logger import BaseLogProcessor, LogCore, LogRecord
+
+    collected: list[LogRecord] = []
+
+    class _Collector(BaseLogProcessor):
+        name: str = "collector"
+
+        def __init__(self) -> None:
+            super().__init__(buffer_size=1, flush_interval=0)  # 逐条直写，不用等攒批
+
+        async def write(self, records: list[LogRecord]) -> None:
+            collected.extend(records)
+
+        async def search(
+            self,
+            *,
+            query: str | None = None,
+            level: object = None,
+            start: object = None,
+            end: object = None,
+            logger_name: str | None = None,
+            owner_id: str | None = None,
+            limit: int = 100,
+            offset: int = 0,
+        ) -> list[LogRecord]:
+            return []
+
+    core = LogCore()
+    await core.start()
+    core.attach(_Collector())
+    try:
+        ctx = NodeExecutionContext(
+            logger=core, workflow_id="w1", owner_id="u-admin", user_id="10001"
+        )
+        ctx.logger.info("节点只写自己这句")
+        for _ in range(100):  # 分发是异步的：等它落到出口
+            if collected:
+                break
+            await asyncio.sleep(0.01)
+        # owner_id 是日志的一等字段（不塞 extra），其余两个进 extra
+        assert [(r.extra, r.owner_id) for r in collected] == [
+            ({"workflow_id": "w1", "user_id": "10001"}, "u-admin")
+        ]
+    finally:
+        await core.stop()
+
+
 @pytest.mark.asyncio
 async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() -> None:
     """登记那一趟没注入调度器时（离线 / 测试）：只记一条 warning，不抛异常。"""
