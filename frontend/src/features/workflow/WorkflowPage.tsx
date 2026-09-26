@@ -1,8 +1,11 @@
-/** 工作流列表：新建 / 查看 / 发布 / 删除；点编辑弹出全屏画布编辑器。 */
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+/** 工作流列表：新建 / 查看 / 发布 / 删除；点编辑弹出全屏画布编辑器。
+ *
+ * 「新建」是列表卡片右上角那个按钮（点开一个只要名字的小弹窗），不再单独占一块面板 ——
+ * 一块列表 + 一个动作，比上下并排两块好看也更好找。
+ */
+import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  createWorkflow,
   deleteWorkflow,
   listWorkflows,
   publishWorkflow,
@@ -19,6 +22,7 @@ import {
   IconSettings,
   IconTrash,
 } from '../../common/icons'
+import WorkflowCreateDialog from './WorkflowCreateDialog'
 import WorkflowEditor from './WorkflowEditor'
 import WorkflowSettingsDialog from './WorkflowSettingsDialog'
 import styles from './WorkflowPage.module.css'
@@ -46,8 +50,8 @@ export default function WorkflowPage() {
   const [items, setItems] = useState<WorkflowData[]>([])
   const [loading, setLoading] = useState(true)
   const [failure, setFailure] = useState('')
-  const [name, setName] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  /** 新建弹窗开着没有（列表右上角那个按钮控制它） */
+  const [creating, setCreating] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -72,22 +76,6 @@ export default function WorkflowPage() {
   useEffect(() => {
     void load()
   }, [load])
-
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    if (!name.trim()) return
-    setSubmitting(true)
-    try {
-      const { data } = await createWorkflow(name.trim())
-      setName('')
-      pushToast('success', `工作流「${data.name}」已创建`)
-      await load()
-    } catch (err) {
-      pushToast('error', describe(err))
-    } finally {
-      setSubmitting(false)
-    }
-  }
 
   async function remove(id: string) {
     setBusy(true)
@@ -168,28 +156,14 @@ export default function WorkflowPage() {
 
       <section className={`card ${styles.panel}`}>
         <div className={styles.panelHead}>
-          <h3 className={styles.panelTitle}>新建工作流</h3>
-          <span className={styles.panelNote}>POST /api/workflows</span>
-        </div>
-        <form className={styles.form} onSubmit={submit}>
-          <input
-            className={styles.input}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="工作流名称（同账号下唯一）"
-            maxLength={128}
-          />
-          <button className="btn" type="submit" disabled={submitting || !name.trim()}>
+          <div className={styles.panelHeadText}>
+            <h3 className={styles.panelTitle}>工作流列表</h3>
+            <span className={styles.panelNote}>GET /api/workflows</span>
+          </div>
+          <button className={`btn ${styles.primary}`} onClick={() => setCreating(true)}>
             <IconPlus size={15} />
-            {submitting ? '创建中…' : '创建'}
+            新建
           </button>
-        </form>
-      </section>
-
-      <section className={`card ${styles.panel}`}>
-        <div className={styles.panelHead}>
-          <h3 className={styles.panelTitle}>工作流列表</h3>
-          <span className={styles.panelNote}>GET /api/workflows</span>
         </div>
         {loading ? (
           <div className={styles.loading}>
@@ -197,14 +171,15 @@ export default function WorkflowPage() {
             正在加载…
           </div>
         ) : items.length === 0 ? (
-          <div className={styles.empty}>还没有工作流，先创建一个吧</div>
+          <div className={styles.empty}>还没有工作流，点右上角「新建」建一个吧</div>
         ) : (
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>运行</th>
+                {/* 表头顺序照着下面每行的 td 来：名称 / 状态 / 运行 / 版本 / 时间 / 操作 */}
                 <th>名称</th>
                 <th>状态</th>
+                <th>运行</th>
                 <th>当前版本</th>
                 <th>发布版本</th>
                 <th>更新时间</th>
@@ -334,6 +309,13 @@ export default function WorkflowPage() {
           </table>
         )}
       </section>
+
+      {creating && (
+        <WorkflowCreateDialog
+          onClose={() => setCreating(false)}
+          onCreated={() => void load()}
+        />
+      )}
 
       {editingId && createPortal(
         <WorkflowEditor
