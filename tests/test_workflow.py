@@ -664,15 +664,17 @@ async def test_executor_still_sends_empty_for_wired_port_without_value() -> None
 
 
 @pytest.mark.asyncio
-async def test_executor_start_time_trigger_registers_with_scheduler() -> None:
-    """start（时间触发）注入调度器时按 cron 登记，task_id = wf-<工作流 id>-<节点 id>（工作流 + 节点两级，避免不同图的同名节点撞车），可幂等重登记。"""
+async def test_executor_start_time_trigger_registers_only_when_priming() -> None:
+    """只有「登记那一趟」才动调度器（拨运行开关 / 启动载入 / 发布新版走的都是这一趟）。
+
+    task_id = ``wf-<工作流 id>-<节点 id>``（工作流 + 节点两级，避免不同图的同名节点撞车）；
+    重复登记是幂等的：同名旧任务先摘掉再加。
+    """
     from nacho.core.scheduler import TaskManager
 
     scheduler = TaskManager()
-    triggered: list[str] = []
 
-    async def run_workflow() -> None:
-        triggered.append("fired")
+    async def run_workflow() -> None: ...
 
     graph = WorkflowGraph.model_validate(
         {
@@ -683,15 +685,49 @@ async def test_executor_start_time_trigger_registers_with_scheduler() -> None:
             "edges": [edge("s", "e")],
         }
     )
-    ctx = NodeExecutionContext(scheduler=scheduler, run=run_workflow, workflow_id="demo")
+    ctx = NodeExecutionContext(
+        scheduler=scheduler, run=run_workflow, workflow_id="demo", register_triggers=True
+    )
     await SimpleWorkflowRunner().run(graph, ctx)
     task = scheduler.get("wf-demo-s")
-    assert task is not None
     assert task.name == "每5分钟"
 
-    # 再跑一遍：先移除再登记，不报错且仍是同一个 task_id
+    # 再登记一遍：不报错，仍是同一个 task_id
     await SimpleWorkflowRunner().run(graph, ctx)
     assert scheduler.get("wf-demo-s") is not None
+
+
+@pytest.mark.asyncio
+async def test_executor_start_time_trigger_leaves_scheduler_alone_while_running() -> None:
+    """整图执行（cron 到点那一趟）**不碰调度器**：它自己会排下一次。
+
+    回归：以前每次执行都先「摘掉再登记」，等于每跑一次就换一个新的任务对象 ——
+    ``run_count`` / ``last_run`` 这些运行统计被清零，连「上一次还没跑完就跳过本次」的
+    单实例保护（看 ``task.active``）也一并失效了。
+    """
+    from nacho.core.scheduler import TaskManager
+
+    scheduler = TaskManager()
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+            "edges": [edge("s", "e")],
+        }
+    )
+    # 先把任务登记上（这一趟才是登记）
+    priming_ctx = NodeExecutionContext(
+        scheduler=scheduler, workflow_id="demo", register_triggers=True
+    )
+    await SimpleWorkflowRunner().run(graph, priming_ctx)
+    task = scheduler.get("wf-demo-s")
+    task.run_count = 7  # 假装已经跑过好几轮
+
+    # 再跑一遍 = 到点执行那一趟：同一个任务对象，统计原样
+    ctx = NodeExecutionContext(scheduler=scheduler, workflow_id="demo")
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert scheduler.get("wf-demo-s") is task
+    assert task.run_count == 7
+    assert any("执行中" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
@@ -715,7 +751,21 @@ async def test_executor_start_message_trigger_does_not_register() -> None:
 
 @pytest.mark.asyncio
 async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() -> None:
-    """没注入调度器时，时间触发 start 不抛异常，返回 scheduled=False。"""
+    """登记那一趟没注入调度器时（离线 / 测试）：只记一条 warning，不抛异常。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+            "edges": [edge("s", "e")],
+        }
+    )
+    ctx = NodeExecutionContext(register_triggers=True)
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("未注入调度器" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_executor_start_time_trigger_running_pass_needs_no_scheduler() -> None:
+    """执行那一趟本来就不碰调度器：没注入也照跑，不该报「未注入调度器」。"""
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
@@ -724,7 +774,8 @@ async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() 
     )
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert any("未注入调度器" in line for line in ctx.log)
+    assert any("执行中" in line for line in ctx.log)
+    assert not any("未注入调度器" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
