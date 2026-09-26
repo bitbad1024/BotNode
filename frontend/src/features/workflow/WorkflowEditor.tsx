@@ -236,6 +236,18 @@ function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+/** 焦点在输入框 / 下拉 / 可编辑元素里时：画布快捷键要让位给文本编辑 */
+function isEditingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null
+  if (!el) return false
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable
+}
+
+/** 撤销栈上限（步数）：超了从最老的丢 */
+const UNDO_LIMIT = 100
+/** 连续修改同一字段（打字）的合并窗口（毫秒）：窗内的连续输入合并成一步 */
+const UNDO_COALESCE_MS = 800
+
 function emptyGraph(): WorkflowGraph {
   return { nodes: [], edges: [] }
 }
@@ -338,6 +350,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   /** 节点右键菜单：视口坐标 + 这一次要操作的节点集合 */
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null)
   /**
+   * 粘贴虚影（Ctrl+V 放置模式）：剪贴板内容先以半透明预览跟鼠标走，左键落子才真正放图。
+   * x/y = 虚影组中心当前所在画布坐标；cx/cy = 组中心在剪贴板坐标里的位置。
+   */
+  const [placing, setPlacing] = useState<{
+    nodes: WorkflowNode[]
+    edges: WorkflowEdge[]
+    cx: number
+    cy: number
+    x: number
+    y: number
+  } | null>(null)
+  /** 节点库拖出的新节点虚影：x/y = 鼠标的画布坐标（null = 没拖 / 不在画布上） */
+  const [newDrag, setNewDrag] = useState<{ type: string; x: number; y: number } | null>(null)
+  /**
    * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
    * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
    */
@@ -351,7 +377,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     offsetX: number
     offsetY: number
     starts: Record<string, { x: number; y: number }>
+    /** 本次拖动指针真的动过（松手时决定要不要记撤销点） */
+    moved: boolean
   } | null>(null)
+  /** 本次拖动开始前的图快照（松手时若真拖动了，按它盖一个撤销点） */
+  const dragUndoRef = useRef<WorkflowGraph | null>(null)
+  /** 最近一次画布鼠标位置（画布坐标）：Ctrl+V 进入放置模式时拿它当虚影落点 */
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
   const boxRef = useRef<{ startX: number; startY: number } | null>(null)
   /** 本次空白拖拽是否已越过阈值进入框选（松手时区分「点了一下」与「框选完」） */
@@ -361,6 +393,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const menuRef = useRef<HTMLDivElement>(null)
   /** 本次右键是否真的拖动过画布（拖过就不弹节点右键菜单） */
   const panMovedRef = useRef(false)
+  /** 画布内部剪贴板：Ctrl+C / Ctrl+X 存这里的节点 + 组内连线，Ctrl+V 以虚影放置 */
+  const clipboardRef = useRef<{ nodes: WorkflowNode[]; edges: WorkflowEdge[] } | null>(null)
+  /** 撤销栈（Ctrl+Z）：每个可撤销操作开始前存一份图快照，弹回上一份 */
+  const undoStackRef = useRef<WorkflowGraph[]>([])
+  /** 连续修改同一字段（打字）的合并标记：同 key + 时间窗内不重复压栈 */
+  const lastUndoRef = useRef<{ key: string; at: number } | null>(null)
   /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
   const connectRef = useRef<{
     nodeId: string
@@ -421,6 +459,44 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     })
   }, [])
 
+  // ---- 撤销（Ctrl+Z）----
+
+  /**
+   * 记一个撤销点：在「可撤销操作」改图之前调用，存下操作前的整图快照。
+   * coalesceKey 相同且在时间窗内：连续打字合并成一步（快照取最初那次的），不逐字符占栈。
+   */
+  const pushUndo = useCallback(
+    (snapshot?: WorkflowGraph, coalesceKey?: string) => {
+      const now = Date.now()
+      if (coalesceKey) {
+        const last = lastUndoRef.current
+        if (last && last.key === coalesceKey && now - last.at < UNDO_COALESCE_MS) {
+          last.at = now
+          return
+        }
+      }
+      const stack = undoStackRef.current
+      stack.push(structuredClone(snapshot ?? graph))
+      if (stack.length > UNDO_LIMIT) stack.shift()
+      lastUndoRef.current = coalesceKey ? { key: coalesceKey, at: now } : null
+    },
+    [graph],
+  )
+
+  /** Ctrl+Z：弹回上一份快照；选中态收敛到快照里仍存在的节点。 */
+  const undo = useCallback(() => {
+    const snap = undoStackRef.current.pop()
+    if (!snap) return
+    lastUndoRef.current = null
+    setGraph(snap)
+    const ids = new Set(snap.nodes.map((n) => n.id))
+    setSelectedIds((cur) => {
+      const next = new Set([...cur].filter((id) => ids.has(id)))
+      return next.size === cur.size ? cur : next
+    })
+    setSelectedId((cur) => (cur && !ids.has(cur) ? null : cur))
+  }, [])
+
   /** 拉节点目录：面板 / 端口 / 配置字段都按它渲染（只读后端内存里那张注册表，不碰库）。 */
   const loadCatalog = useCallback(async () => {
     setCatalogFailed(false)
@@ -464,6 +540,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           }
         }
         if (!cancelled && loaded) {
+          // 打开工作流：撤销栈归零（Ctrl+Z 不会跨工作流回退）
+          undoStackRef.current = []
+          lastUndoRef.current = null
           setGraph(withLegacyPositions(normalizeGraph(loaded), legacyPositionsRef.current))
         }
       } catch (err) {
@@ -477,37 +556,85 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   // ---- 节点操作 ----
   const addNode = useCallback(
-    (type: string) => {
+    (type: string, pos?: { x: number; y: number }) => {
       const def = nodeDef(type)
       const id = uid(type)
+      pushUndo()
       const node: WorkflowNode = {
         id,
         type: def.type,
         config: { ...def.defaults },
         outputs: [],
-        x: 80 + Math.random() * 200,
-        y: 80 + Math.random() * 120,
+        // pos：拖拽落点（鼠标位置，按节点中心换算成左上角）；点击添加沿用随机错开位置
+        x: pos ? pos.x - NODE_W / 2 : 80 + Math.random() * 200,
+        y: pos ? pos.y - nodeHeight(def) / 2 : 80 + Math.random() * 120,
       }
       setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }))
       setSelectedId(id)
     },
-    [],
+    [pushUndo],
   )
+
+  /**
+   * 节点库选项按下：拖进画布 → 虚影跟随、松手落子；没拖（纯点击）→ 和以前一样直接添加。
+   * 监听挂在 window 上：拖拽路径大半在画布外（左侧栏），画布上的 mousemove 收不到。
+   */
+  const onPaletteMouseDown = (e: React.MouseEvent, type: string) => {
+    if (e.button !== 0) return
+    e.preventDefault() // 防文本选中 / 原生拖拽
+    const drag = { startX: e.clientX, startY: e.clientY, armed: false }
+    /** 鼠标在画布可视区里就返回画布矩形（用于坐标换算），否则 null */
+    const insideCanvas = (ev: MouseEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return null
+      if (ev.clientX < rect.left || ev.clientX > rect.right || ev.clientY < rect.top || ev.clientY > rect.bottom) return null
+      return rect
+    }
+    const onMove = (ev: MouseEvent) => {
+      if (!drag.armed) {
+        // 位移超过阈值才算「拖拽」，没超过就还是「点击」
+        if (Math.abs(ev.clientX - drag.startX) + Math.abs(ev.clientY - drag.startY) < 5) return
+        drag.armed = true
+      }
+      const rect = insideCanvas(ev)
+      if (!rect) {
+        setNewDrag(null) // 不在画布上：虚影收起
+        return
+      }
+      setNewDrag({ type, x: (ev.clientX - rect.left - pan.x) / zoom, y: (ev.clientY - rect.top - pan.y) / zoom })
+    }
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      if (!drag.armed) {
+        addNode(type) // 纯点击：和以前一样直接出现
+        return
+      }
+      setNewDrag(null)
+      const rect = insideCanvas(ev)
+      if (!rect) return // 松手在画布外：取消，不添加
+      addNode(type, { x: (ev.clientX - rect.left - pan.x) / zoom, y: (ev.clientY - rect.top - pan.y) / zoom })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   const deleteNode = useCallback(
     (id: string) => {
+      pushUndo()
       setGraph((g) => ({
         nodes: g.nodes.filter((n) => n.id !== id),
         edges: g.edges.filter((e) => e.source !== id && e.target !== id),
       }))
       if (selectedId === id) setSelectedId(null)
     },
-    [selectedId],
+    [selectedId, pushUndo],
   )
 
   /** 按 id 批量删除节点（连带两端连线），并清理指向它们的选中态。Delete 键 / 右键菜单共用。 */
   const deleteNodesByIds = useCallback((ids: string[]) => {
     if (ids.length === 0) return
+    pushUndo()
     const set = new Set(ids)
     setGraph((g) => ({
       nodes: g.nodes.filter((n) => !set.has(n.id)),
@@ -518,25 +645,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       return next.size === cur.size ? cur : next
     })
     setSelectedId((cur) => (cur && set.has(cur) ? null : cur))
-  }, [])
-
-  const deleteSelected = useCallback(() => {
-    deleteNodesByIds([...selectedIds])
-  }, [deleteNodesByIds, selectedIds])
-
-  // Delete 键批量删除
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      if (selectedIds.size === 0) return
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      e.preventDefault()
-      deleteSelected()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [selectedIds, deleteSelected])
+  }, [pushUndo])
 
   // 右键菜单：点别处（或按 Esc）关闭
   useEffect(() => {
@@ -557,6 +666,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }, [ctxMenu])
 
   const deleteEdge = useCallback((edge: WorkflowEdge) => {
+    pushUndo()
     setGraph((g) => ({
       ...g,
       edges: g.edges.filter(
@@ -567,19 +677,22 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             e.targetPort === edge.targetPort),
       ),
     }))
-  }, [])
+  }, [pushUndo])
 
   const updateConfig = useCallback((id: string, key: string, value: unknown) => {
+    // 连续打字合并成一步撤销（同一节点的同一字段）
+    pushUndo(undefined, `cfg:${id}:${key}`)
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) =>
         n.id === id ? { ...n, config: { ...n.config, [key]: value } } : n,
       ),
     }))
-  }, [])
+  }, [pushUndo])
 
   // ---- 常量节点：一行一个「名字 -> 值」，名字同步进 outputs（下游 {{名字}} 引用靠它）----
   const addConstant = useCallback((id: string) => {
+    pushUndo()
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => {
@@ -590,9 +703,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         return { ...n, config, outputs: Object.keys(config) }
       }),
     }))
-  }, [])
+  }, [pushUndo])
 
   const renameConstant = useCallback((id: string, from: string, to: string) => {
+    // 连续改名（打字）合并成一步撤销
+    pushUndo(undefined, `ren:${id}`)
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => {
@@ -604,9 +719,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         return { ...n, config, outputs: Object.keys(config) }
       }),
     }))
-  }, [])
+  }, [pushUndo])
 
   const removeConstant = useCallback((id: string, name: string) => {
+    pushUndo()
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => {
@@ -618,10 +734,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         return { ...n, config, outputs: Object.keys(config) }
       }),
     }))
-  }, [])
+  }, [pushUndo])
 
   /** 切换开始节点的触发方式：time 补默认 cron；message 清掉 cron。 */
   const setStartTrigger = useCallback((id: string, trigger: string) => {
+    pushUndo()
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => {
@@ -632,7 +749,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         return { ...n, config }
       }),
     }))
-  }, [])
+  }, [pushUndo])
 
   // ---- 右键菜单 ----
   /** 右键节点：点在框选集合内 = 对整组操作；集合外 = 先让它成为当前选择（只它一个） */
@@ -652,6 +769,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   // ---- 拖拽节点（按住框选组里的节点 = 整组一起挪）----
   const onNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
     if (e.button !== 0) return // 非左键交给画布处理（右键平移）
+    if (placing) return // 放置模式：左键让给画布落子（不 stopPropagation，冒泡上去）
     if ((e.target as HTMLElement).dataset.role === 'port') return
     e.stopPropagation()
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -667,7 +785,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       offsetX: (e.clientX - rect.left - pan.x) / zoom - pos.x,
       offsetY: (e.clientY - rect.top - pan.y) / zoom - pos.y,
       starts,
+      moved: false,
     }
+    // 拖动前的快照：松手时若真拖动了，按它记一个撤销点（一次拖动 = 一步）
+    dragUndoRef.current = graph
     setSelectedId(nodeId)
     // 图层固化：按住的这组提到数组末尾（松手 / 取消选中后不再落回原层）
     bringToFront(group)
@@ -685,6 +806,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         panY: pan.y,
       }
     } else if (e.button === 0) {
+      if (placing) {
+        // 放置模式：这一下左键就是「落子」，不进框选
+        e.preventDefault()
+        dropPlacing()
+        return
+      }
       // 左键点空白：准备框选（需要拖动超过阈值才真正开始）
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
@@ -705,6 +832,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
     const x = (e.clientX - rect.left - pan.x) / zoom
     const y = (e.clientY - rect.top - pan.y) / zoom
+    lastPointerRef.current = { x, y }
+    if (placing) {
+      // 放置模式：虚影组中心跟着鼠标走
+      setPlacing({ ...placing, x, y })
+      return
+    }
     if (boxRef.current) {
       const dx = x - boxRef.current.startX
       const dy = y - boxRef.current.startY
@@ -740,9 +873,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       const anchor = starts[nodeId] ?? { x: 0, y: 0 }
       const dx = x - offsetX - anchor.x
       const dy = y - offsetY - anchor.y
-      const next: Record<string, { x: number; y: number }> = {}
-      for (const [id, s] of Object.entries(starts)) next[id] = { x: s.x + dx, y: s.y + dy }
-      moveNodes(next)
+      if (dx !== 0 || dy !== 0) {
+        dragRef.current.moved = true
+        const next: Record<string, { x: number; y: number }> = {}
+        for (const [id, s] of Object.entries(starts)) next[id] = { x: s.x + dx, y: s.y + dy }
+        moveNodes(next)
+      }
     }
     if (connectRef.current) {
       setConnectCursor({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom })
@@ -766,6 +902,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }
 
   const onCanvasMouseUp = () => {
+    // 真的拖动过节点：松手时把「拖动前」快照记进撤销栈（一次拖动 = 一步）
+    const dragUndo = dragUndoRef.current
+    if (dragRef.current?.moved && dragUndo) pushUndo(dragUndo)
+    dragUndoRef.current = null
     // 真正拖出过框选：松手后浏览器会补发一发 click，先立牌子让 onClick 跳过清空，
     // 否则刚框选中的节点会被它故意清掉（普通点击不立牌子——那发 click 正是取消选中要用的）
     if (boxRef.current && boxMovedRef.current) {
@@ -785,6 +925,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   // ---- 端口连线 ----
   const onPortMouseDown = (e: React.MouseEvent, nodeId: string, portId: string, portType: PortType, direction: 'in' | 'out') => {
     if (e.button !== 0) return
+    if (placing) return // 放置模式：端口也让路，左键归画布落子
     e.stopPropagation()
     connectRef.current = { nodeId, portId, portType, direction }
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -827,14 +968,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       sourcePort = portId
       targetPort = drag.portId
     }
-    // 去重
-    setGraph((g) => {
-      const exists = g.edges.some(
-        (ed) => ed.source === source && ed.target === target && ed.sourcePort === sourcePort && ed.targetPort === targetPort,
-      )
-      if (exists) return g
-      return { ...g, edges: [...g.edges, { source, target, sourcePort, targetPort }] }
-    })
+    // 去重：重复连线不占撤销步
+    const exists = graph.edges.some(
+      (ed) => ed.source === source && ed.target === target && ed.sourcePort === sourcePort && ed.targetPort === targetPort,
+    )
+    if (!exists) {
+      pushUndo()
+      setGraph((g) => ({ ...g, edges: [...g.edges, { source, target, sourcePort, targetPort }] }))
+    }
     connectRef.current = null
     setConnectCursor(null)
   }
@@ -897,6 +1038,146 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
   }, [workflowId, graph, pushToast])
 
+  // ---- 剪贴板 / 画布快捷键 ----
+
+  /** 当前选择集合：优先框选集合，其次单击选中的那个（删除 / 复制粘贴同一口径）。 */
+  const getSelectionIds = useCallback((): Set<string> => {
+    if (selectedIds.size > 0) return selectedIds
+    return selectedId ? new Set([selectedId]) : new Set<string>()
+  }, [selectedIds, selectedId])
+
+  /** 复制选中节点 + 组内连线到内部剪贴板（Ctrl+C / Ctrl+X 共用）；返回复制到的节点数。 */
+  const copySelection = useCallback((): number => {
+    const ids = getSelectionIds()
+    if (ids.size === 0) return 0
+    clipboardRef.current = {
+      nodes: graph.nodes.filter((n) => ids.has(n.id)).map((n) => structuredClone(n)),
+      edges: graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+    }
+    return clipboardRef.current.nodes.length
+  }, [graph, getSelectionIds])
+
+  /**
+   * Ctrl+V：把剪贴板内容挂成虚影进入「放置模式」——虚影组中心跟着鼠标走，
+   * 左键落子（dropPlacing）/ Esc 取消。
+   */
+  const startPlacing = useCallback(() => {
+    const clip = clipboardRef.current
+    if (!clip || clip.nodes.length === 0) return
+    // 先把坐标落到快照上（旧节点用 localStorage 迁来的兜底坐标），渲染 / 落子都直接读
+    const base = (n: WorkflowNode) => positions[n.id] ?? { x: n.x ?? 0, y: n.y ?? 0 }
+    const nodes = clip.nodes.map((n) => {
+      const b = base(n)
+      return { ...n, x: b.x, y: b.y }
+    })
+    // 组包围盒中心：虚影拿它对准鼠标（观感上鼠标「抓着」整组的中腰）
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const n of nodes) {
+      const def = nodeDef(n.type, n.config)
+      const nx = n.x ?? 0
+      const ny = n.y ?? 0
+      minX = Math.min(minX, nx)
+      minY = Math.min(minY, ny)
+      maxX = Math.max(maxX, nx + NODE_W)
+      maxY = Math.max(maxY, ny + nodeHeight(def))
+    }
+    const cx = (minX + maxX) / 2
+    const cy = (minY + maxY) / 2
+    // 起点：最近一次画布鼠标位置；没有就退回原位（剪贴板组的中心）
+    const start = lastPointerRef.current ?? { x: cx, y: cy }
+    setPlacing({ nodes, edges: clip.edges, cx, cy, x: start.x, y: start.y })
+  }, [positions])
+
+  /** 落子：按虚影当前所在位置真正放图（副本换新 id、组内连线重建，新节点成为框选集合）。 */
+  const dropPlacing = useCallback(() => {
+    if (!placing) return
+    pushUndo()
+    const offX = placing.x - placing.cx
+    const offY = placing.y - placing.cy
+    const idMap = new Map<string, string>()
+    const newNodes = placing.nodes.map((n) => {
+      const id = uid(n.type)
+      idMap.set(n.id, id)
+      return {
+        ...n,
+        id,
+        config: structuredClone(n.config),
+        x: (n.x ?? 0) + offX,
+        y: (n.y ?? 0) + offY,
+      }
+    })
+    const newEdges = placing.edges.map((e) => ({
+      ...e,
+      source: idMap.get(e.source) ?? e.source,
+      target: idMap.get(e.target) ?? e.target,
+    }))
+    setGraph((g) => ({ nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] }))
+    setSelectedIds(new Set(newNodes.map((n) => n.id)))
+    setSelectedId(null)
+    setPlacing(null)
+    // 落子这一下会带出一发补发 click：立牌子别让它当「点空白」清掉刚选中的新节点
+    suppressClickRef.current = true
+  }, [placing, pushUndo])
+
+  // 画布快捷键：Delete 删除 / Ctrl+Z 撤销 / Ctrl+S 暂存 / Ctrl+C 复制 / Ctrl+X 剪切 / Ctrl+V 粘贴（先虚影后落子）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return
+      const mod = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+
+      // Esc：正在放置的粘贴虚影取消（不落子）
+      if (e.key === 'Escape' && placing) {
+        setPlacing(null)
+        return
+      }
+
+      // Ctrl+S 暂存：输入框里也照常生效（先拦掉浏览器默认的「保存网页」）
+      if (mod && key === 's') {
+        e.preventDefault()
+        if (!drafting) void onDraft()
+        return
+      }
+
+      // 输入框 / 下拉里：退格与文本复制粘贴归它们，不抢
+      if (isEditingTarget(e.target)) return
+
+      if (mod && key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        // 先收掉挂着的虚影，再撤销上一步
+        setPlacing(null)
+        undo()
+        return
+      }
+
+      if (mod && (key === 'c' || key === 'x')) {
+        if (copySelection() === 0) return // 没选中什么就不劫持
+        e.preventDefault()
+        if (key === 'x') deleteNodesByIds([...getSelectionIds()])
+        return
+      }
+
+      if (mod && key === 'v') {
+        if (!clipboardRef.current || clipboardRef.current.nodes.length === 0) return
+        e.preventDefault()
+        startPlacing()
+        return
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const ids = getSelectionIds()
+        if (ids.size === 0) return
+        e.preventDefault()
+        deleteNodesByIds([...ids])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drafting, onDraft, undo, copySelection, getSelectionIds, startPlacing, deleteNodesByIds, placing])
+
   /**
    * 拨**运行开关**：发布 ≠ 运行 —— 拨开才真的按已发布版本跑（默认关）。
    *
@@ -943,13 +1224,17 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
   }
 
-  /** 计算连线的 SVG 坐标。 */
-  function edgeCoords(edge: WorkflowEdge): { x1: number; y1: number; x2: number; y2: number } | null {
-    const srcNode = graph.nodes.find((n) => n.id === edge.source)
-    const tgtNode = graph.nodes.find((n) => n.id === edge.target)
+  /** 计算连线的 SVG 坐标；nodes / posOf 可换成虚影预览的快照节点与偏移后坐标。 */
+  function edgeCoords(
+    edge: WorkflowEdge,
+    nodes: WorkflowNode[] = graph.nodes,
+    posOf: (id: string) => { x: number; y: number } | undefined = (id) => positions[id],
+  ): { x1: number; y1: number; x2: number; y2: number } | null {
+    const srcNode = nodes.find((n) => n.id === edge.source)
+    const tgtNode = nodes.find((n) => n.id === edge.target)
     if (!srcNode || !tgtNode) return null
-    const sp = positions[edge.source]
-    const tp = positions[edge.target]
+    const sp = posOf(edge.source)
+    const tp = posOf(edge.target)
     if (!sp || !tp) return null
     // 推断端口（旧边可能没有端口信息）
     let sourcePortId = edge.sourcePort
@@ -1069,7 +1354,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               <button
                 key={spec.type}
                 className={styles.paletteItem}
-                onClick={() => addNode(spec.type)}
+                onMouseDown={(e) => onPaletteMouseDown(e, spec.type)}
+                onClick={(e) => {
+                  // 键盘（Enter/Space）触发的 click：detail 为 0；鼠标的交给 mousedown/mouseup 流程
+                  if (e.detail === 0) addNode(spec.type)
+                }}
               >
                 <span className={styles.paletteDot} style={{ background: def.color }} />
                 {def.label}
@@ -1192,7 +1481,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                     className={`${styles.node} ${selectedId === node.id ? styles.selected : ''} ${selectedIds.has(node.id) ? styles.boxSelected : ''} ${hasError ? styles.hasError : ''}`}
                     style={{ left: pos.x, top: pos.y, width: NODE_W, '--c': def.color } as React.CSSProperties}
                     onMouseDown={(e) => onNodeMouseDown(e, node.id)}
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      // 落子虚影带出的补发 click：落在节点上也算消费掉，别留到下次点空白
+                      suppressClickRef.current = false
+                    }}
                     onContextMenu={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
@@ -1279,6 +1572,147 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
               {graph.nodes.length === 0 && (
                 <div className={styles.empty}>从左侧点节点名添加到画布</div>
               )}
+
+              {/* 粘贴虚影（Ctrl+V 放置模式）：组内连线 + 节点预览跟着鼠标走，左键落子 / Esc 取消 */}
+              {/* 连线虚影（渲染在虚影节点之前，和真实图一样线在节点下面） */}
+              {placing && (() => {
+                const offX = placing.x - placing.cx
+                const offY = placing.y - placing.cy
+                const nodeById = new Map(placing.nodes.map((n) => [n.id, n]))
+                /** 虚影节点位置（快照坐标 + 当前偏移）：连线按它算端口坐标 */
+                const ghostPosOf = (id: string) => {
+                  const n = nodeById.get(id)
+                  return n ? { x: (n.x ?? 0) + offX, y: (n.y ?? 0) + offY } : undefined
+                }
+                return (
+                  <svg className={styles.edges} style={{ pointerEvents: 'none' }}>
+                    {placing.edges.map((e, i) => {
+                      const c = edgeCoords(e, placing.nodes, ghostPosOf)
+                      if (!c) return null
+                      const srcNode = nodeById.get(e.source)
+                      const srcDef = srcNode ? nodeDef(srcNode.type, srcNode.config) : null
+                      const port = srcDef?.outputs.find((p) => p.id === (e.sourcePort ?? 'trigger'))
+                      const color = port ? PORT_COLORS[port.type] : 'var(--text-3)'
+                      return (
+                        <path
+                          key={i}
+                          d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeOpacity="0.6"
+                        />
+                      )
+                    })}
+                  </svg>
+                )
+              })()}
+
+              {/* 粘贴虚影节点 */}
+              {placing && (() => {
+                const offX = placing.x - placing.cx
+                const offY = placing.y - placing.cy
+                return placing.nodes.map((n) => {
+                  const def = nodeDef(n.type, n.config)
+                  const portRows = Math.max(def.inputs.length, def.outputs.length)
+                  return (
+                    <div
+                      // 加前缀：复制场景下虚影 id 与图里原节点相同，直接当 key 会撞车
+                      key={`ghost-${n.id}`}
+                      className={styles.ghostNode}
+                      style={{
+                        left: (n.x ?? 0) + offX,
+                        top: (n.y ?? 0) + offY,
+                        width: NODE_W,
+                        minHeight: nodeHeight(def),
+                        '--c': def.color,
+                      } as React.CSSProperties}
+                    >
+                      <div className={styles.nodeHeader}>
+                        <span className={styles.nodeColorBar} style={{ background: def.color }} />
+                        <span className={styles.nodeLabel}>{def.label}</span>
+                      </div>
+                      <div className={styles.ports}>
+                        {Array.from({ length: portRows }).map((_, rowIdx) => {
+                          const inp = def.inputs[rowIdx]
+                          const out = def.outputs[rowIdx]
+                          return (
+                            <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
+                              <div className={styles.portSide}>
+                                {inp && (
+                                  <>
+                                    <span className={styles.portCircle} style={{ left: -5, background: PORT_COLORS[inp.type] }} />
+                                    <span className={styles.portLabel}>{inp.label}</span>
+                                  </>
+                                )}
+                              </div>
+                              <div className={styles.portSideRight}>
+                                {out && (
+                                  <>
+                                    <span className={styles.portLabel}>{out.label}</span>
+                                    <span className={styles.portCircle} style={{ right: -5, background: PORT_COLORS[out.type] }} />
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })
+              })()}
+
+              {/* 节点库拖出的新节点虚影（中心跟着鼠标；松手在画布上才真正添加） */}
+              {newDrag && (() => {
+                const def = nodeDef(newDrag.type)
+                const portRows = Math.max(def.inputs.length, def.outputs.length)
+                const h = nodeHeight(def)
+                return (
+                  <div
+                    className={styles.ghostNode}
+                    style={{
+                      left: newDrag.x - NODE_W / 2,
+                      top: newDrag.y - h / 2,
+                      width: NODE_W,
+                      minHeight: h,
+                      '--c': def.color,
+                    } as React.CSSProperties}
+                  >
+                    <div className={styles.nodeHeader}>
+                      <span className={styles.nodeColorBar} style={{ background: def.color }} />
+                      <span className={styles.nodeLabel}>{def.label}</span>
+                    </div>
+                    <div className={styles.ports}>
+                      {Array.from({ length: portRows }).map((_, rowIdx) => {
+                        const inp = def.inputs[rowIdx]
+                        const out = def.outputs[rowIdx]
+                        return (
+                          <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
+                            <div className={styles.portSide}>
+                              {inp && (
+                                <>
+                                  <span className={styles.portCircle} style={{ left: -5, background: PORT_COLORS[inp.type] }} />
+                                  <span className={styles.portLabel}>{inp.label}</span>
+                                </>
+                              )}
+                            </div>
+                            <div className={styles.portSideRight}>
+                              {out && (
+                                <>
+                                  <span className={styles.portLabel}>{out.label}</span>
+                                  <span className={styles.portCircle} style={{ right: -5, background: PORT_COLORS[out.type] }} />
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })()}
 
               {boxSel && (() => {
                 const x = Math.min(boxSel.x0, boxSel.x1)
@@ -1451,6 +1885,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                   className={styles.input}
                   value={selectedNode.outputs.join(',')}
                   onChange={(e) => {
+                    pushUndo(undefined, `outputs:${selectedNode.id}`)
                     const outputs = e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
                     setGraph((g) => ({
                       ...g,
