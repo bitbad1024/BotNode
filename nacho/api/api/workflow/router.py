@@ -40,7 +40,6 @@ from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode, HttpStatus
 from ...common.models import ApiResponse
 from ...logging import api_logger
-from ...services.auth.models import CurrentUser
 from nacho.workflow import (
     WorkflowNameConflict,
     apply_config_defaults,

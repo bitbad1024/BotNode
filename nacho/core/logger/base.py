@@ -325,7 +325,7 @@ class BaseLogger:
                 if not any(existing is processor for existing in instance._inherited):
                     instance._inherited.append(processor)
         if log_filter is None:
-            target._filters.pop(processor.name, None)  # pyright: ignore[reportUnusedCallResult]
+            target._filters.pop(processor.name, None)
         else:
             target._filters[processor.name] = log_filter
         self._sync_registry()
@@ -349,7 +349,7 @@ class BaseLogger:
                     if processor.name == name:
                         bucket.remove(processor)
                         found = processor
-            instance._filters.pop(name, None)  # pyright: ignore[reportUnusedCallResult]
+            instance._filters.pop(name, None)
         if found is not None:
             self._sync_registry()
         return found
@@ -411,7 +411,7 @@ class BaseLogger:
 
     def unmute(self, processor_name: str) -> None:
         """解除 :meth:`mute`：恢复本实例对该出口的正常投递。"""
-        self._filters.pop(processor_name, None)  # pyright: ignore[reportUnusedCallResult]
+        self._filters.pop(processor_name, None)
 
     @property
     def muted(self) -> list[str]:
@@ -588,7 +588,7 @@ class BaseLogger:
                 await asyncio.wait_for(self._dispatcher_task, timeout=timeout)
             except asyncio.TimeoutError:
                 _fallback.warning("日志分发器 %s 排空超时，强制取消", self.name)
-                self._dispatcher_task.cancel()  # pyright: ignore[reportUnusedCallResult]
+                self._dispatcher_task.cancel()
                 try:
                     await self._dispatcher_task
                 except asyncio.CancelledError:

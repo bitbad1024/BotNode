@@ -35,6 +35,8 @@ target-version = "py312"
 # 日志调用只关心副作用，写法与 examples/ 及 nacho/core/logger/__init__.py 的示例一致
 # （裸调 log.info(...)，不写 `_ =`），关掉「调用结果未使用」的提示
 reportUnusedCallResult = false
+# 长消息跨行拼 f-string（f"…" f"…"）是刻意的版式，不是漏逗号：关掉免得每次都要加忽略注释
+reportImplicitStringConcatenation = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

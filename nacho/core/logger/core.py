@@ -99,7 +99,7 @@ class LogCore(BaseLogger):
         )
         self._console_enabled: bool = console
         if console and self.get_processor(ConsoleLogProcessor.name) is None:
-            self.attach(  # pyright: ignore[reportUnusedCallResult]
+            self.attach(
                 ConsoleLogProcessor(stream=console_stream, color=console_color),
                 log_filter=LevelFilter(level if console_level is None else console_level),
             )
