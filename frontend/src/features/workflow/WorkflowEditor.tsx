@@ -79,6 +79,7 @@ const NODE_COLORS: Record<string, string> = {
   constant: '#eab308',
   delay: '#14b8a6',
   json: '#f97316',
+  regex: '#ec4899',
 }
 
 const DEFAULT_COLOR = '#64748b'

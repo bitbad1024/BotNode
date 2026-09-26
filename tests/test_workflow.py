@@ -48,7 +48,7 @@ from nacho.workflow import (  # noqa: E402
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
-from nacho.workflow.nodes import exec_http, exec_json  # noqa: E402
+from nacho.workflow.nodes import exec_http, exec_json, exec_regex  # noqa: E402
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -1275,13 +1275,92 @@ def test_json_fields_are_validated() -> None:
     assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
 
 
+@pytest.mark.asyncio
+async def test_regex_extracts_and_replaces() -> None:
+    """提取：无组取整体 / 有组取第 1 组 / 可选组没匹配回落整体 / i 旗标；替换：\1 反向引用。"""
+
+    async def run(
+        text: str, pattern: str, action: str = "extract", replace: str = "", flags: str = ""
+    ) -> str:
+        node_ = WorkflowNode(
+            id="r1",
+            type="regex",
+            config={"action": action, "replace": replace, "flags": flags},
+        )
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"text": text, "pattern": pattern}
+        result = await exec_regex(node_, ctx_)
+        return result["regex_value"]
+
+    assert await run("验证码 123456，5 分钟内有效", r"(\d{4,6})") == "123456"
+    assert await run("id=u-42 已注册", r"id=([\w-]+)") == "u-42"  # 连字符要靠 [\w-] 才吃得住
+    assert await run("123", r"(x)?(\d+)") == "123"  # 第 1 组没参与匹配 -> 回落整体匹配
+    assert await run("XABCx", "abc", flags="i") == "ABC"  # 忽略大小写；没组取整体
+    assert await run("13801234", r"(\d{4})\d{4}", action="replace", replace=r"\1****") == "1380****"
+    assert await run("a  b\tc", r"\s+", action="replace", replace="") == "abc"  # 空替换 = 删掉
+
+
+@pytest.mark.asyncio
+async def test_regex_soft_fails_yield_empty_string() -> None:
+    """抽不到不算事故：没匹配 / 空文本 / 线上来的非法正则都送空串并记 warning，不打断流程。"""
+
+    async def run(text: str, pattern: str) -> tuple[str, list[str]]:
+        node_ = WorkflowNode(id="r1", type="regex", config={})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"text": text, "pattern": pattern}
+        result = await exec_regex(node_, ctx_)
+        return result["regex_value"], ctx_.log
+
+    value, log = await run("没有数字的句子", r"\d+")
+    assert value == "" and any("没有匹配" in line for line in log)
+
+    value, log = await run("", r"\d+")
+    assert value == "" and any("没拿到文本" in line for line in log)
+
+    value, log = await run("abc", "(abc")  # 线上来的正则不合法（手填的会被校验拦住）
+    assert value == "" and any("不合法" in line for line in log)
+
+
+def test_regex_fields_are_validated() -> None:
+    """手填值的防呆在语义阶段：正则语法 / 动作枚举 / 旗标字母；必填入口「接线或手填」照常生效。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("r", "regex", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "r"), edge("r", "e")],
+        }
+
+    assert validate_graph(graph_with(text="hi", pattern="h")).valid
+
+    report = validate_graph(graph_with(text="hi", pattern="(abc"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_REGEX"]
+
+    report = validate_graph(graph_with(text="hi", pattern="h", action="删掉"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_REGEX_ACTION"]
+
+    report = validate_graph(graph_with(text="hi", pattern="h", flags="ix"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_REGEX_FLAGS"]
+
+    # 必填入口：text / pattern 接一个差一个都不行
+    report = validate_graph(graph_with(text="hi"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
-    for node_type in ("start", "end", "log", "test", "http", "constant", "delay", "json"):
+    for node_type in ("start", "end", "log", "test", "http", "constant", "delay", "json", "regex"):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
-        "start", "end", "log", "test", "http", "constant", "delay", "json",
+        "start", "end", "log", "test", "http", "constant", "delay", "json", "regex",
     }
 
 
@@ -1340,6 +1419,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
         "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
         "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),
+        "regex": (90, "正则", ["trigger", "text", "pattern", "replace"], ["trigger", "regex_value"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1382,6 +1462,17 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     assert [(p.id, p.type) for p in json.outputs] == [
         ("trigger", "trigger"),
         ("json_value", "message"),
+    ]
+
+    regex = get_spec("regex")
+    assert regex is not None
+    regex_inputs = {p.id: p for p in regex.inputs}
+    assert regex_inputs["text"].required is True  # 待处理文本：接线或手填
+    assert regex_inputs["pattern"].required is True  # 正则：接线或手填
+    assert regex_inputs["replace"].required is False  # 替换文本可选
+    assert [(p.id, p.type) for p in regex.outputs] == [
+        ("trigger", "trigger"),
+        ("regex_value", "message"),
     ]
 
 

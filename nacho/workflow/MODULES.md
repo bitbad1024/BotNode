@@ -26,7 +26,8 @@ nacho/workflow/
 │   ├── constant.py      内置：constant（一个节点一个常量值，从 value 出口送下去）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
 │   ├── delay.py         内置：delay（异步等待：秒数可接线覆盖手填，不阻塞事件循环）
-│   └── json.py          内置：json（解析 JSON 文本 + 点路径取值；取不到不打断流程）
+│   ├── json.py          内置：json（解析 JSON 文本 + 点路径取值；取不到不打断流程）
+│   └── regex.py         内置：regex（正则提取 / 替换；抽不到不打断流程）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据**
 └── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
@@ -115,6 +116,7 @@ store ──────────────► models
 | `http.py` | 发一次 HTTP 请求 | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
 | `delay.py` | **等待**：异步等一会儿再往下走（`await asyncio.sleep`，**不阻塞事件循环**）；`0` = 不等（临时把等待关掉） | `trigger` / `seconds` → `trigger` | `seconds`（**入口**：接线覆盖手填，缺省 5；`0` 允许，上限 1 小时 —— 手填值由自注册校验器把，线上的值运行期判断） |
 | `json.py` | **JSON**：解析 JSON 文本 + 点路径取值（HTTP 的搭档）；空文本 / 解析失败 / 路径取不到只记 warning 并送空串，不打断流程 | `trigger` / `json` / `path` → `trigger` / `json_value` | `json`（**入口**必填：接线或手填）、`path`（缺省空 = 取整个文档；点分段，数字段是数组下标） |
+| `regex.py` | **正则**：提取第一个匹配（有组取组）/ 替换所有匹配（脱敏改写）；空文本 / 空正则 / 没匹配 / 正则语法错只记 warning 并送空串，不打断流程 | `trigger` / `text` / `pattern` / `replace` → `trigger` / `regex_value` | `text`、`pattern`（**入口**必填：接线或手填）、`action`（缺省 extract；枚举由自注册校验器把）、`replace`（替换文本，支持 \1 反向引用）、`flags`（i/m/s 组合，缺省无） |
 
 > **「入口」= 字段名与端口 id 同名的那个数据端口**：`log.message` / `http.url` / `http.body` 都能
 > 被连线覆盖 —— **线上的值优先，没接线才用 config 里手填的**（`input_value` 就是这个口径）。
