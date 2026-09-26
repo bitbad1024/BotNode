@@ -81,6 +81,7 @@ const NODE_COLORS: Record<string, string> = {
   json: '#f97316',
   regex: '#ec4899',
   now: '#84cc16',
+  condition: '#6366f1',
 }
 
 const DEFAULT_COLOR = '#64748b'

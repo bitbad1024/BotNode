@@ -48,7 +48,13 @@ from nacho.workflow import (  # noqa: E402
     validate_graph,
 )
 from nacho.workflow.executor import get_executor  # noqa: E402
-from nacho.workflow.nodes import exec_http, exec_json, exec_now, exec_regex  # noqa: E402
+from nacho.workflow.nodes import (  # noqa: E402
+    exec_condition,
+    exec_http,
+    exec_json,
+    exec_now,
+    exec_regex,
+)
 from nacho.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号（id 即 u-admin / u-robot）
@@ -1102,7 +1108,10 @@ async def test_executor_delay_waits_then_passes_control() -> None:
     elapsed = time.monotonic() - started
 
     waited = "[delay] d: 等待 0.05 秒"
-    assert elapsed >= 0.05  # 真的等了，不是立即返回
+    # 真的等了，不是立即返回。阈值不用 0.05：Windows 定时器粒度 15.625ms，
+    # asyncio.sleep(0.05) 实测会在 ~47ms（3 tick）与 ~63ms（4 tick）之间摇摆，
+    # 按请求值卡线会偶发失败；立即返回的话 elapsed 在毫秒级，跟 0.04 差一个量级。
+    assert elapsed >= 0.04
     assert any(waited in line for line in ctx.log)
     assert ctx.log.index(waited) < ctx.log.index("[INFO] l: 等到了")  # 先等完再走下游
 
@@ -1369,15 +1378,147 @@ async def test_now_outputs_formatted_text_and_timestamp() -> None:
     assert result["now_text"] == time.strftime("%Y")
 
 
+@pytest.mark.asyncio
+async def test_condition_picks_branch_and_engine_prunes_skipped_side() -> None:
+    """分流执行：只跑选中分支，没走的整段跳过（[skip] 留痕）；汇合点有活入边照常收尾。"""
+
+    def branch_graph(left: str, operator: str, right: str) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", left=left, operator=operator, right=right),
+                node("yes", "log", message="true 分支"),
+                node("no", "log", message="false 分支"),
+                node("no2", "log", message="false 级联"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "c"),
+                edge("c", "yes", source_port="true"),
+                edge("c", "no", source_port="false"),
+                edge("yes", "e"),
+                edge("no", "no2"),
+                edge("no2", "e"),
+            ],
+        }
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(
+        WorkflowGraph.model_validate(branch_graph("5", ">", "3")), ctx_
+    )
+    assert any("[condition] c: 5 > 3 -> true" in line for line in ctx_.log)
+    assert any("[INFO] yes: true 分支" in line for line in ctx_.log)
+    assert not any("[INFO] no" in line for line in ctx_.log)  # false 侧两个节点都没执行
+    assert any("[skip] no: 分支未选中，未执行" in line for line in ctx_.log)
+    assert any("[skip] no2: 分支未选中，未执行" in line for line in ctx_.log)  # 级联跳过
+    assert any("[end] e 流程结束" in line for line in ctx_.log)  # 汇合点：还有活入边
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(
+        WorkflowGraph.model_validate(branch_graph("2", ">", "3")), ctx_
+    )
+    assert any("[condition] c: 2 > 3 -> false" in line for line in ctx_.log)
+    assert any("[INFO] no: false 分支" in line for line in ctx_.log)  # 这次走 false
+    assert not any("[INFO] yes" in line for line in ctx_.log)  # true 侧被剪掉
+    assert any("[skip] yes: 分支未选中，未执行" in line for line in ctx_.log)
+    assert any("[end] e 流程结束" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_condition_compares_by_operator() -> None:
+    """比较口径：==/!= 比文本，>/>=/</<= 要比数字，contains/not_contains 比子串。"""
+
+    async def pick(left: str, operator: str, right: str) -> str:
+        node_ = WorkflowNode(id="c1", type="condition", config={"operator": operator})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_condition(node_, ctx_)
+        return "true" if result.get("true") else "false"
+
+    assert await pick("5", ">", "3") == "true"
+    assert await pick("3", ">=", "3") == "true"
+    assert await pick("2.5", "<=", "3") == "true"  # 小数也认
+    assert await pick("3", "<", "3") == "false"
+    assert await pick("abc", "==", "abc") == "true"
+    assert await pick("abc", "!=", "abc") == "false"
+    assert await pick("开播了，快来看", "contains", "开播") == "true"
+    assert await pick("开播了", "not_contains", "下播") == "true"
+
+
+@pytest.mark.asyncio
+async def test_condition_soft_fails_go_false() -> None:
+    """拿不到值不算事故（warning + 走 false）：左值空 / 要数字却是文本 / contains 右值空。"""
+
+    async def run(left: str, operator: str, right: str) -> tuple[bool, list[str]]:
+        node_ = WorkflowNode(id="c1", type="condition", config={"operator": operator})
+        ctx_ = NodeExecutionContext()
+        ctx_.inputs = {"left": left, "right": right}
+        result = await exec_condition(node_, ctx_)
+        return bool(result.get("false")), ctx_.log
+
+    gone_false, log = await run("", "==", "x")  # 上游没送值或送了空串
+    assert gone_false and any("左值为空" in line for line in log)
+
+    gone_false, log = await run("一会儿", ">", "3")  # 数值比较符遇到了文本
+    assert gone_false and any("非数字" in line for line in log)
+
+    gone_false, log = await run("有现货", "contains", "")  # 子串比较没给右值
+    assert gone_false and any("右值为空" in line for line in log)
+
+    gone_false, log = await run("x", "≈", "y")  # 没走过校验的图：非法比较符兜底
+    assert gone_false and any("比较符" in line for line in log)
+
+
+def test_condition_fields_are_validated() -> None:
+    """手填值防呆：比较符枚举 / 必填入口「接线或手填」；一个出口都不接由拓扑阶段拦住。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "c"), edge("c", "e", source_port="true")],
+        }
+
+    assert validate_graph(graph_with(left="x", right="y")).valid
+
+    report = validate_graph(graph_with(left="x", operator="≈", right="y"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_CONDITION_OPERATOR"]
+
+    # 必填入口 left：接线或手填两个都没有 -> INPUT_NOT_CONNECTED
+    report = validate_graph(graph_with(right="y"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+    # 一个出口都不接：条件节点至少接一个出口（分流节点的出边下限，拓扑阶段）
+    report = validate_graph(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", left="x"),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "c"), edge("s", "e")],
+        }
+    )
+    assert not report.valid and report.stage == STAGE_TOPOLOGY
+    assert [issue.code for issue in report.errors] == ["GATEWAY_NEEDS_BRANCHES"]
+
+
 # --------------------------------------------------------------------------- ⑤ 自写节点
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in (
-        "start", "end", "log", "test", "http", "constant", "delay", "json", "regex", "now",
+        "start", "end", "log", "test", "http", "constant", "delay",
+        "json", "regex", "now", "condition",
     ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
-        "start", "end", "log", "test", "http", "constant", "delay", "json", "regex", "now",
+        "start", "end", "log", "test", "http", "constant", "delay",
+        "json", "regex", "now", "condition",
     }
 
 
@@ -1438,6 +1579,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),
         "regex": (90, "正则", ["trigger", "text", "pattern", "replace"], ["trigger", "regex_value"]),
         "now": (100, "当前时间", ["trigger", "format"], ["trigger", "now_text", "now_ts"]),
+        "condition": (110, "条件", ["trigger", "left", "right"], ["true", "false"]),
     }
     orders: list[int] = []
     for node_type, (order, label, inputs, outputs) in expected.items():
@@ -1502,6 +1644,18 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         ("now_text", "message"),
         ("now_ts", "message"),
     ]
+
+    condition = get_spec("condition")
+    assert condition is not None
+    condition_inputs = {p.id: p for p in condition.inputs}
+    assert condition_inputs["left"].required is True  # 左值：接线或手填
+    assert condition_inputs["right"].required is False  # 右值可选（也能接线）
+    assert [(p.id, p.type) for p in condition.outputs] == [
+        ("true", "trigger"),
+        ("false", "trigger"),
+    ]
+    assert condition.branching is True  # 分流节点：引擎按选中出口剪枝
+    assert condition.min_outgoing == 1  # 至少接一个出口才谈得上分支
 
 
 def test_declare_node_type_gives_rules_without_executor() -> None:

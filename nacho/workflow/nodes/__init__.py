@@ -13,6 +13,7 @@
       json.py            内置节点：json（解析 JSON 文本 + 点路径取值，取不到送空串不打断流程）
       regex.py           内置节点：regex（正则提取 / 替换；抽不到送空串不打断流程）
       now.py             内置节点：now（当前时间：strftime 格式文本 + Unix 时间戳）
+      condition.py       内置节点：condition（条件分支：true / false 双出口，引擎按选中出口剪枝）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -61,6 +62,7 @@ from .base import (
     PortType,
     input_value,
 )
+from .condition import exec_condition
 from .constant import exec_constant
 from .delay import exec_delay
 from .end import exec_end
@@ -123,4 +125,5 @@ __all__ = [
     "exec_json",
     "exec_regex",
     "exec_now",
+    "exec_condition",
 ]

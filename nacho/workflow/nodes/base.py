@@ -118,9 +118,11 @@ class NodeSpec:
     :param fields: :class:`ConfigField` 清单，必填 / 默认值都从这里推导；
     :param validator: 自定义配置校验器（枚举、条件必填这类表格盖不住的规则）；
     :param role: 拓扑角色，start 全图唯一、end 至少一个可达；
-    :param min_outgoing: 出边条数下限（分流类节点要 ≥2）；
+    :param min_outgoing: 出边条数下限（如 condition 的「至少接一个出口」）；
     :param max_outgoing: 出边条数上限（end 为 0），None 不限；
     :param expression_field: 该字段内容要交图级表达式语法检查器过一遍；
+    :param branching: 分流节点（如 condition）：执行后只让**选中端口的出边**保持活着，
+        其余出口的边整段剪枝（对岸节点不执行，级联到它的下游）；普通节点永远 False；
     :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
     :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
     :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
@@ -135,6 +137,7 @@ class NodeSpec:
     min_outgoing: int = 0
     max_outgoing: int | None = None
     expression_field: str | None = None
+    branching: bool = False
     label: str = ""
     order: int = 100
     inputs: tuple[PortSpec, ...] = ()

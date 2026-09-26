@@ -7,8 +7,10 @@
   允许保存，但永不执行、也不会因为没有执行器而拖垮主流程；
 * 按拓扑顺序逐个跑节点。跑之前按**入边**把上游产出投递到本节点的入口（``ctx.inputs``，
   键 = 目标端口名），跑完把返回值按**输出端口名**记下来，供下游取；
-* 同步执行（不并发），因为单条图的节点之间有数据依赖；并行 / 分支执行留给将来新增的
-  分流类节点（内置里没有这类，要加得先补执行器）；
+* **分支剪枝**（``condition`` 这类分流节点）：执行后只让「选中出口」的边活着，没走的
+  分支整段跳过（``[skip]`` 记在 ``ctx.log``）并级联到它的下游；与另一条分支汇合
+  （还有活入边）的节点照常执行；
+* 同步执行（不并发），因为单条图的节点之间有数据依赖；并行执行留给将来；
 * 触发是**开始节点**自己的事（``start`` 的 ``config.trigger``）：``time`` 时它把整张流程图
   登记到 :class:`~nacho.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；
   ``message``（缺省）被动等消息接入，发布 / 试跑时只写一条开始日志。
@@ -35,7 +37,7 @@ from .graph import (
     reachable_from,
 )
 from .models import WorkflowEdge, WorkflowGraph
-from .nodes import NodeExecutionContext, get_executor
+from .nodes import NodeExecutionContext, get_executor, get_spec
 
 __all__ = [
     # 老 import 路径留的门（新代码从 nacho.workflow 取）
@@ -51,7 +53,9 @@ class SimpleWorkflowRunner:
     只执行 start 可达的主流程：先在可达子图上算入度，再按 Kahn 顺序跑；每个节点执行前，
     引擎按入边把上游产出投进 ``ctx.inputs``（键 = 目标端口名；控制流端口不送值，上游没跑过
     的边不算数，跑过但没产出的才送空串）。孤儿节点不在可达集合里，永远不执行（就算它的类型
-    没有执行器也不影响主流程）。并发 / 分支语义留给将来新增的分流类节点。
+    没有执行器也不影响主流程）。分流节点（``spec.branching``，如 ``condition``）执行后按
+    「选中出口」剪枝：没走的出口出边置死，入边全死的节点整段跳过（级联），汇合点只要有
+    一条活入边就照常执行。
     """
 
     async def run(self, graph: WorkflowGraph, ctx: NodeExecutionContext) -> None:
@@ -78,30 +82,75 @@ class SimpleWorkflowRunner:
                     in_degree[target] += 1
 
         queue = deque(node_id for node_id in runnable if in_degree[node_id] == 0)
+        #: 结构入度快照（拓扑推进会改 in_degree；「这个节点原本有没有入边」以它为准）
+        in_total = dict(in_degree)
+        #: 还「活」的入边条数：分流剪枝减它；原本有入边、减到 0 => 这个节点整段跳过
+        live_in: dict[str, int] = dict(in_degree)
         ran: set[str] = set()
+        #: 被剪枝跳过的节点：不执行，出边同样置死（级联到它的下游）
+        skipped: set[str] = set()
         #: 节点 ID -> 它的产出（键 = 输出端口名）；下游按边从这里取
         produced: dict[str, dict[str, Any]] = {}
         while queue:
             current_id = queue.popleft()
-            if current_id in ran:
+            if current_id in ran or current_id in skipped:
+                continue
+            if in_total[current_id] > 0 and live_in[current_id] == 0:
+                # 入边全被剪死（分流节点没走这边）：整段跳过，跳过也留痕可查
+                skipped.add(current_id)
+                ctx.log.append(f"[skip] {current_id}: 分支未选中，未执行")
+                self._release(
+                    current_id, out_edges, runnable, in_degree, live_in, queue, dead=True
+                )
                 continue
             node = by_id[current_id]
             executor = get_executor(node.type)
             if executor is None:
                 raise NotImplementedError(f"节点类型 {node.type!r} 暂无执行器（节点 {current_id}）")
             ctx.inputs = self._inputs_of(current_id, in_edges, produced)
-            produced[current_id] = await executor(node, ctx)
+            output = await executor(node, ctx)
+            produced[current_id] = output
             ran.add(current_id)
-            for target in out_edges[current_id]:
-                if target not in runnable:
-                    continue
-                in_degree[target] -= 1
-                if in_degree[target] == 0:
-                    queue.append(target)
+            spec = get_spec(node.type)
+            if spec is not None and spec.branching:
+                # 分流节点：只让**选中出口**（返回值里给了真值的输出端口）的边活着，
+                # 其余出口的出边剪死 —— condition 只返回走的那一边
+                taken = {name for name, value in (output or {}).items() if value}
+                for edge in graph.edges:
+                    if edge.source != current_id or edge_source_port(edge) in taken:
+                        continue
+                    if edge.target in runnable:
+                        live_in[edge.target] -= 1
+            self._release(current_id, out_edges, runnable, in_degree, live_in, queue, dead=False)
 
-        if len(ran) != len(runnable):
-            missing = [nid for nid in runnable if nid not in ran]
+        if len(ran) + len(skipped) != len(runnable):
+            missing = [nid for nid in runnable if nid not in ran and nid not in skipped]
             raise RuntimeError(f"工作流执行未完成，剩余节点：{missing}")
+
+    @staticmethod
+    def _release(
+        node_id: str,
+        out_edges: Mapping[str, Sequence[str]],
+        runnable: set[str],
+        in_degree: dict[str, int],
+        live_in: dict[str, int],
+        queue: deque[str],
+        *,
+        dead: bool,
+    ) -> None:
+        """节点处理完（执行 / 跳过）后放行下游：结构入度减 1，减到 0 的进拓扑队列。
+
+        ``dead=True``（整个节点被剪枝跳过）时出边全部置死：下游的「活入边」跟着减，
+        死路就这样一级一级传下去，直到和别的活分支汇合。
+        """
+        for target in out_edges[node_id]:
+            if target not in runnable:
+                continue
+            if dead:
+                live_in[target] -= 1
+            in_degree[target] -= 1
+            if in_degree[target] == 0:
+                queue.append(target)
 
     @staticmethod
     def _inputs_of(

@@ -28,9 +28,10 @@ nacho/workflow/
 │   ├── delay.py         内置：delay（异步等待：秒数可接线覆盖手填，不阻塞事件循环）
 │   ├── json.py          内置：json（解析 JSON 文本 + 点路径取值；取不到不打断流程）
 │   ├── regex.py         内置：regex（正则提取 / 替换；抽不到不打断流程）
-│   └── now.py           内置：now（当前时间：格式化文本 + Unix 时间戳）
+│   ├── now.py           内置：now（当前时间：格式化文本 + Unix 时间戳）
+│   └── condition.py     内置：condition（条件分支：true / false 双出口；引擎按选中出口剪枝）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
-├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据**
+├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据** + **按选中出口剪枝**
 └── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
                      到点后加载该版本跑整条流程；拨开关即时启停（WorkflowTriggers）
 ```
@@ -119,6 +120,7 @@ store ──────────────► models
 | `json.py` | **JSON**：解析 JSON 文本 + 点路径取值（HTTP 的搭档）；空文本 / 解析失败 / 路径取不到只记 warning 并送空串，不打断流程 | `trigger` / `json` / `path` → `trigger` / `json_value` | `json`（**入口**必填：接线或手填）、`path`（缺省空 = 取整个文档；点分段，数字段是数组下标） |
 | `regex.py` | **正则**：提取第一个匹配（有组取组）/ 替换所有匹配（脱敏改写）；空文本 / 空正则 / 没匹配 / 正则语法错只记 warning 并送空串，不打断流程 | `trigger` / `text` / `pattern` / `replace` → `trigger` / `regex_value` | `text`、`pattern`（**入口**必填：接线或手填）、`action`（缺省 extract；枚举由自注册校验器把）、`replace`（替换文本，支持 \1 反向引用）、`flags`（i/m/s 组合，缺省无） |
 | `now.py` | **当前时间**：产出「现在」（服务器本地时区）——格式化文本 + Unix 时间戳（整数秒）；没有失败分支 | `trigger` / `format` → `trigger` / `now_text` / `now_ts` | `format`（strftime 指令，缺省 `%Y-%m-%d %H:%M:%S`，可接线覆盖） |
+| `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（有活入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
 
 > **「入口」= 字段名与端口 id 同名的那个数据端口**：`log.message` / `http.url` / `http.body` 都能
 > 被连线覆盖 —— **线上的值优先，没接线才用 config 里手填的**（`input_value` 就是这个口径）。
@@ -204,7 +206,10 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 - 返回：**本节点产出的值**（`dict`，**键 = 已声明的输出端口名**）。引擎按边把它投递给下游的
   对应入口；多出来的键不会被投递（`start` 的 `scheduled` / `task_id` 就是这种「只给日志看」的
   信息）。没有产出就返回 `{}`（像 `log` / `end` 那样）。
-- 执行是**串行**的（节点之间有数据依赖）；并行 / 分支语义留给将来新增的分流类节点。
+- 执行是**串行**的（节点之间有数据依赖）；**分支剪枝**已由引擎支持（`condition` 这类分流节点）：
+  节点注册 `branching=True` 后，引擎只让「选中出口」（返回值里给了真值的输出端口）的边活着，
+  没走的分支整段跳过 —— `ctx.log` 留 `[skip]` 痕迹，被跳过节点的下游也跟着死，直到与别的
+  活分支汇合（有活入边就照常执行）；并行执行留给将来。
 
 ### 5.3 上下文 `NodeExecutionContext` 能给什么
 
@@ -287,8 +292,9 @@ async def exec_dingtalk(node, ctx): ...
 错误码自定义（照 `http.py` 的 `INVALID_HTTP_METHOD`、`start.py` 的 `INVALID_CRON` 抄）。
 
 **③ 拓扑角色与出入边约束也在注册处声明**：`role="start"|"end"|"normal"`、
-`min_outgoing` / `max_outgoing`、`expression_field`（指定哪个字段按表达式做语法检查）。
-比如分流类节点用 `min_outgoing=2` 表达「至少两个分支」、`end` 用 `max_outgoing=0` 表达
+`min_outgoing` / `max_outgoing`、`expression_field`（指定哪个字段按表达式做语法检查）、
+`branching`（分流节点：执行后没选中的出口整段剪枝，见 §5.2）。比如 `condition` 用
+`min_outgoing=1` 表达「至少接一个出口」、`end` 用 `max_outgoing=0` 表达
 「不能有出边」，都是通用约束，没有特判代码。
 
 **④ 只声明、不实现：`declare_node_type`**。执行器还没写、但希望类型已经能进画布、
@@ -370,6 +376,6 @@ async def test_my_node_outputs(...) -> None:
 | 通用的图层面校验（新的拓扑规则 / 新阶段） | `validator.py`（只放跨类型、与具体节点无关的规则） |
 | 图 / 记录上要加字段 | `models.py`（协议）+ `store.py`（表结构） |
 | 新的 HTTP 接口 | `nacho/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
-| 新的执行语义（并发 / 分支 / 重试） | `executor.py`（现在的 `SimpleWorkflowRunner` 是串行版；换引擎就换这个类，调用方只认 `run()`） |
+| 新的执行语义（并发 / 重试） | `executor.py`（串行 + 分支剪枝已就位；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
 | 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`） |
