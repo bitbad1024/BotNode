@@ -10,9 +10,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar
 
@@ -26,6 +27,14 @@ from fastapi import FastAPI  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
 from nacho.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
+from nacho.core.logger import (  # noqa: E402
+    BaseLogProcessor,
+    LogCore,
+    LogRecord,
+    LogSearchResult,
+    configure,
+    manager,
+)
 from nacho.workflow import (  # noqa: E402
     ConfigField,
     NodeExecutionContext,
@@ -90,6 +99,64 @@ def edge(
 def linear_graph() -> dict[str, object]:
     """一张各阶段都该过的最小线性图：start -> end。"""
     return {"nodes": [node("s", "start"), node("e", "end")], "edges": [edge("s", "e")]}
+
+
+# --------------------------------------------------------------------------- 日志采集
+class LogCollector(BaseLogProcessor):
+    """把**整条记录**收进口袋：断言日志字段（``owner_id`` / ``extra``）时只看消息不够。"""
+
+    name: str = "collector"
+
+    def __init__(self, records: list[LogRecord]) -> None:
+        super().__init__(buffer_size=1, flush_interval=0)  # 逐条直写，不用等攒批
+        self.records: list[LogRecord] = records
+
+    async def write(self, records: list[LogRecord]) -> None:
+        self.records.extend(records)
+
+    async def search(
+        self,
+        *,
+        query: str | None = None,
+        level: object = None,
+        start: object = None,
+        end: object = None,
+        logger_name: str | None = None,
+        owner_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> LogSearchResult:
+        return LogSearchResult()
+
+
+async def wait_for_records(records: list[LogRecord], *, count: int = 1) -> None:
+    """等分发器把日志送到出口（分发是异步的，写完立刻断言会扑空）。"""
+    for _ in range(100):
+        if len(records) >= count:
+            return
+        await asyncio.sleep(0.01)
+
+
+@asynccontextmanager
+async def runtime_logs() -> AsyncIterator[list[LogRecord]]:
+    """把**进程默认核心**换成带采集出口的一份，产出「收到的记录」列表（退出时还原）。
+
+    运行时模块的日志走的是进程默认核心（``nacho.workflow.runtime`` 的 ``_log()`` 没有可从
+    调用点注入的口子），要让它们落进测试的口袋，只能把默认核心整个换掉。``configure`` 会
+    **复用**已有核心，而先前用例派生过的子实例早就把「当时的出口」冻结在自己的落回配置里，
+    这会儿再挂出口补不进去 —— 所以先 ``manager.reset()``，保证下面这份是全新的。
+    """
+    records: list[LogRecord] = []
+    manager.reset()
+    core: LogCore = configure(
+        "nacho", console=False, processors=[LogCollector(records)], dispatch_timeout=0.01
+    )
+    await core.start()
+    try:
+        yield records
+    finally:
+        await core.stop()
+        manager.reset()  # 默认核心是进程级的：用完还回去，别影响别的用例
 
 
 # --------------------------------------------------------------------------- ① 结构校验
@@ -779,47 +846,16 @@ async def test_context_logger_binds_who_the_run_is_for() -> None:
     身份（哪条工作流 / 谁的 / 给谁跑的）在构造上下文时就定下来，不用每个节点在调用点
     手抄一遍 —— ``start`` 之类的节点因此不必回写上下文。
     """
-    import asyncio
-
-    from nacho.core.logger import BaseLogProcessor, LogCore, LogRecord
-
     collected: list[LogRecord] = []
-
-    class _Collector(BaseLogProcessor):
-        name: str = "collector"
-
-        def __init__(self) -> None:
-            super().__init__(buffer_size=1, flush_interval=0)  # 逐条直写，不用等攒批
-
-        async def write(self, records: list[LogRecord]) -> None:
-            collected.extend(records)
-
-        async def search(
-            self,
-            *,
-            query: str | None = None,
-            level: object = None,
-            start: object = None,
-            end: object = None,
-            logger_name: str | None = None,
-            owner_id: str | None = None,
-            limit: int = 100,
-            offset: int = 0,
-        ) -> list[LogRecord]:
-            return []
-
-    core = LogCore()
+    core = LogCore(console=False, dispatch_timeout=0.01)
     await core.start()
-    core.attach(_Collector())
+    core.attach(LogCollector(collected))
     try:
         ctx = NodeExecutionContext(
             logger=core, workflow_id="w1", owner_id="u-admin", user_id="10001"
         )
         ctx.logger.info("节点只写自己这句")
-        for _ in range(100):  # 分发是异步的：等它落到出口
-            if collected:
-                break
-            await asyncio.sleep(0.01)
+        await wait_for_records(collected)
         # owner_id 是日志的一等字段（不塞 extra），其余两个进 extra
         assert [(r.extra, r.owner_id) for r in collected] == [
             ({"workflow_id": "w1", "user_id": "10001"}, "u-admin")
@@ -2933,6 +2969,101 @@ async def test_load_published_workflows_registers_crons() -> None:
         assert scheduler.get(f"wf-{published_def.id}-s") is not None
         # 开关关着的不登记（`get` 对不存在的任务是抛 KeyError，所以按清单看）
         assert [task.task_id for task in scheduler.list()] == [f"wf-{published_def.id}-s"]
+    finally:
+        await engine.dispose()
+
+
+async def test_load_published_workflows_logs_what_it_loaded() -> None:
+    """启动载入自己也要留痕：开头一条、结尾一条带各档条数，**一条没登记也照记**。
+
+    「载入跑过了，只是没得跑」和「载入压根没跑」在日志里得能分开，所以完成那条不带
+    ``if primed`` 的条件；扫过多少 / 登记上几条 / 开关关着跳过几条一并给出来 —— 排
+    「某条流为何没跑」时不用再猜。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    # 三条定义：发布 + 开（登记）、发布但开关关着（跳过）、只存了版本没发布（跳过）
+    on_def = await store.create("u-admin", "要跑的流")
+    await store.add_version(
+        on_def, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+    assert await store.publish(on_def.id, 1) is not None
+    assert await store.set_enabled(on_def.id, True) is not None
+
+    off_def = await store.create("u-admin", "发了但不跑的流")
+    await store.add_version(
+        off_def, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+    assert await store.publish(off_def.id, 1) is not None
+
+    draft_def = await store.create("u-admin", "草稿流")
+    await store.add_version(
+        draft_def,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+
+    scheduler = TaskManager()
+    try:
+        async with runtime_logs() as collected:
+            assert await load_published_workflows(store, scheduler) == 1
+            await wait_for_records(collected, count=2)
+
+            messages = [record.message for record in collected]
+            assert messages[0] == "开始载入已发布工作流"  # 时间线的起点
+            assert messages[-1] == "已发布工作流启动载入完成"  # 结尾这条最后到
+            assert collected[-1].extra == {
+                "scanned": 3,  # 扫过的定义
+                "registered": 1,  # 登记上的工作流
+                "triggers": 1,  # 登记到的开始节点
+                "disabled": 1,  # 开关关着跳过的
+            }
+    finally:
+        await engine.dispose()
+
+
+async def test_runtime_logs_are_attributed_to_the_workflow_owner() -> None:
+    """跑图这趟的日志挂在**流的主人**名下，不再是一条「公共」的完成日志。
+
+    归属本来就写在定义表里（``onebot`` 节点挑连接用的也是它），日志页却按 ``owner_id`` 筛
+    —— 记成公共的话，「谁的流在跑」既筛不出来也追不到人。节点日志与运行时那几条同一口径：
+    这一趟里**每条**都该是 ``u-admin``。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import make_trigger
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = linear_graph()  # start（消息触发）-> end
+    definition = await store.create("u-admin", "认主人的流")
+    await store.add_version(
+        definition, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+    assert await store.publish(definition.id, 1) is not None
+
+    scheduler = TaskManager()
+    try:
+        async with runtime_logs() as collected:
+            await make_trigger(definition.id, 1, store, scheduler)()
+            await wait_for_records(collected)
+
+            done = [record for record in collected if record.message == "工作流执行完成"]
+            assert len(done) == 1
+            assert done[0].owner_id == "u-admin"  # 一等字段：日志页按它筛
+            assert done[0].extra["workflow_id"] == definition.id
+            # 整趟都记在主人名下（节点日志走 ctx.logger，运行时那几条走 bind 的默认字段）
+            assert {record.owner_id for record in collected} == {"u-admin"}
     finally:
         await engine.dispose()
 

@@ -58,6 +58,7 @@ from nacho.core.logger import (  # noqa: E402
     BaseLogProcessor,
     ConsoleLogProcessor,
     DatabaseLogProcessor,
+    LocalFileLogProcessor,
     LogCore,
     LogRecord,
     LogSearchResult,
@@ -881,6 +882,8 @@ class TestLogSearch:
             first = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=0)
             assert first.total == 5  # 总数不受本页大小限制
             assert len(first.items) == 2
+            # 本页按**自增序号**倒序，序号也随响应回来（5 条日志 → 最新的两条是 5、4）
+            assert [row.seq for row in first.items] == [5, 4]
 
             second = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=2)
             assert second.total == 5
@@ -911,6 +914,85 @@ class TestLogSearch:
             chosen = [row.message for row in await search_logs(client, headers, processors="recording")]
             assert "只有内存出口有这条" in chosen  # 显式指定出口就查它
             assert "落库那份有这条" in chosen
+
+    async def test_source_file_reads_the_file_outlets(self, core: LogCore, tmp_path: Path) -> None:
+        """``source=file`` 按**类别**选出口：文件出口叫什么名字都认，不会因为名字对不上查空。
+
+        回归：界面上的「本机文件」原来发的是写死的 ``processors=local``，而装配层给文件出口
+        起名叫 ``file``；日志系统对不认识的出口名**直接忽略**，于是表现成「一条都没有」。
+        这里故意把出口起成别的名字（``nacho.file``），证明认的是**类型**、不是名字。
+        """
+        path: Path = tmp_path / "nacho.log"
+        core.attach(await memory_log_processor())
+        core.attach(
+            LocalFileLogProcessor(path, name="nacho.file", buffer_size=1, flush_interval=0)
+        )
+        await asyncio.sleep(0.1)  # 等分发器把这个出口拉起来
+        # 直接往文件里补一条（只有文件出口有它）：要测的是「查谁」，用哪条做标记最直接
+        only_in_file = LogRecord(message="只有文件里有这条", owner_id="u-fileonly")
+        path.write_text(
+            json.dumps(only_in_file.to_dict(), ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+            scope = {"owner_id": "u-fileonly"}  # 只看这条，别把登录那几条也捞进来
+
+            assert [
+                row.message
+                for row in await search_logs(client, headers, source="file", **scope)
+            ] == ["只有文件里有这条"]
+            # 落库那份压根没见过它：同样的条件换 source=database 就是空 —— 两路确实是两路
+            assert await search_logs(client, headers, source="database", **scope) == []
+            # all = 不限出口，两路一起查
+            assert [
+                row.message
+                for row in await search_logs(client, headers, source="all", **scope)
+            ] == ["只有文件里有这条"]
+
+    async def test_source_and_outlet_names_are_validated(self, core: LogCore) -> None:
+        """来源写错、出口名写错、两个来源参数一起写：一律 422，别静默当成「没有日志」。"""
+        core.attach(await memory_log_processor())
+        await asyncio.sleep(0.1)
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+
+            bad_source = await client.get("/api/logs", headers=headers, params={"source": "本地"})
+            assert bad_source.status_code == 422
+            assert "来源要" in bad_source.json()["error"]["message"]
+
+            bad_outlet = await client.get(
+                "/api/logs", headers=headers, params={"processors": "local"}
+            )
+            assert bad_outlet.status_code == 422
+            message = bad_outlet.json()["error"]["message"]
+            assert "local" in message  # 写错的是哪个
+            assert DatabaseLogProcessor.name in message  # 现在挂着的有哪些
+
+            both = await client.get(
+                "/api/logs",
+                headers=headers,
+                params={"source": "file", "processors": DatabaseLogProcessor.name},
+            )
+            assert both.status_code == 422
+            assert "二选一" in both.json()["error"]["message"]
+
+    async def test_source_needs_admin_and_an_existing_outlet(self, core: LogCore) -> None:
+        """来源只有管理员能选；选了但那一类出口没挂 -> 503 说清楚（不是「一条都没有」）。"""
+        core.attach(await memory_log_processor())
+        await asyncio.sleep(0.1)
+
+        async with client_for(app_with()) as client:
+            robot = {"Authorization": f"Bearer {await token_of(client, ROBOT)}"}
+            forbidden = await client.get("/api/logs", headers=robot, params={"source": "file"})
+            assert forbidden.status_code == 403
+
+            admin = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+            # 这一趟压根没挂文件出口（`core` 只有库那份）：说清楚「配哪儿才有」
+            missing = await client.get("/api/logs", headers=admin, params={"source": "file"})
+            assert missing.status_code == 503
+            assert "logging.file" in missing.json()["error"]["message"]
 
     async def test_missing_database_outlet_is_503(self, core: LogCore) -> None:
         """库出口没开时回 503 并说清楚：不然只会静默返回空，比报错难查。"""

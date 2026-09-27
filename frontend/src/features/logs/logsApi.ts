@@ -3,8 +3,8 @@
  *
  * 与后端契约一一对应（见 nacho/api/api/log/router.py）：
  * - 响应是一页：`{ items, total }`，total 是命中总数，前端据此算总页数、做页码跳转；
- * - 结果按时间倒序，limit 1-500，offset 翻页；
- * - 非管理员后端强制只看自己的 owner_id，指定别人会 403，processors 也只有管理员能传；
+ * - 结果按自增序号倒序（即写入顺序倒序；同一毫秒的几条也有先后），limit 1-500，offset 翻页；
+ * - 非管理员后端强制只看自己的 owner_id，指定别人会 403，来源（source / processors）也只有管理员能传；
  * - owner_id 传空串是「只看公共日志」，所以空串不能像别的参数一样丢掉；
  * - 默认只查落库出口（database），库出口没开后端回 503。
  */
@@ -18,6 +18,8 @@ export type LogLevelName = (typeof LOG_LEVELS)[number]
 export interface LogEntry {
   /** 记录编号（同一批去重、定位单条用） */
   record_id: string
+  /** 自增序号：落库那份的写入顺序，本页就是按它倒序的（查文件出口时是 0） */
+  seq: number
   /** Unix 时间戳（秒） */
   timestamp: number
   level: LogLevelName | string
@@ -46,7 +48,14 @@ export interface LogSearchParams {
   end?: string
   limit?: number
   offset?: number
-  /** 出口名，逗号分隔；仅管理员，默认 database */
+  /**
+   * 来源**类别**：database（落库）/ file（所有文件出口）/ all（不限出口）。
+   * 仅管理员；不传 = 只查落库那份。界面上的「落库 / 本机文件 / 两者」走它 ——
+   * 出口叫什么名字由后端装配层定（核心 file、接口层 api.file、OneBot onebot.file），
+   * 前端按类别说就行，不写死名字。
+   */
+  source?: string
+  /** 出口**名**，逗号分隔（要精确到某一路才用）；仅管理员；与 source 二选一 */
   processors?: string
 }
 

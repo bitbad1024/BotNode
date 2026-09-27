@@ -1,10 +1,11 @@
-"""日志表与它的落库实现：用 SQLModel 描述表、用 AsyncSession 读写，不手写 SQL。
+"""日志表与它的落库实现：用 SQLModel 描述表，写入走 Core insert、检索走 AsyncSession，不手写 SQL。
 
 表结构由 :class:`LogTable` 声明——类型 / 长度 / 约束写在 Python 里，建表语句由 SQLAlchemy
 **按方言生成**，所以 sqlite 与 mariadb 共用同一份定义，不用各写一套 DDL：
 
-    record_id    VARCHAR(64)  PRIMARY KEY
-    timestamp    DOUBLE       NOT NULL   # Unix 时间戳（秒），检索按它倒序
+    seq          BIGINT       PRIMARY KEY AUTO_INCREMENT  # 插入顺序；检索按它倒序
+    record_id    VARCHAR(64)  UNIQUE NOT NULL             # 生成时的 uuid4，去重靠它
+    timestamp    DOUBLE       NOT NULL   # Unix 时间戳（秒）
     level        VARCHAR(16)  NOT NULL   # DEBUG / INFO / WARNING / ERROR / CRITICAL
     logger_name  VARCHAR(128) NOT NULL   # 写日志的实例名
     owner_id     VARCHAR(64)  NOT NULL   # 所有者：谁的操作；空串 = 公共所有者
@@ -15,11 +16,20 @@
 ``extra`` 在库里是 JSON 字符串，进出都转一次（解析失败不抛，退回 ``{"raw": 原文}``）；
 其余字段直接对应 :class:`~nacho.core.logger.models.LogRecord`。
 
+**序号与记录 id 分了两个字段**：``seq`` 是自增主键（插入顺序，检索按它倒序），``record_id``
+是生成时就定下的 uuid（唯一约束，多出口同一条日志去重靠它）。为什么排序不只看时间戳：同一
+次调用里写下的几条时间戳常常一模一样（浮点秒的分辨率、Windows 上 ``time.time()`` 约 15ms 的
+粒度），那时谁先谁后只有序号知道，翻页也不会因为「同刻几条顺序随机」而漏记 / 重记。
+
+> **升级提示**：``seq`` 是后加的主键列，而 :meth:`SqlLogStore.ensure_schema` 只**建表**、
+> 不改表 —— 已经存在的 ``logs`` 表不会自己长出这一列。升级时把日志表删掉重建即可
+> （``DROP TABLE logs;``，下次启动按新定义建回来）；要留审计历史就先导出去再删。
+
 本类只管「建表 / 写 / 查 / 清」，**不做缓冲与攒批**——什么时候写、一次写多少由处理机
 说了算（见 :class:`~nacho.core.logger.processors.database.DatabaseLogProcessor`）。
 
 引擎由外部注入（:class:`AsyncEngine`）：本模块不建引擎、不读配置，连接参数归入口层管；
-会话按「一次写入 / 一次查询一个会话」开，用完即关。
+连接 / 会话都是「一次操作一个」，用完即关（写入一个事务，检索一个会话）。
 """
 from __future__ import annotations
 
@@ -27,7 +37,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import cast
 
-from sqlalchemy import Column, ColumnElement, Double, Text, func
+from sqlalchemy import BigInteger, Column, ColumnElement, Double, Integer, Text, func, insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, col, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -49,8 +59,18 @@ class LogTable(SQLModel, table=True):
     # 自己的类型标注对不上（库自身的类型缺陷）；行为已验证（表名确为 logs），故定向忽略。
     __tablename__ = "logs"  # pyright: ignore[reportAssignmentType, reportUnannotatedClassAttribute]
 
-    #: 记录 id（生成时就是 uuid4 的十六进制），主键：同一批里重复也只落一条
-    record_id: str = Field(primary_key=True, max_length=64)
+    #: 自增序号：**插入顺序**，检索按它倒序（时间戳粒度不够时靠它定序，见
+    #: :attr:`~nacho.core.logger.models.LogRecord.seq`）。主键由它当，不是 uuid。
+    #: 类型用 BIGINT，但 sqlite 退回 INTEGER：只有 ``INTEGER PRIMARY KEY`` 才是 rowid 别名
+    #: （能自动分配），``BIGINT PRIMARY KEY`` 在 sqlite 上不会自增。
+    seq: int | None = Field(
+        default=None,
+        primary_key=True,
+        sa_type=BigInteger().with_variant(Integer, "sqlite"),
+    )
+    #: 记录 id（生成时就是 uuid4 的十六进制）：**唯一**，多出口同一条日志去重靠它
+    #: （以前它是主键，所以那时「同一批里重复也只落一条」是顺带的；现在靠这条唯一约束）。
+    record_id: str = Field(unique=True, max_length=64)
     #: Unix 时间戳（秒）。用 DOUBLE 而不是默认的 FLOAT：后者在 MariaDB 上只有 32 位有效
     #: 数字，存下秒级时间戳会直接丢精度
     timestamp: float = Field(sa_column=Column(Double(), nullable=False))
@@ -69,18 +89,23 @@ class LogTable(SQLModel, table=True):
     exc_text: str | None = Field(default=None, sa_column=Column(Text(), nullable=True))
 
 
-def _to_row(record: LogRecord) -> LogTable:
-    """把一条日志转成表行：``extra`` 编成 JSON（不限 ASCII，中文原样存）。"""
-    return LogTable(
-        record_id=record.record_id,
-        timestamp=record.timestamp,
-        level=record.level.name,
-        logger_name=record.logger_name,
-        owner_id=record.owner_id,
-        message=record.message,
-        extra=json.dumps(record.extra, ensure_ascii=False),
-        exc_text=record.exc_text,
-    )
+def _to_values(record: LogRecord) -> dict[str, object]:
+    """把一条日志转成一行**取值**（``extra`` 编成 JSON，不限 ASCII，中文原样存）。
+
+    给的是 dict 而不是 :class:`LogTable` 实例：写入走 Core 的 ``insert``（一批一次
+    executemany），不从 ORM 那边过 —— 日志是只写不读的，进身份映射只会平白多一轮
+    「回读自增主键」。
+    """
+    return {
+        "record_id": record.record_id,
+        "timestamp": record.timestamp,
+        "level": record.level.name,
+        "logger_name": record.logger_name,
+        "owner_id": record.owner_id,
+        "message": record.message,
+        "extra": json.dumps(record.extra, ensure_ascii=False),
+        "exc_text": record.exc_text,
+    }
 
 
 def _decode_extra(raw: str | None) -> dict[str, object]:
@@ -106,7 +131,7 @@ def _decode_extra(raw: str | None) -> dict[str, object]:
 
 
 def _to_record(row: LogTable) -> LogRecord:
-    """把一行 :class:`LogTable` 还原成内部流转的 :class:`LogRecord`。"""
+    """把一行 :class:`LogTable` 还原成内部流转的 :class:`LogRecord`（含自增序号）。"""
     return LogRecord(
         message=row.message,
         level=LogLevel.parse(row.level),
@@ -116,6 +141,7 @@ def _to_record(row: LogTable) -> LogRecord:
         extra=_decode_extra(row.extra),
         exc_text=row.exc_text,
         owner_id=row.owner_id or "",
+        seq=row.seq or 0,
     )
 
 
@@ -143,14 +169,18 @@ class SqlLogStore:
     async def add(self, records: Sequence[LogRecord]) -> int:
         """把一批日志写进 ``logs`` 表，返回写入条数。
 
-        空批直接返回：不开会话、不提交空事务。
+        空批直接返回：不开连接、不提交空事务。
+
+        写入走引擎 + Core ``insert``（一次 executemany，一个事务）：日志是**只写不读**的，
+        不必让 ORM 把自增主键回读进身份映射 —— 那样一批多条时主键分配还可能互相打架
+        （SQLAlchemy 会为此告警），而主键交给数据库连着往下发就好。
         """
         if not records:
             return 0
-        async with self._sessions() as session:
-            session.add_all([_to_row(record) for record in records])
-            await session.commit()
-            return len(records)
+        values = [_to_values(record) for record in records]
+        async with self._engine.begin() as conn:
+            _ = await conn.execute(insert(LogTable), values)
+        return len(records)
 
     # ------------------------------------------------------------------ 检索
     def _filter_clauses(
@@ -200,10 +230,13 @@ class SqlLogStore:
         limit: int = 100,
         offset: int = 0,
     ) -> LogSearchResult:
-        """按条件检索：级别 / 实例名 / 所有者精确匹配，正文模糊匹配，时间戳闭区间，按时间倒序。
+        """按条件检索：级别 / 实例名 / 所有者精确匹配，正文模糊匹配，时间戳闭区间，按**序号倒序**。
 
         过滤与排序都交给数据库做（条件拼进 ``WHERE`` / ``ORDER BY``），不全表捞回来再筛。
         ``owner_id`` 给 ``None`` 不限所有者，给空串就是只看公共日志。
+
+        排序键是自增 ``seq`` 而**不是**时间戳：同一毫秒（甚至同一批）写下的几条时间戳可能
+        一模一样，那时「谁在谁后面」只有序号知道；序号单调且唯一，翻页也不会跳条 / 重条。
 
         **一页 + 总数**：两条语句共用同一套 ``WHERE``（:meth:`_filter_clauses`），开在同一个
         会话里 —— 总数只跟条件有关，与 ``limit`` / ``offset`` 无关，所以翻到第几页都算得出总页数。
@@ -219,7 +252,7 @@ class SqlLogStore:
         page_statement = (
             select(LogTable)
             .where(*clauses)
-            .order_by(col(LogTable.timestamp).desc())
+            .order_by(col(LogTable.seq).desc())
             .offset(int(offset))
             .limit(int(limit))
         )

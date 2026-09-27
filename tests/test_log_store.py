@@ -84,10 +84,36 @@ async def test_add_and_search_roundtrip() -> None:
     assert found[0].logger_name == "nacho"
     assert found[0].extra == {"robot": "r-1"}
     assert found[0].exc_text is None
+    assert found[0].seq > 0  # 自增序号由库分配，跟着记录一起回来
+
+
+async def test_search_orders_by_sequence_number() -> None:
+    """同一时刻写下的几条按**插入顺序**倒序：时间戳粒度不够时谁先谁后只有序号知道。
+
+    Windows 上 ``time.time()`` 的粒度约 15ms，同一次调用里写下的几条时间戳常常一模一样；
+    要还是按时间排，那几条的顺序就是随机的（翻页时还会跳条 / 重条）。
+    """
+    store = await memory_store()
+    same = time.time()
+    await store.add(
+        [
+            record("第一", moment=same),
+            record("第二", moment=same),
+            record("第三", moment=same),
+        ]
+    )
+
+    found = (await store.search()).records
+    assert [r.message for r in found] == ["第三", "第二", "第一"]
+    seqs = [r.seq for r in found]
+    assert seqs == sorted(seqs, reverse=True)  # 序号越大越新
+    assert len(set(seqs)) == 3  # 而且互不相同（翻页才稳）
+    # 分页也照着序号走：offset=1 拿到的是第二新的那条
+    assert [r.message for r in (await store.search(limit=1, offset=1)).records] == ["第二"]
 
 
 async def test_search_filters_and_order() -> None:
-    """级别 / 实例名精确、正文模糊、时间闭区间、分页，以及「按时间倒序」。"""
+    """级别 / 实例名精确、正文模糊、时间闭区间、分页，以及「按自增序号倒序」。"""
     store = await memory_store()
     base = time.time()
     await store.add(

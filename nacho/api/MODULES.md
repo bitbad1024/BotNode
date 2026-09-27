@@ -205,20 +205,25 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 > 自己名下**的（按记录里的 `owner_id` 过滤，即 `user.user.id`）；显式写别人的归属 → **403**
 > （和 OneBot 那组接口一个口径：自己写出来的参数越界就说清楚）。
 
-> **参数先校验再透传**：级别名、时间格式写错当场回 **422**。这一步省不得 —— 日志系统内部把
-> 出口的失败**吞掉并记账**（一个出口崩了不影响别的），写错的参数会在出口里被吞掉，客户端只看到
-> 「一条都没有」，比报错难查得多；控制台出口那条「本出口不支持检索」的提示记录也会被滤掉（那不是
-> 日志，是给 REPL 里的人看的）。
+> **参数先校验再透传**：级别名、时间格式、来源类别、出口名写错当场回 **422**。这一步省不得 ——
+> 日志系统内部把出口的失败**吞掉并记账**（一个出口崩了不影响别的），写错的参数会在出口里被吞掉，
+> 客户端只看到「一条都没有」，比报错难查得多；出口名尤其要挡：日志系统对**不认识的出口名是直接
+> 忽略的**，`processors=local`（实际那份叫 `file`）于是与「真没有日志」表现完全一样。控制台出口
+> 那条「本出口不支持检索」的提示记录也会被滤掉（那不是日志，是给 REPL 里的人看的）。
 
 > **默认只查落库那份**（`database` 出口，见 `DEFAULT_PROCESSOR`）：查历史日志以库（SQL）为准
 > —— 控制台不留存，文件那份是给人在本机翻的；库出口没开（`[logging.database] enabled = false`）
-> 时回 **503 并说清楚**，不然只会静默返回一个空列表，比报错难查。要查别的出口（如 `file`）显式
-> 写 `?processors=`，**这一步只有管理员能做** —— 来源是全局选择，普通用户只能查默认那份
-> （想指定别的出口 → 403；写成默认那份不报错，那跟不写是一回事）。
+> 时回 **503 并说清楚**，不然只会静默返回一个空列表，比报错难查。
+
+> **来源说类别，不说名字**：界面上的「落库 / 本机文件 / 两者」用 `?source=`（`database` / `file` /
+> `all`），后端按出口**类型**认 —— 文件出口叫什么由装配层定（核心 `file`、接口层 `api.file`、
+> OneBot `onebot.file`），`file` 一类全查上；要精确到某一路才用 `?processors=` 给名字，两者
+> 二选一（同写 → 422）。**这一步只有管理员能做** —— 来源是全局选择，普通用户只能查默认那份
+> （想指定别的来源 → 403；写成默认那份不报错，那跟不写是一回事）。
 
 | 文件 | 作用 |
 |---|---|
-| `api/log/router.py` | **HTTP 入口**：`GET <prefix>/logs`（`level` / `logger_name` / `owner_id` / `query` / `start` / `end` / `limit` / `offset` / `processors`），条件原样交给 `logger.search()`，结果按范围收窄；`MAX_LIMIT` 限一次最多给多少条，`DEFAULT_PROCESSOR`（`database`）是不指定出口时的默认。 |
+| `api/log/router.py` | **HTTP 入口**：`GET <prefix>/logs`（`level` / `logger_name` / `owner_id` / `query` / `start` / `end` / `limit` / `offset` / `source` / `processors`），条件原样交给 `logger.search()`，结果按范围收窄；`MAX_LIMIT` 限一次最多给多少条，`DEFAULT_PROCESSOR`（`database`）是不指定出口时的默认，`SOURCE_KINDS`（`database` / `file`）是界面那三个来源选项按类型认出口的依据。 |
 | `api/log/dependencies.py` | 路由注入件：`get_app_logger`（从 `app.state.logger` 取日志实例，它与日志核心共享出口注册表，所以查得到所有出口）。 |
 | `api/log/responses.py` | 响应体 `LogData`（结构化字段原样给出：级别 / 模块 / 所有者 / 附加字段 / 异常栈）。 |
 

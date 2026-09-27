@@ -193,8 +193,9 @@ class LocalFileLogProcessor(BaseLogProcessor):
         matched = list(
             self._iter_matching_sync(query, level, start, end, logger_name, owner_id)
         )
-        # 文件为追加写入（旧 -> 新），检索结果按时间倒序返回
-        matched.sort(key=lambda item: item.timestamp, reverse=True)
+        # 文件为追加写入（旧 -> 新），检索结果按时间倒序返回。这份没有自增序号可依
+        # （``seq`` 是落库那份的东西，文件里恒为 0），同一时刻的几条只能按时间戳并列。
+        matched.sort(key=lambda item: (item.timestamp, item.seq), reverse=True)
         # 命中的总数就是 len(matched)：一次扫描既给这一页，也给总数（不必再扫一遍去数）
         return LogSearchResult(records=matched[offset : offset + limit], total=len(matched))
 

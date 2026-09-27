@@ -116,6 +116,7 @@ class TestLogRecord:
         assert record.extra == {}
         assert record.exc_text is None
         assert record.owner_id == ""  # 不填 = 公共所有者
+        assert record.seq == 0  # 还没落库：序号由数据库分配（见 db/log_store）
         assert before <= record.timestamp <= time.time()
         assert len(record.record_id) == 32
         assert int(record.record_id, 16) >= 0  # 合法的十六进制字符串
@@ -147,6 +148,7 @@ class TestLogRecord:
         data = record.to_dict()
         assert set(data) == {
             "record_id",
+            "seq",
             "timestamp",
             "level",
             "logger_name",
@@ -178,6 +180,7 @@ class TestLogRecordFromDict:
             extra={"robot_id": "r-001"},
             exc_text="Traceback ...",
             owner_id="u-admin",
+            seq=42,  # 落库之后拿到的序号也要原样带回来
         )
         assert LogRecord.from_dict(record.to_dict()).to_dict() == record.to_dict()
 
@@ -194,6 +197,7 @@ class TestLogRecordFromDict:
         assert record.extra == {}
         assert record.exc_text is None
         assert record.owner_id == ""  # 老数据里没有这个键 -> 公共所有者
+        assert record.seq == 0  # 没写就是不落库那条：序号留给数据库分配
         assert record.record_id  # 自动补一个 id
         assert record.timestamp > 0
 

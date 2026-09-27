@@ -214,6 +214,9 @@ class BaseLogProcessor(abc.ABC):
         ``limit`` / ``offset`` 只裁 ``records``；``total`` 是这批条件一共命中多少条，
         与翻到第几页无关。不留存历史的出口（如控制台）把 ``total`` 给 0 就行。
 
+        **顺序**：按自增序号倒序（插入顺序，见 :attr:`LogRecord.seq`）；不留存序号的出口
+        （控制台 / 文件）退回时间戳倒序，同一时刻的几条并列。
+
         ``owner_id`` 精确匹配所有者：``None`` 不限（默认），空串 = 只要公共的。
         """
 
