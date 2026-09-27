@@ -14,27 +14,43 @@
     query                            正文模糊匹配
     start / end                      时间**闭区间**，Unix 时间戳或 ISO 字符串都收
     limit / offset                   分页（按自增序号倒序：先排序，再翻页）
-    processors                       只看某些出口（逗号分隔，**仅管理员**）；不写就只查落库那份
+    source                           来源**类别**（``database`` / ``file`` / ``all``，**仅管理员**）
+    processors                       只看某些**出口名**（逗号分隔，**仅管理员**）；与 source 二选一
 
 响应给**一页**：``{ items, total }``——``items`` 是本页日志，``total`` 是条件命中的总条数
 （翻页要它算总页数），前端据此做页码跳转。
 
 **默认只查落库那份**（``database`` 出口）：查历史日志以库（SQL）为准 —— 控制台不留存，
 文件那份是给人在本机翻的。库出口没开（``[logging.database] enabled = false``）时回 **503
-并说清楚**，不然只会静默返回空，比报错难查得多；要查别的出口（如 ``file``）显式写
-``?processors=``，**这一步只有管理员能做**（普通用户想指定别的出口 -> 403）。
+并说清楚**，不然只会静默返回空，比报错难查得多。
+
+**来源是类别还是名字**：界面上的「落库 / 本机文件 / 两者」说类别，用 ``?source=``（按出口
+**类型**认，装配层怎么给文件出口起名都跟得上 —— 核心那份叫 ``file``、接口层 ``api.file``、
+OneBot ``onebot.file``，「本机文件」= 这几路一起查）；要精确到某一路才用 ``?processors=``
+给名字。两种来源**只有管理员能改**（普通用户想指定别的 -> 403），而且二选一，同写 -> 422。
 
 日志系统内部把出口的失败**吞掉并记账**（一个出口崩了不影响别的），所以这里先把明显写错的
-参数挡住（级别名、时间格式）—— 否则它们会在出口里被吞掉，客户端只看到「一条都没有」。
+参数挡住（级别名、时间格式、来源类别、出口名）—— 否则它们会在出口里被吞掉，客户端只看到
+「一条都没有」。出口名尤其要挡：日志系统对不认识的出口名是**直接忽略**的，
+``processors=local``（实际那份叫 ``file``）就是「名字写错」与「真没有日志」表现一模一样。
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, status
 
-from nacho.core.logger import DatabaseLogProcessor, LogLevel, LogRecord, normalize_timestamp
+from nacho.core.logger import (
+    BaseLogProcessor,
+    BaseLogger,
+    DatabaseLogProcessor,
+    LocalFileLogProcessor,
+    LogLevel,
+    LogRecord,
+    normalize_timestamp,
+)
 
 from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode, HttpStatus
@@ -55,6 +71,19 @@ DEFAULT_PROCESSOR: str = DatabaseLogProcessor.name
 
 #: 报错提示里能写哪些级别名
 _LEVEL_NAMES: str = "/".join(level.name for level in LogLevel)
+
+#: 来源**类别** ->（出口类型，人话，没挂出口时怎么配）：界面上的「落库 / 本机文件」说的是
+#: **类别**，不该逼前端记住出口叫什么名字 —— 名字由装配层起（核心那份叫 ``file``、接口层那份
+#: 叫 ``api.file``、OneBot 那份叫 ``onebot.file``），前端写死一个，装配层一改名就对不上
+#: （``processors=local`` 就是这么空手的）。这里按**类型**认：装配层怎么命名、挂了几路文件
+#: 出口，都跟得上。三样放一起，加类别时不会漏掉其中一份。
+SOURCE_KINDS: dict[str, tuple[type[BaseLogProcessor], str, str]] = {
+    "database": (DatabaseLogProcessor, "落库", "配 [logging.database] enabled = true 才有得查"),
+    "file": (LocalFileLogProcessor, "文件", "配 [logging.file] enabled = true 才有得查"),
+}
+
+#: ``source=all``：不限出口（库 + 文件 + 控制台都用上），对应界面上的「两者」。
+SOURCE_ALL: str = "all"
 
 
 def _log_of(record: LogRecord) -> LogData:
@@ -125,6 +154,55 @@ def _processor_names(processors: str | None) -> list[str] | None:
     return names or None
 
 
+def _check_source(source: str | None) -> str | None:
+    """来源类别先在这里校验：认不出来就 422，顺手把可用的几个列出来。"""
+    if not source:
+        return None
+    if source == SOURCE_ALL or source in SOURCE_KINDS:
+        return source
+    raise ApiError(
+        ErrorCode.VALIDATION_ERROR,
+        f"来源要 {'/'.join(SOURCE_KINDS)}/{SOURCE_ALL} 之一，收到 {source!r}",
+        status_code=HttpStatus.UNPROCESSABLE_ENTITY,
+    )
+
+
+def _channels_of_source(logger: BaseLogger, source: str) -> list[str] | None:
+    """把来源类别翻成**实际挂着**的出口名（按类型认）；``None`` = 不限出口。
+
+    类别下一个出口都没挂就回 503 并说清楚 —— 与「默认那份没落库」一个口径：静默给一个空
+    列表，查的人只会当成「这段时间真没日志」。
+    """
+    if source == SOURCE_ALL:
+        return None
+    kind, label, hint = SOURCE_KINDS[source]
+    names: list[str] = [p.name for p in logger.processor_registry if isinstance(p, kind)]
+    if not names:
+        raise ApiError(
+            ErrorCode.HTTP_ERROR,
+            f"没挂{label}出口，查不了：{hint}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return names
+
+
+def _ensure_channels(logger: BaseLogger, names: Sequence[str]) -> None:
+    """``?processors=`` 里的名字必须**真的挂着**：写错了就说出来，别静默当成「没有日志」。
+
+    日志系统对不认识的出口名是**直接忽略**（只挑认得的），于是「名字写错了」与「这段时间
+    真没有日志」表现完全一样 —— ``processors=local``（实际那份叫 ``file``）就是这么查空的。
+    """
+    known: list[str] = [p.name for p in logger.processor_registry]
+    unknown: list[str] = [name for name in names if name not in known]
+    if unknown:
+        raise ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            f"不认识的日志出口：{'、'.join(unknown)}"
+            f"（现在挂着：{'、'.join(known) if known else '一个都没有'}）",
+            status_code=HttpStatus.UNPROCESSABLE_ENTITY,
+        )
+
+
 @router.get(
     "",
     response_model=ApiResponse[LogPage],
@@ -162,6 +240,10 @@ async def search_logs(
     # ``Annotated[..., Depends(...)]`` 一个写法，也避开「默认值里调函数」这条告警
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT, description="最多给多少条")] = 100,
     offset: Annotated[int, Query(ge=0, description="跳过前多少条（翻页用）")] = 0,
+    source: Annotated[
+        str | None,
+        Query(description="按类别选来源：database / file / all（仅管理员）；与 processors 二选一"),
+    ] = None,
     processors: Annotated[
         str | None, Query(description="只看某些出口（逗号分隔，仅管理员）；默认只查落库那份")
     ] = None,
@@ -171,8 +253,13 @@ async def search_logs(
     **默认只查落库那份**（``database`` 出口）：控制台不留存、文件那份是给人在本机翻的，
     查历史以库为准；库出口没开就回 503 并说清楚，别静默返回一个空列表。
 
-    要查别的出口（如 ``file``）显式写 ``?processors=`` —— **这一步只有管理员能做**：
-    来源是个全局选择，普通用户只能查默认那份（想指定别的 -> 403）。
+    要换来源得**管理员**，两种写法（二选一）：
+
+    * ``?source=`` 给**类别** —— ``database``（落库）、``file``（**所有**文件出口：核心那份
+      ``file`` / 接口层 ``api.file`` / OneBot ``onebot.file`` 都算）、``all``（不限出口）。
+      界面上「落库 / 本机文件 / 两者」走的就是它，按出口**类型**认，装配层怎么命名都跟得上；
+    * ``?processors=`` 给**具体出口名**（逗号分隔），要精确到某一路时才用 —— 名字写错会 422
+      并把现在挂着的出口列出来，不再静默当成「没有日志」。
 
     非管理员不带 ``owner_id`` 时**默认只看自己的**；显式要别人的归属 -> 403（和 OneBot
     那组接口一个口径）。
@@ -182,6 +269,7 @@ async def search_logs(
     chosen_level = _check_level(level)
     chosen_start = _check_moment(start, "start")
     chosen_end = _check_moment(end, "end")
+    chosen_source = _check_source(source)
 
     if owner_id is None:
         if not is_admin(user):
@@ -190,25 +278,32 @@ async def search_logs(
         ensure_can_touch(user, owner_id)
 
     names = _processor_names(processors)
+    if chosen_source is not None and names is not None:
+        raise ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            "日志来源二选一：source 给类别（database/file/all），processors 给具体出口名",
+            status_code=HttpStatus.UNPROCESSABLE_ENTITY,
+        )
+
     if not is_admin(user):
-        # 来源由管理员定：非管理员只能查默认那份，想指定别的出口 -> 403（自己写出来的参数
+        # 来源由管理员定：非管理员只能查默认那份，想指定别的来源 -> 403（自己写出来的参数
         # 越界就说清楚，别默默换成别的出口）。写成默认那份不报错——那跟不写是一回事。
-        if names is not None and names != [DEFAULT_PROCESSOR]:
+        if chosen_source is not None or (
+            names is not None and names != [DEFAULT_PROCESSOR]
+        ):
             raise ApiError(
                 ErrorCode.HTTP_ERROR,
-                f"只有管理员能指定日志来源（processors）；默认查 {DEFAULT_PROCESSOR} 那份",
+                f"只有管理员能指定日志来源（source / processors）；默认查 {DEFAULT_PROCESSOR} 那份",
                 status_code=status.HTTP_403_FORBIDDEN,
             )
         names = None
 
-    if names is None:  # 不指定就只查落库那份（SQL）
-        if logger.get_processor(DEFAULT_PROCESSOR) is None:
-            raise ApiError(
-                ErrorCode.HTTP_ERROR,
-                "日志没落库，查不了历史：配 [logging.database] enabled = true 才有得查",
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        names = [DEFAULT_PROCESSOR]
+    if chosen_source is not None:
+        names = _channels_of_source(logger, chosen_source)
+    elif names is not None:
+        _ensure_channels(logger, names)  # 名字得真的挂着，别静默查空
+    else:  # 不指定就只查落库那份（SQL）
+        names = _channels_of_source(logger, DEFAULT_PROCESSOR)
 
     # 一页与总数一起回来：同一套条件，不必再问一次「有多少条」
     result = await logger.search(

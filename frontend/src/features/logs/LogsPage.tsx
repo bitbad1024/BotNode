@@ -64,10 +64,11 @@ function formatTime(unixSeconds: number): string {
   )}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+/** 来源选项 -> 后端的来源**类别**（source）：出口叫什么名字由装配层定，前端不写死名字。 */
 const SOURCE_PARAMS: Record<Filters['source'], string | undefined> = {
-  database: undefined, // 不写 processors，后端默认就是落库那份
-  local: 'local',
-  both: 'database,local',
+  database: undefined, // 不写 source，后端默认就只查落库那份
+  local: 'file', // 本机文件 = 所有文件出口（核心 file / 接口层 api.file / OneBot onebot.file）
+  both: 'all', // 两边都要 = 不限出口（库 + 文件一起查）
 }
 
 export default function LogsPage() {
@@ -116,8 +117,8 @@ export default function LogsPage() {
         if (filters.ownerMode === 'custom' && filters.ownerId.trim()) {
           params.owner_id = filters.ownerId.trim()
         }
-        const processors = SOURCE_PARAMS[filters.source]
-        if (processors) params.processors = processors
+        const source = SOURCE_PARAMS[filters.source]
+        if (source) params.source = source
       }
       return params
     },
@@ -143,9 +144,11 @@ export default function LogsPage() {
           setTotal(0)
           if (err instanceof ApiRequestError) {
             if (err.status === 503) {
+              // 503 是「这个来源没挂出口」：具体是哪一类、该怎么配由后端说（落库 / 文件各有一套），
+              // 前端别自己写死一句「没落库」—— 用户选的可能是「本机文件」。
               setError({
-                title: '日志没落库，查不了历史',
-                detail: '后端需要开启落库出口（[logging.database] enabled = true）后才会有日志可查。',
+                title: '这个来源查不了',
+                detail: err.message,
                 traceId: err.traceId,
               })
             } else {
