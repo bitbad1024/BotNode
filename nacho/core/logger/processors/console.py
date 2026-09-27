@@ -68,7 +68,7 @@ class ConsoleLogProcessor(BaseLogProcessor):
         控制台不做任何过滤：模块路由与级别过滤都由分发器负责。想让控制台只收
         更高级别的日志，请在挂载时交给它一个
         :class:`~nacho.core.logger.filters.LevelFilter`，例如
-        ``core.attach(ConsoleLogProcessor(), log_filter=LevelFilter("WARNING"))``。
+        ``core.mount(ConsoleLogProcessor(), log_filter=LevelFilter("WARNING"))``。
         """
         # 逐条直写：控制台输出不攒批，出问题时也不会压在缓冲区里
         super().__init__(name=name, buffer_size=1, flush_interval=0)

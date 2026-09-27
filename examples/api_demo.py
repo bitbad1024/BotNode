@@ -110,11 +110,8 @@ async def main() -> None:
         settings.app.name, level="DEBUG", console=True, processors=[outlet]
     )
     await core.start()
-    # 本模块底部那份 ``app = create_app(...)``（给 uvicorn 用的）是 import 时就执行的，那时
-    # 已经取过 ``nacho.api`` 实例 —— 落回配置在那一刻定格，核心上后挂的出口补不进去，这就是
-    # 「要挂出口，先挂载、再取实例」。生产里没这个疙瘩（入口建核心在先、业务模块 import 在后），
-    # 这里为了让示例的「接口层日志也进这一份」立得住，顺手也挂到那个实例上。
-    api_logger(API_LOGGER_NAME).attach(outlet, replace=True)
+    # 接口层那份也进这一份：给它发布一条具名路由（名字相对核心的 ``nacho.api``）
+    mount_module(API_LOGGER_NAME, outlet, core=core)
     print(f"[0] 日志接入：片落 {LOG_DIR}（{LOG_PREFIX}-<日期>.log）")
 
     # 1) 装配：不传 user_store 就兜底挂一块内存 sqlite 并种演示账号；令牌有效期来自 [api].token_ttl

@@ -3,6 +3,9 @@
 日志记录（:class:`LogRecord`）是队列、日志系统基类与各日志处理机之间
 传递的最小单元，必须是可序列化的（可转成 ``dict``），这样才能被推入
 消息队列，也才能被数据库日志处理机直接落库。
+
+例外只有一个：:attr:`LogRecord.targets`（这条记录要投给哪些出口）。它是**活对象引用**，
+不属于日志内容，因此刻意不进 :meth:`LogRecord.to_dict` / :meth:`LogRecord.from_dict`。
 """
 from __future__ import annotations
 
@@ -12,7 +15,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
-from typing import cast, TypeAlias
+from typing import TYPE_CHECKING, Protocol, cast, TypeAlias
+
+if TYPE_CHECKING:  # 只为类型标注：运行期引入会成环（processors.base 反过来 import 本模块）
+    from .processors.base import BaseLogProcessor
+
+
+class FilterLike(Protocol):
+    """目标上那个过滤器的形状：只要有 ``match(record)`` 就算。
+
+    刻意只认形状不认 :class:`~nacho.core.logger.filters.LogFilter` 这个类：过滤器在自己
+    的模块里，反过来 import 本模块，按类引就成环了。
+    """
+
+    def match(self, record: LogRecord) -> bool: ...
 
 #: 允许的时间表示形式：时间戳 / ISO 字符串 / datetime / None
 TimestampLike: TypeAlias = int | float | str | datetime | None
@@ -62,6 +78,23 @@ def normalize_timestamp(value: TimestampLike) -> float | None:
         raise ValueError(f"无法解析时间: {value!r}") from exc
 
 
+@dataclass(frozen=True, slots=True)
+class Target:
+    """一个**投递目标**：处理机 + 挂在它上面的过滤器 + 投放优先级。
+
+    ``bind(targets=[...])`` 之后这条日志投给谁就在**写入那一刻**定了，不用等分发时
+    再按名字反查实例表 —— 名字表因此可以彻底不存在。
+
+    :param log_filter: 只放行通过它的记录；``None`` = 这个出口全收。
+    :param priority: 投放顺序，**小的先投**：先落库还是先写文件由它说了算，不必依赖
+        ``bind`` 里写 targets 的先后。
+    """
+
+    processor: BaseLogProcessor
+    log_filter: "FilterLike | None" = None
+    priority: int = 0
+
+
 @dataclass(slots=True)
 class LogRecord:
     """一条结构化日志记录。"""
@@ -85,6 +118,11 @@ class LogRecord:
     #:
     #: 还没落库（以及不留存历史的出口：控制台 / 文件）是 ``0`` —— 那一路没有「第几条」。
     seq: int = 0
+    #: **路由信息，不属于日志内容**：这条记录在写入时就已经定好要投给哪些出口。
+    #: ``None`` = 没定（由分发器按 ``logger_name`` 查实例表兜底）。
+    #: 刻意不进 :meth:`to_dict` / :meth:`from_dict`：它装的是活的处理机对象，不是这条
+    #: 日志的内容，别让它跟着序列化一路跑到磁盘 / 库里去。
+    targets: "tuple[Target, ...] | None" = None
 
     def __post_init__(self) -> None:
         self.level = LogLevel.parse(value=self.level)

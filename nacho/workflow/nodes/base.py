@@ -234,13 +234,16 @@ class NodeExecutionContext:
         self.onebot: Any | None = onebot
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
         self.cache: Any = cache if cache is not None else process_cache
-        base: BaseLogger = logger if logger is not None else get_logger("workflow")
+        base: BaseLogger | BoundLogger = (
+            logger if logger is not None else get_logger("workflow")
+        )
         # 日志**提前带好默认参数**：这一趟的身份（哪条工作流 / 谁的 / 给谁跑的）在构造上下文
-        # 时就定了，之后每个节点写日志都自动带上，不用谁在调用点手抄一遍。注入的实例不带
-        # bind（鸭子形状）就原样用，不强求。
+        # 时就定了，之后每个节点写日志都自动带上，不用谁在调用点手抄一遍。两者都能 bind
+        # （:class:`~nacho.core.logger.BaseLogger` 与它的绑定视图），只有鸭子形状不带时才
+        # 原样用。
         self._logger: BaseLogger | BoundLogger = (
             base.bind(workflow_id=workflow_id, owner_id=owner_id, user_id=user_id)
-            if isinstance(base, BaseLogger)
+            if isinstance(base, (BaseLogger, BoundLogger))
             else base
         )
         self._scheduler: TaskManager | None = scheduler

@@ -1,47 +1,37 @@
-"""异步日志系统基类。
+"""异步日志系统：一根 root + 若干绑定视图。
 
 职责划分
 ========
 
 * :meth:`BaseLogger.write`：**写入方法**。默认把日志推到消息队列（非阻塞），
   业务侧永远不会因为落盘 / 落库而卡住；
-* :meth:`BaseLogger.bind`：**默认字段**。得到一份「每条日志都自动带上某几个键」的视图
-  （:class:`BoundLogger`），适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
+* :meth:`BaseLogger.bind`：**绑定**。得到一份 :class:`BoundLogger` 视图：名字、出口、
+  级别、默认字段四样都能换，适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
   不用每个调用点手抄一遍；
-* 内部分发器从队列批量取日志，扇出给**这条日志所属实例**的处理机；
+* 内部分发器从队列批量取日志，**照着每条记录自带的目标**扇出给各处理机；
 * :meth:`BaseLogger.flush`：**刷新缓冲区方法**，刷新所有处理机的缓冲区；
 * :meth:`BaseLogger.search`：**检索方法**，聚合各处理机的检索结果。
 
-子实例 = 一个名字 + 一份「落回配置」+ 自己的出口
-================================================
+没有派生实例
+============
 
-:meth:`BaseLogger.child` 派生一个子实例：换一个名字，并把**当前实例实际生效的
-处理机列表与过滤器复制一份**作为自己的「落回配置」（``_inherited``），之后两者各改各的：
+曾经有一套「名字 -> 派生实例」的树：``get_logger("a.b")`` 会派生一个子实例，把父级
+的出口复制成「落回配置」（创建即冻结），于是**取实例的先后顺序会影响它能收到什么**
+—— 那个坑连同 ``child`` / ``attach`` / 落回配置一起删了。现在：
 
-* **自层覆盖**：子实例一旦自己 ``attach`` 过出口，写日志就**只投自层那些**，不再带上
-  父级 / 核心的文件出口（这就是「一个模块一个文件」）；标了
-  :attr:`~nacho.core.logger.processors.base.BaseLogProcessor.inherit_on_override`
-  的出口（控制台）例外，仍从落回配置里保留；
-* **无自层出口就回落**：子实例没挂过任何出口时，整份走落回配置——像 ``arm`` 这种
-  没单独挂文件的名字，照旧写进核心的 ``nacho.log``；
-* 落回配置**创建即冻结**：父实例之后再 ``attach`` / ``detach`` 都不回头影响已经建好的
-  子实例；子实例要变就自己 ``attach``；
-* 名字按 ``.`` 分层，``child("a.b")`` 等价于 ``child("a").child("b")``：逐段派生，
-  于是 ``a.b`` 的落回配置是 ``a`` 那一份。
+* **出口长在 root 身上**：构造给（``processors=``）或后来 :meth:`mount` 上去；
+* **一个模块另一处去处**就 :meth:`route` 发布一条具名路由（一个名字 = 一份绑定好的
+  视图）；不发布就跟着 root 那份走；
+* **目标随记录走**：写入那一刻目标就钉死在 :attr:`~nacho.core.logger.models
+  .LogRecord.targets` 上，分发只是照着投，不再查任何名字表。
 
-因为「自层覆盖」，写日志**只按记录所属实例自己那份解析结果投递**，不会沿名字向上
-回溯、也不会重复投给同一个处理机。
+过滤器
+======
 
-因此**顺序很重要**：落回配置在 ``child`` 创建（或第一次 ``get_logger``）时定格，
-要先挂出口、再取子实例。
-
-输出的挂载与过滤
-================
-
-* :meth:`attach` 把一个处理机挂到**本实例**（或用 ``name`` 指定某个派生实例）上；
-* ``log_filter``（:class:`~nacho.core.logger.filters.LogFilter`）挂在出口一侧、由
-  分发器持有：一条日志只有通过某个出口的过滤器才会被投递给它，被过滤掉的日志连
-  处理机的缓冲区都不进。过滤器因此不属于处理机——处理机只负责落地。
+``log_filter``（:class:`~nacho.core.logger.filters.LogFilter`）挂在**目标**一侧
+（:class:`~nacho.core.logger.models.Target`）：一条日志只有通过某个目标的过滤器才会
+被投递给它，被过滤掉的日志连处理机的缓冲区都不进。过滤器因此不属于处理机——处理机
+只负责落地。
 
 **两级缓冲，分工明确**：
 
@@ -58,14 +48,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import traceback
+from contextlib import suppress
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType, TracebackType
-from typing import TypedDict, cast, override
+from typing import TextIO, TypedDict, cast, override
 
-from .filters import DENY_ALL, LogFilter
-from .models import LogLevel, LogRecord, LogSearchResult, TimestampLike
+from .filters import DENY_ALL, LevelFilter, LogFilter
+from .models import LogLevel, LogRecord, LogSearchResult, Target, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
+from .processors.console import ConsoleLogProcessor
 from .queue import AsyncLogQueue, OverflowPolicy
 
 _fallback = logging.getLogger("nacho.core.logger")
@@ -94,6 +86,8 @@ class LoggerStats(TypedDict):
     name: str
     level: str
     running: bool
+    #: 构造时是否要求了默认控制台输出（运行时也能看出来「有没有那一路」）
+    console: bool
     queue: QueueStats
     processors: list[ProcessorStats]
     dropped: DroppedStats
@@ -101,70 +95,33 @@ class LoggerStats(TypedDict):
     routes: dict[str, list[str]]
 
 
-def _dedupe(processors: Sequence[BaseLogProcessor]) -> list[BaseLogProcessor]:
-    """按 ``id`` 去重保序。
-
-    一份配置里同一个处理机只能出现一次：复制父实例配置、重复挂载等都可能带来
-    重复项，绝不能因为「多了一份」就变成对同一个出口重复输出。
-    """
-    unique: list[BaseLogProcessor] = []
-    seen: set[int] = set()
-    for processor in processors:
-        if id(processor) not in seen:
-            seen.add(id(processor))
-            unique.append(processor)
-    return unique
 
 
 class _SharedState:
-    """一个核心实例与它派生出的所有子实例共享的运行时状态。
+    """运行时状态：队列与**已接纳的处理机清单**。
 
-    队列与分发器归**核心实例**（:attr:`owner`）所有，子实例只借用：
-    :attr:`instances` 把「名字 -> 日志实例」登记成一张分发表，分发器据此找到
-    一条日志该投给谁；:attr:`registry` 是所有已挂载处理机的去重清单，
-    供生命周期（start/stop）、刷新、检索与统计使用。
+    曾经这里还放着一张「名字 -> 日志实例」的分发表，分发器靠它查一条日志该投给谁；
+    现在目标随记录走（见 :attr:`~nacho.core.logger.models.LogRecord.targets`），
+    这张表连同派生实例一起没了 —— 剩下的只有生命周期要用到的清单：
+    ``start`` / ``stop`` / ``flush`` / ``search`` / ``stats`` 都按它来。
     """
 
     def __init__(self, queue: AsyncLogQueue) -> None:
         self.queue: AsyncLogQueue = queue
-        #: 拥有队列与分发器的核心实例（子实例不许自己 start）
-        self.owner: BaseLogger | None = None
-        #: 名字 -> 日志实例（子实例创建时登记；同名永远同一个实例）
-        self.instances: dict[str, BaseLogger] = {}
-        #: 所有已挂载处理机的去重清单（生命周期 / 刷新 / 检索 / 统计）
+        #: 所有已接纳处理机的去重清单（生命周期 / 刷新 / 检索 / 统计）
         self.registry: list[BaseLogProcessor] = []
 
 
-def _require_processor(processor: object) -> None:
-    """运行期校验：不是 :class:`BaseLogProcessor` 的实例时抛出 ``TypeError``。
-
-    形参特意声明为宽类型 ``object`` 而非 ``BaseLogProcessor``：``attach`` 的形参类型
-    本就该在静态检查阶段拦住传错的调用方，但配置解析 / 反射 / 无类型代码等**动态调用**
-    会绕过静态检查，这道运行期防线必须真正可达（若按真实类型标注，静态分析会把
-    ``isinstance`` 判为恒真、把 ``raise`` 当成不可达代码），才能给出明确报错
-    （而不是把错误对象登记进分发表、直到分发时才崩）。
-
-    只校验、不返回值：调用方原样使用自己的变量，避免「参数被同名赋值遮蔽」
-    （``reportRedeclaration``）。
-    """
-    if not isinstance(processor, BaseLogProcessor):
-        raise TypeError(f"处理机必须是 BaseLogProcessor 子类: {type(processor)!r}")
-
-
-def _require_filter(log_filter: object) -> None:
-    """运行期校验：不是 :class:`LogFilter` 的实例时抛出 ``TypeError``（理由同
-    :func:`_require_processor`）。"""
-    if not isinstance(log_filter, LogFilter):
-        raise TypeError(f"过滤器必须是 LogFilter 子类: {type(log_filter)!r}")
-
 
 class BaseLogger:
-    """日志系统基类：队列 + 分发器 + 可注入的日志处理机。
+    """日志系统本体（一根 root）：队列 + 分发器 + 一份目标清单。
 
-    实例自己持有一份「自层出口」（``_own``）与从父实例继承来的「落回配置」
-    （``_inherited``）：:meth:`child` 派生出的子实例在**没挂自层出口**时整份走
-    落回配置（创建即冻结）；一旦挂了自层出口就改为**只投自层那些**，仅
-    ``inherit_on_override`` 的出口（控制台）仍保留。
+    出口就长在它身上：构造给的那些、后来 :meth:`mount` 上去的那些。业务侧拿到的都是
+    :meth:`bind` 出来的视图（:class:`BoundLogger`）—— **没有派生实例、没有落回配置、
+    没有冻结**：一条日志投给谁，写的时候按它所属视图的那份目标定了。
+
+    想要「某个模块另一个去处」， explicit 发布一条 :meth:`route` 就够了：一个名字 =
+    一份绑定好的视图，不发布就跟着 root 那份走。
     """
 
     def __init__(
@@ -173,25 +130,24 @@ class BaseLogger:
         *,
         level: LogLevel | str = LogLevel.INFO,
         queue: AsyncLogQueue | None = None,
-        processors: list[BaseLogProcessor] | None = None,
-        filters: dict[str, LogFilter] | None = None,
-        inherit: list[BaseLogProcessor] | None = None,
-        shared: _SharedState | None = None,
+        processors: "Sequence[Target | BaseLogProcessor] | None" = None,
+        console: bool = True,
+        console_stream: TextIO | None = None,
+        console_level: "LogLevel | str | None" = None,
+        console_color: bool = True,
         overflow_policy: OverflowPolicy | str = OverflowPolicy.DROP_OLDEST,
         queue_maxsize: int = 10000,
         dispatch_batch_size: int = 200,
         dispatch_timeout: float = 0.2,
     ) -> None:
         """
-        :param processors: 本实例**自层**的处理机列表。构造时复制一份，
-            因此传进来的列表之后被改动不会影响本实例。自层列表非空即进入
-            「自层覆盖」，只投自层这些。
-        :param filters: 本实例的「处理机名 -> 过滤器」表；同样复制一份。
-        :param inherit: 从父实例继承来的**落回配置**（父实例派生那一刻生效的处理机
-            列表的副本）。只有 :meth:`child` 派生出的子实例才传；自层没挂出口时
-            整份投给它，自层挂了出口时只保留其中 ``inherit_on_override`` 的出口。
-        :param shared: 多实例共享的运行时状态。只有核心实例才新建它，
-            子实例一律传入父实例的 ``_shared``。
+        :param processors: 默认目标。元素可以是 :class:`Target`（带过滤器与优先级），
+            也可以直接是处理机（等价于 ``Target(processor)``：全收、优先级 0）。
+        :param console: 是否默认挂一路控制台输出（默认 ``True``）：库 / 服务端不想
+            要任何标准输出就传 ``False``。已经挂过控制台就不重复挂。
+        :param console_level: 控制台最低级别，默认与 ``level`` 一致（控制台通常只给
+            人看，可以比文件出口更粗）。它会变成一个 :class:`LevelFilter` 挂在那个
+            目标上 —— 控制台处理机自己不做过滤。
         :param dispatch_batch_size: 分发器一次最多从队列取多少条。这是**交接批量**，
             不是攒批水位线——攒批由各处理机的 ``buffer_size`` 决定。
         :param dispatch_timeout: 队列取不到新日志时，最多再等多久就把手上这批先交出去。
@@ -201,228 +157,183 @@ class BaseLogger:
         """
         self.name: str = name
         self._level: LogLevel = LogLevel.parse(level)
-        if shared is None:
-            # 注意：这里必须用 is not None 判断，AsyncLogQueue 实现了 __len__，
-            # 空队列在布尔上下文中为 False，写成 ``queue or AsyncLogQueue(...)``
-            # 会在队列恰好为空时错误地新建一个队列。
-            shared = _SharedState(
-                queue
-                if queue is not None
-                else AsyncLogQueue(
-                    maxsize=queue_maxsize, overflow_policy=overflow_policy
-                )
-            )
-            # 新建共享状态的那个实例就是核心：队列与分发器归它所有
-            shared.owner = self
-        #: 与子实例共享的运行时状态（队列 / 分发表 / 处理机清单）
+        # 注意：这里必须用 is not None 判断，AsyncLogQueue 实现了 __len__，
+        # 空队列在布尔上下文中为 False，写成 ``queue or AsyncLogQueue(...)``
+        # 会在队列恰好为空时错误地新建一个队列。
+        shared = _SharedState(
+            queue
+            if queue is not None
+            else AsyncLogQueue(maxsize=queue_maxsize, overflow_policy=overflow_policy)
+        )
+        #: 运行时状态（队列 / 已接纳的处理机清单）
         self._shared: _SharedState = shared
         self._queue: AsyncLogQueue = shared.queue
-        # 本实例**自层**挂载的出口；子实例派生时这份会被复制成对方的「落回配置」
-        self._own: list[BaseLogProcessor] = _dedupe(processors or [])
-        # 从父实例继承来的**落回配置**（自层没挂出口时整份投它）
-        self._inherited: list[BaseLogProcessor] = _dedupe(inherit or [])
-        self._filters: dict[str, LogFilter] = dict(filters or {})
         self._dispatch_batch_size: int = dispatch_batch_size
         self._dispatch_timeout: float = dispatch_timeout
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._running: bool = False
-        self._shared.instances[name] = self
-        self._sync_registry()
+        #: **默认目标**（没给自己的目标时都用它），按优先级排好
+        self._targets: tuple[Target, ...] = ()
+        #: **显式发布的具名路由**：只有 :meth:`publish` / :meth:`route` 过才在里面
+        self._routes: dict[str, BoundLogger] = {}
+        if processors:
+            self.mount(*processors)
+        #: 构造时是否要求了默认控制台输出（看得出「有没有那一路」）
+        self._console_enabled: bool = console
+        if console and self.get_processor(ConsoleLogProcessor.name) is None:
+            # 控制台也是一个普通目标：级别判定交给挂在它上面的 LevelFilter（给出口挂一层
+            # 过滤，而不是让处理机自己认级别）
+            self.mount(
+                ConsoleLogProcessor(stream=console_stream, color=console_color),
+                log_filter=LevelFilter(level if console_level is None else console_level),
+            )
+
+    @property
+    def console_enabled(self) -> bool:
+        """是否挂了默认的控制台输出。"""
+        return self._console_enabled
+
+    # ------------------------------------------------------------------ 目标
+    @property
+    def targets(self) -> tuple[Target, ...]:
+        """默认目标（:class:`Target` 元组，按优先级排好）。"""
+        return self._targets
+
+    @property
+    def level(self) -> LogLevel:
+        """本实例的级别。"""
+        return self._level
+
+    @property
+    def processors(self) -> list[BaseLogProcessor]:
+        """默认目标里的处理机（按优先级排好）。"""
+        return [target.processor for target in self._targets]
+
+    def set_level(self, level: LogLevel | str) -> None:
+        """改全局级别（没有 per-instance 级别这回事了：要别的粒度就 ``bind(level=...)``）。"""
+        self._level = LogLevel.parse(level)
+
+    def _retire(self, *processors: BaseLogProcessor) -> None:
+        """让出口下线：从共享清单里摘掉，正在跑的安排它自己收尾（余量先刷完）。
+
+        换通道时旧的那份不该再出现在 ``search`` / ``stats`` 里，也不能占着一个永远不
+        关闭的句柄。停机是异步的，这里没法 await，所以交给事件循环自己去跑。
+        """
+        registry: list[BaseLogProcessor] = self._shared.registry
+        for processor in processors:
+            with suppress(ValueError):
+                registry.remove(processor)
+            if not processor.running:
+                continue
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:  # pragma: no cover - 还没起事件循环（纯同步场景）
+                continue
+            _ = loop.create_task(processor.stop())
+
+    def mount(
+        self,
+        *processors: "Target | BaseLogProcessor",
+        log_filter: LogFilter | None = None,
+        priority: int = 0,
+        replace: bool = False,
+    ) -> BaseLogger:
+        """把出口挂到 root 上作为默认目标（没自己 bind 目标的视图都走这份）。
+
+        处理机会被 :meth:`adopt` 接纳，于是停机照样 flush、``search`` / ``stats`` 照样
+        看得到。重复挂**同一个对象**无害。
+
+        :param log_filter: 给这批目标挂的过滤器（只放行通过它的记录）。
+        :param priority: 投放优先级，小的先投。
+        :param replace: 换通道：先把**同名**的那几个目标摘掉再挂（换输出路径 / 热重载）。
+        """
+        added: list[Target] = [
+            item
+            if isinstance(item, Target)
+            else Target(item, log_filter=log_filter, priority=priority)
+            for item in processors
+        ]
+        self.adopt(*(target.processor for target in added))
+        names = {target.processor.name for target in added}
+        if replace:
+            self._retire(*(item.processor for item in self._targets if item.processor.name in names))
+        kept: tuple[Target, ...] = (
+            tuple(item for item in self._targets if item.processor.name not in names)
+            if replace
+            else self._targets
+        )
+        for target in added:
+            if not any(existing.processor is target.processor for existing in kept):
+                kept = (*kept, target)
+        self._targets = tuple(sorted(kept, key=lambda target: target.priority))
+        return self
+
+    # ------------------------------------------------------------------ 具名路由
+    def publish(self, view: BoundLogger) -> BoundLogger:
+        """把一份视图**发布**成这个名字的路由：之后 :func:`get_logger` 取到的就是它。
+
+        取代派生实例树的那张表：**不发布就没有**，不再有「派生出来就自动有身份」这种
+        隐式规则。典型用法是某一路要换个目标 / 堵个通道（``api.access`` 不进审计库），
+        改完再发布回去，这条路上所有人都拿到改过的那份。
+        """
+        self._routes[view.name] = view
+        return view
+
+    def route(
+        self,
+        name: str,
+        *,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """取（必要时先建并发布）一条**具名路由**：一个名字 = 一份绑定好的视图。
+
+        名字相对本实例（``"api.robot"`` -> ``"nacho.api.robot"``，写全名也认）；已经
+        发布过就直接返回那份，不会覆盖。没给 ``targets`` 就沿用本实例的默认目标 ——
+        所以「某个模块只要和别人一样」是不用发布任何东西的::
+
+            access = core.route("api.access", trace_id="t-1")
+            robot = core.route("api.robot", targets=[Target(file_outlet, priority=-1)])
+        """
+        full: str = self.qualify(name)
+        existing: BoundLogger | None = self._routes.get(full)
+        if existing is not None:
+            return existing
+        return self.publish(self.bind(name=full, targets=targets, level=level, **defaults))
+
+    @property
+    def named_routes(self) -> dict[str, BoundLogger]:
+        """已发布的具名路由（名字 -> 视图）快照副本。"""
+        return dict(self._routes)
+
 
     # ------------------------------------------------------------------ 注册表
-    def _sync_registry(self) -> None:
-        """重建所有已挂载处理机的清单（去重保序、原地更新）。
 
-        每个处理机都源自某个实例的**自层**出口，所以遍历各实例的 ``_own`` 求并集
-        即可覆盖全部；落回配置里的那些对象也都来自某一层的 ``_own``。
-        """
-        merged: list[BaseLogProcessor] = []
-        for instance in self._shared.instances.values():
-            for processor in instance._own:
-                if not any(existing is processor for existing in merged):
-                    merged.append(processor)
-        self._shared.registry[:] = merged
 
-    def _resolved_outputs(self) -> list[BaseLogProcessor]:
-        """本实例**实际会投递**的处理机（自层覆盖 + 无自层出口时回落父级）。
 
-        * 自层挂过出口（``_own`` 非空）：只投自层那些，不再带上父级 / 核心的文件
-          出口；标了 ``inherit_on_override`` 的出口（控制台）仍从落回配置里保留；
-        * 自层一个出口都没挂：整份走落回配置（父实例派生那一刻生效的那份副本）。
-        """
-        if not self._own:
-            return list(self._inherited)
-        resolved: list[BaseLogProcessor] = []
-        for processor in self._inherited:
-            if processor.inherit_on_override:
-                resolved.append(processor)
-        for processor in self._own:
-            if not any(existing is processor for existing in resolved):
-                resolved.append(processor)
-        return resolved
-
-    def _find_channel(self, name: str) -> BaseLogProcessor | None:
-        """在本实例**实际会投**的出口里按名称找（含保留的继承出口）。"""
-        for processor in self._resolved_outputs():
-            if processor.name == name:
-                return processor
-        return None
-
-    def _remove_channel(self, processor: BaseLogProcessor) -> None:
-        """从本实例的配置里摘掉一个出口（自层与落回配置里都摘）。"""
-        for bucket in (self._own, self._inherited):
-            for existing in list(bucket):
-                if existing is processor:
-                    bucket.remove(existing)
 
     # ------------------------------------------------------------------ 输出通道挂载
-    def attach(
-        self,
-        processor: BaseLogProcessor,
-        *,
-        name: str | None = None,
-        log_filter: LogFilter | None = None,
-        replace: bool = False,
-    ) -> BaseLogProcessor:
-        """挂载一个输出通道（处理机），**运行期挂载同样生效**。
 
-        挂载本身是同步且廉价的（只做登记）；若日志系统已在运行，该通道会在
-        下一次分发前被自动启动（打开文件、建表等），所以调用方不需要再手动
-        ``await processor.start()``。
 
-        :param name: 挂到哪一层的配置上：``None`` 表示**本实例**（推荐——先取实例
-            再挂载，语义最直白）；给了名字则等价于挂到 ``self.child(name)`` 上，之后
-            该名字实例写日志就只投这份自层出口（覆盖掉它从父级继承来的落回配置），
-            它的子实例派生时复制的也是这份。名字**相对本实例**（``"a.b"`` 即
-            ``"<本实例名>.a.b"``，写全名也行）。
-        :param log_filter: 这个通道的过滤器（:class:`~nacho.core.logger.filters.LogFilter`）。
-            ``None`` 表示全收；给了过滤器则**由分发器在查找分发时**用它筛掉不
-            该进本通道的日志——过滤器属于分发侧，与处理机无关。
-        :param replace: 同名通道已存在时是否替换（换输出路径 / 模块热重载时用）。
-        :raises TypeError: ``processor`` 不是 :class:`BaseLogProcessor` 子类，
-            或 ``log_filter`` 不是 :class:`LogFilter` 子类。
-        :raises ValueError: 目标实例上已有同名通道且 ``replace=False``。
-        """
-        _require_processor(processor)
-        if log_filter is not None:
-            _require_filter(log_filter)
-        target: BaseLogger = self if name is None else self.child(name)
-        existing: BaseLogProcessor | None = target._find_channel(processor.name)
-        if existing is not None:
-            if not replace:
-                raise ValueError(
-                    f"处理机 {processor.name!r} 已挂载；"
-                    + "要换输出路径请用 attach(processor, replace=True)"
-                )
-            target._remove_channel(existing)
-            target._filters.pop(existing.name, None)
-        target._own.append(processor)
-        if processor.inherit_on_override and self._shared.owner is target:
-            # 全局留存出口（控制台 / 落库）允许运行期后挂：落回配置本来在子实例派生
-            # 那一刻就冻结，不补这一下的话，晚于业务模块取 logger 才挂上的全局出口
-            # （如数据库引擎就绪后才挂的落库出口）永远收不到那些模块的日志。
-            # 仅当出口挂在**核心根实例**上时向全树补；挂到某个子实例（attach_mount
-            # 的模块专属出口）不传播，保持「一个模块一个出口」的隔离语义。
-            for instance in self._shared.instances.values():
-                if instance is target:
-                    continue
-                if not any(existing is processor for existing in instance._inherited):
-                    instance._inherited.append(processor)
-        if log_filter is None:
-            target._filters.pop(processor.name, None)
-        else:
-            target._filters[processor.name] = log_filter
-        self._sync_registry()
-        return processor
-
-    def attach_many(self, *processors: BaseLogProcessor) -> list[BaseLogProcessor]:
-        """批量挂载输出通道（全部挂到本实例）。"""
-        return [self.attach(processor) for processor in processors]
-
-    def detach(self, name: str) -> BaseLogProcessor | None:
-        """按名称卸载输出通道，返回被卸载的处理机；不存在则返回 ``None``。
-
-        卸载是**全局**的：该处理机会从所有实例的配置里摘掉（含子实例复制来的那份），
-        否则被卸载的出口还会继续收到日志。冲刷余量与关闭后端由调用方决定
-        （``await processor.stop()`` 会先刷完余量再关闭）。
-        """
-        found: BaseLogProcessor | None = None
-        for instance in self._shared.instances.values():
-            for bucket in (instance._own, instance._inherited):
-                for processor in list(bucket):
-                    if processor.name == name:
-                        bucket.remove(processor)
-                        found = processor
-            instance._filters.pop(name, None)
-        if found is not None:
-            self._sync_registry()
-        return found
 
     def get_processor(self, name: str) -> BaseLogProcessor | None:
-        """按名称取已挂载的输出通道（在所有实例的配置里找）。"""
+        """按名称取已接纳的输出通道（在共享清单里找）。"""
         for processor in self._shared.registry:
             if processor.name == name:
                 return processor
         return None
 
-    # 兼容旧名：``inject`` 系列即 ``attach`` 系列
-    def inject(self, processor: BaseLogProcessor, *, replace: bool = False) -> BaseLogProcessor:
-        """兼容旧名，等价于 :meth:`attach`。"""
-        return self.attach(processor, replace=replace)
-
-    def inject_many(self, *processors: BaseLogProcessor) -> list[BaseLogProcessor]:
-        """兼容旧名，等价于 :meth:`attach_many`。"""
-        return self.attach_many(*processors)
-
-    def remove(self, name: str) -> bool:
-        """兼容旧名，等价于 ``detach(name) is not None``。"""
-        return self.detach(name) is not None
-
-    @property
-    def processors(self) -> list[BaseLogProcessor]:
-        """本实例**实际会投递**的处理机快照副本（自层 + 保留的继承出口）。"""
-        return self._resolved_outputs()
-
     @property
     def processor_registry(self) -> list[BaseLogProcessor]:
-        """全部实例已挂载处理机的清单本身（请勿直接修改）。
+        """所有已接纳处理机的清单本身（请勿直接修改）。
 
-        与 :attr:`processors` 的区别：这是所有派生实例的并集，
-        生命周期与刷新 / 检索都按它来。
+        与 :attr:`processors` 的区别：那是 root 的**默认目标**，这里还包含只在某个
+        ``bind`` 里出现过的出口 —— 生命周期与刷新 / 检索都按这份来。
         """
         return self._shared.registry
 
-    @property
-    def filters(self) -> dict[str, LogFilter]:
-        """本实例的「处理机名 -> 过滤器」快照副本。"""
-        return dict(self._filters)
-
-    # ------------------------------------------------------------------ 通道静音
-    def mute(self, processor_name: str) -> None:
-        """让**本实例**的日志不再投给某个输出通道（含继承来的全局留存出口）。
-
-        给该通道在这份实例的配置上挂一个「全拒」过滤器（:data:`~nacho.core.logger.filters.DENY_ALL`）：
-        路由照常解析、出口照常在别处工作，只是本实例的每条日志都过不了这道闸。
-        典型用途：落库出口是全局留存出口（``inherit_on_override``），会跟着落回配置进到
-        每一路日志；某一路（如访问日志）只配给人翻文件，就用它把库通道堵上，
-        「什么时间干了什么」的审计事件才不会被逐条请求的流水淹掉。
-
-        与 :meth:`detach` 的区别：detach 把出口从**所有**实例上摘掉（全局下线）；
-        mute 只关**本实例**这一路，别处照常收。重复调用无害；对该实例根本没有的通道
-        调用也 harmless——将来就算这个通道经落回配置传进来，也会被这道闸拦住。
-        """
-        self._filters[processor_name] = DENY_ALL
-
-    def unmute(self, processor_name: str) -> None:
-        """解除 :meth:`mute`：恢复本实例对该出口的正常投递。"""
-        self._filters.pop(processor_name, None)
-
-    @property
-    def muted(self) -> list[str]:
-        """被 :meth:`mute` 静音的通道名（快照副本；状态可查，「这条日志怎么没进库」少翻一层）。"""
-        return [name for name, log_filter in self._filters.items() if log_filter is DENY_ALL]
-
-    # ------------------------------------------------------------------ 派生实例
+    # ------------------------------------------------------------------ 名字
     def qualify(self, name: str) -> str:
         """把**相对名字**补全成本实例名下的完整名字：``LogCore("nacho").qualify("a1")`` ->
         ``"nacho.a1"``。
@@ -436,131 +347,36 @@ class BaseLogger:
             return name
         return f"{self.name}.{name}"
 
-    def _derive(self, full_name: str) -> BaseLogger:
-        """按完整名字派生**一层**子实例（已存在则直接返回）。
 
-        子实例构造时把本实例**实际会投的处理机**与过滤器各复制一份，作为自己的
-        「落回配置」（``_inherited``）：自层没挂出口时整份投它，挂了自层出口则只保留
-        其中 ``inherit_on_override`` 的部分。副本一到手即冻结。
+
+    def bind(
+        self,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """绑一份**视图**：默认字段、名字、出口、级别都可以换，视图本身不登记。
+
+        四个维度随用随给，每一项都是「给了就覆盖、没给就沿用 root 那份」：
+
+        :param name: 写进 ``record.logger_name`` 的名字（不给就用 root 的名字）。它是
+            **标签**，不是身份 —— 分发照着目标投，不查名字；
+        :param targets: 这条路上每条日志投给哪些出口。元素可以是
+            :class:`~nacho.core.logger.models.Target`（能带过滤器与优先级），也可以直接
+            是处理机（等价于 ``Target(processor)``，全收、优先级 0）。给了的话，里面的
+            处理机会被**接纳进共享清单**，停机照样 flush、``search`` / ``stats`` 照样
+            看得到 —— 不给就沿用 root 的默认目标；
+        :param level: 本视图的最低级别（不给就用 root 的）；
+        :param defaults: 默认字段。``owner_id`` 也是可绑的一等字段，其余进 ``extra``；
+            当次调用传了同名键就按当次的。
+
+        详见 :class:`BoundLogger`。
         """
-        existing = self._shared.instances.get(full_name)
-        if existing is not None:
-            return existing
-        return BaseLogger(
-            full_name,
-            level=self._level,
-            filters=self._filters,
-            inherit=self._resolved_outputs(),
-            shared=self._shared,
-            dispatch_batch_size=self._dispatch_batch_size,
-            dispatch_timeout=self._dispatch_timeout,
-        )
+        return BoundLogger(self, name=name, targets=targets, level=level, **defaults)
 
-    def child(self, name: str, *, level: LogLevel | str | None = None) -> BaseLogger:
-        """派生一个子日志实例：共享队列与分发器，换一个名字 + 复制一份落回配置。
 
-        名字**相对本实例**：``LogCore("nacho").child("a1")`` 得到的名字是 ``nacho.a1``——
-        写相对的一段（``"a1"``、``"robot.arm"``）会自动补上父前缀；已经写全的名字
-        （``"nacho.a1"``）原样使用，两种写法可以混用（见 :meth:`qualify`）。名字分段
-        逐层派生：``child("robot.arm")`` 等价于 ``child("robot").child("arm")``，
-        因此 ``arm`` 的落回配置是 ``robot`` 那一份。
-
-        子实例与父实例共享同一个队列与同一个分发器；**配置是派生那一刻的副本**：创建时
-        把父实例**实际会投的处理机与过滤器**复制进自己的落回配置（副本随即冻结），此后
-        父实例再 ``attach`` / ``detach`` 都不回头影响它。子实例自己 :meth:`attach` 了出口
-        之后进入「自层覆盖」——只投自层那些，不再带上父级的文件出口（控制台等
-        ``inherit_on_override`` 的出口除外）；没挂自层出口时才整份走落回配置。同名实例
-        只有一个（有则载入），重复调用返回同一个对象。
-
-        :param level: 显式指定时只改**这个实例**的级别（新级别会成为它之后派生子实例的
-            副本来源）；省略则沿用父实例的级别。级别同样复制不回溯，所以父实例之后
-            :meth:`set_level` 不影响已经建好的子实例。
-        :raises ValueError: ``name`` 为空。
-
-        子实例**不要**自己 ``start()``：分发器与队列归核心实例所有，重复启动只会
-        多出一个抢同一队列的分发器。
-        """
-        if not name:
-            raise ValueError("child 名字不能为空")
-        full: str = self.qualify(name)
-        if full == self.name:
-            if level is not None:
-                self.set_level(level)
-            return self
-
-        # 逐段派生，保证每一层复制的是它**上一层**的配置
-        remainder = full[len(self.name) + 1 :] if self.name else full
-        node: BaseLogger = self
-        prefix = self.name
-        for part in remainder.split("."):
-            prefix = f"{prefix}.{part}" if prefix else part
-            node = node._derive(prefix)
-        if level is not None:
-            node.set_level(level)
-        return node
-
-    def bind(self, **defaults: object) -> BoundLogger:
-        """派生一份**带默认字段**的视图：之后每条日志自动带上这几个键。
-
-        与 :meth:`child` 的分工：``child`` 换的是**名字与出口**（派生一个新实例），
-        ``bind`` 换的是**每条日志默认带什么**（一个轻视图，共享本实例的队列、出口与级别）。
-        一段执行用它一次打上上下文标记就够了，后面每个调用点只管写自己那句话 —— 详见
-        :class:`BoundLogger`。
-
-        :param defaults: 默认字段（键值对）。``owner_id`` 也是可绑的一等字段，其余进
-            ``extra``；当次调用传了同名键就按当次的。
-        """
-        return BoundLogger(self, **defaults)
-
-    @property
-    def routes(self) -> dict[str, list[BaseLogProcessor]]:
-        """「实例名字 -> 该实例**实际会投**的处理机」快照副本（改它不会影响路由）。"""
-        return {
-            name: instance._resolved_outputs()
-            for name, instance in self._shared.instances.items()
-        }
-
-    @property
-    def queue(self) -> AsyncLogQueue:
-        return self._queue
-
-    @property
-    def level(self) -> LogLevel:
-        """本实例的级别。"""
-        return self._level
-
-    def set_level(self, level: LogLevel | str) -> None:
-        """改**本实例**的级别。
-
-        级别是配置的一部分，同样「复制不回溯」：之后的子实例会复制到新级别，
-        已经建好的子实例维持自己那份不变。
-        """
-        self._level = LogLevel.parse(level)
-
-    def effective_level(self, name: str | None = None) -> LogLevel:
-        """某个名字的**生效级别**：该名字对应实例的级别，没有实例则用本实例的。
-
-        ``name`` 默认取本实例的名字。注意级别是复制来的、不回溯——父实例之后
-        :meth:`set_level` 不会改变已经建好的子实例。
-        """
-        if name is None:
-            return self._level
-        instance = self._shared.instances.get(self.qualify(name))
-        return self._level if instance is None else instance._level
-
-    def effective_outputs(self, name: str | None = None) -> list[BaseLogProcessor]:
-        """某个名字**会收到的输出设备**（该名字实例解析后的那份配置）。
-
-        只读，不会顺带把实例建出来：实例还没派生过时，返回本实例的解析结果，
-        因为「现在派生一个」自层没挂出口时拿到的就是这份落回配置。排查「这条日志
-        到底进了哪几个出口」看这个；:attr:`routes` 则是所有实例的总览。
-        """
-        if name is None:
-            return self._resolved_outputs()
-        instance = self._shared.instances.get(self.qualify(name))
-        if instance is None:
-            return self._resolved_outputs()
-        return instance._resolved_outputs()
 
     @property
     def running(self) -> bool:
@@ -569,17 +385,7 @@ class BaseLogger:
 
     # ------------------------------------------------------------------ 生命周期
     async def start(self) -> BaseLogger:
-        """启动所有处理机与内部分发器。
-
-        :raises RuntimeError: 在子实例上调用。队列与分发器归核心实例所有，
-            子实例重复启动只会多出一个抢同一队列的分发器。
-        """
-        owner = self._shared.owner
-        if owner is not self:
-            raise RuntimeError(
-                f"子日志实例 {self.name!r} 不持有分发器，"
-                f"请对核心实例 {(owner.name if owner is not None else '?')!r} 调用 start()"
-            )
+        """启动所有已接纳的处理机，并把分发器跑起来。"""
         if self._running:
             return self
         self._running = True
@@ -632,41 +438,44 @@ class BaseLogger:
             if self._queue.closed and self._queue.empty:
                 break
 
-    def _targets_for(self, record: LogRecord) -> list[BaseLogProcessor]:
-        """一条日志该投给哪些处理机：只看**它所属实例**解析后的配置，再按过滤器筛。
 
-        不会沿名字向上回溯：子实例写日志时用的是它自己那份（自层覆盖，或自层没挂
-        出口时回落父级的落回配置），因此同一条日志在同一个处理机上永远只投一次。
-        名字没登记过实例（例如两个核心共用一个队列）时退回本实例的解析结果。
+    def adopt(self, *processors: BaseLogProcessor) -> None:
+        """把处理机接进共享清单（幂等：已经在里面就不动）。
+
+        ``stop`` / ``flush`` / ``search`` / ``stats`` 都只认这张清单 —— 只出现在某个
+        ``bind`` 的目标里却没被接纳进来的处理机，停机时不会 flush，日志会在缓冲区里丢。
         """
-        instance = self._shared.instances.get(record.logger_name)
-        if instance is None:
-            processors = self._resolved_outputs()
-            filters = self._filters
-        else:
-            processors = instance._resolved_outputs()
-            filters = instance._filters
-        accepted: list[BaseLogProcessor] = []
+        registry: list[BaseLogProcessor] = self._shared.registry
         for processor in processors:
-            log_filter = filters.get(processor.name)
-            if log_filter is None or log_filter.match(record):
-                accepted.append(processor)
-        return accepted
+            if not any(existing is processor for existing in registry):
+                registry.append(processor)
 
     async def _dispatch(self, records: list[LogRecord]) -> None:
-        # 按记录所属实例解析去向，再按处理机归并成批，一次喂给同一个处理机
+        """一批日志扇出给各处理机：**照着每条记录自己的目标投**。
+
+        目标在写入那一刻就写进了 :attr:`~nacho.core.logger.models.LogRecord.targets`
+        （见 :meth:`write`），这里不做任何路由判断——分发只是把它归并成批、一次喂给
+        同一个处理机，顺序按目标的 ``priority``（小的先投）。
+        """
         batches: dict[int, tuple[BaseLogProcessor, list[LogRecord]]] = {}
+        priorities: dict[int, int] = {}
         for record in records:
-            for processor in self._targets_for(record):
+            for target in record.targets or ():
+                processor = target.processor
                 if not processor.healthy:
                     continue
-                entry = batches.get(id(processor))
+                if target.log_filter is not None and not target.log_filter.match(record):
+                    continue
+                key: int = id(processor)
+                entry = batches.get(key)
                 if entry is None:
-                    batches[id(processor)] = (processor, [record])
+                    batches[key] = (processor, [record])
+                    priorities[key] = target.priority
                 else:
                     entry[1].append(record)
 
-        for processor, batch in batches.values():
+        for key in sorted(batches, key=lambda item: priorities[item]):
+            processor, batch = batches[key]
             if not processor.running:
                 # 运行期动态挂载的输出通道：先启动它（打开文件 / 建表等）再喂日志，
                 # 否则它的 _on_start 永远不会被调用
@@ -682,11 +491,17 @@ class BaseLogger:
 
     # ------------------------------------------------------------------ 写入
     def is_enabled_for(self, level: LogLevel | str) -> bool:
-        """本条日志是否达到**本实例**的生效级别。"""
-        return LogLevel.parse(level) >= self.effective_level()
+        """本条日志是否达到本实例的级别。"""
+        return LogLevel.parse(level) >= self._level
 
     def write(self, record: LogRecord) -> bool:
-        """写入方法：默认把日志推到消息队列（非阻塞），返回是否入队成功。"""
+        """写入方法：默认把日志推到消息队列（非阻塞），返回是否入队成功。
+
+        没带目标的记录在这里补上 root 的默认目标：目标在写入那一刻定死，分发就只剩
+        「照着投」，不用再按名字反查任何表。
+        """
+        if record.targets is None:
+            record.targets = self._targets
         try:
             return self._queue.put_nowait(record)
         except Exception:  # noqa: BLE001 - 写入永不抛出，避免拖垮业务
@@ -716,6 +531,32 @@ class BaseLogger:
         if not self.is_enabled_for(parsed_level):
             return False
 
+        record = self.new_record(
+            parsed_level,
+            message,
+            owner_id=owner_id,
+            exc_info=exc_info,
+            extra=extra,
+            logger_name=self.name,
+        )
+        return self.write(record)
+
+    def new_record(
+        self,
+        level: LogLevel,
+        message: object,
+        *,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+        logger_name: str,
+        targets: "tuple[Target, ...] | None" = None,
+    ) -> LogRecord:
+        """把一条日志要装的东西装成 :class:`LogRecord`（级别判定在这一步之前做）。
+
+        :param logger_name: 记录归属的名字；``bind`` 出来的视图写自己的名字时用得上。
+        :param targets: 这条记录的目标；给了就在写入时定死，不必分发时再查名字表。
+        """
         exc_text: str | None = None
         if isinstance(exc_info, tuple):
             items = cast("tuple[object, ...]", exc_info)
@@ -737,15 +578,17 @@ class BaseLogger:
         elif exc_info:
             exc_text = traceback.format_exc()
 
-        record = LogRecord(
+        # 调用点传进来的 ``**extra`` 本身就是一个新鲜字典，直接交出去，不必再拷一份
+        payload: dict[str, object] = extra if isinstance(extra, dict) else dict(extra)
+        return LogRecord(
             message=str(message),
-            level=parsed_level,
-            logger_name=self.name,
-            extra=extra,
+            level=level,
+            logger_name=logger_name,
+            extra=payload,
             exc_text=exc_text,
             owner_id=owner_id,
+            targets=targets,
         )
-        return self.write(record)
 
     def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
         return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
@@ -872,6 +715,7 @@ class BaseLogger:
             "name": self.name,
             "level": self._level.name,
             "running": self._running,
+            "console": self._console_enabled,
             "queue": {
                 "size": self._queue.qsize(),
                 "maxsize": self._queue.maxsize,
@@ -886,24 +730,33 @@ class BaseLogger:
                 "buffers": buffer_dropped,
                 "total": queue_dropped + buffer_dropped,
             },
+            # 发布过的具名路由：谁有自己的去处，一眼看得到（没发布的不在里面）
             "routes": {
-                name: [processor.name for processor in instance._resolved_outputs()]
-                for name, instance in sorted(self._shared.instances.items())
+                name: [target.processor.name for target in view.targets or ()]
+                for name, view in sorted(self._routes.items())
             },
         }
 
     @override
     def __repr__(self) -> str:  # pragma: no cover - 调试用
-        names = ", ".join(p.name for p in self._resolved_outputs())
+        names = ", ".join(processor.name for processor in self.processors)
         return f"<BaseLogger name={self.name!r} level={self._level.name} processors=[{names}]>"
 
 
 class BoundLogger:
-    """**带默认字段**的日志视图：每条日志自动并上构造时定的那几个键。
+    """**绑定过的日志视图**：默认字段 / 名字 / 出口 / 级别，四项都能换，视图本身不登记。
 
-    由 :meth:`BaseLogger.bind` 得到。它**不是另一个通道**：与源实例共享同一个队列、
-    同一份出口与同一个级别，也不进实例注册表 —— ``routes`` / ``stats`` 里看不到它，
-    ``get_logger`` 也拿不到它（同名实例仍然只有一个）。多出来的只有「默认带什么」。
+    四项每一项都随用随给：给了就覆盖，没给就沿用来源那份::
+
+        log = core.bind(name="nacho.api.access", targets=[Target(file), Target(db, priority=-1)])
+        log.info("一条")   # 投给 file 与 db（db 先投），record.logger_name = nacho.api.access
+
+    目标随**记录**走（写进 :attr:`~nacho.core.logger.models.LogRecord.targets`），
+    所以这条路上不再需要「名字 -> 实例」那张表：谁写、给谁、什么顺序，在 ``bind``
+    那一刻就定了，分发只是照着做。
+
+    只有 targets 里的处理机会被 :meth:`BaseLogger.adopt` 接纳进共享清单，停机照样
+    flush、``search`` / ``stats`` 照样看得到 —— 换出口不再需要改实例那张表。
 
     适合给**一段执行**统一打上下文标记：一趟工作流带上 ``workflow_id`` / ``owner_id`` /
     ``user_id``，一次请求带上 ``trace_id``，这条路上之后每条日志自己就认得出是谁的，
@@ -919,27 +772,154 @@ class BoundLogger:
     * ``owner_id`` 是日志的一等字段（不塞 ``extra``）：``bind(owner_id="u-admin")`` 之后
       不显式传就按绑定的归属记，显式传了按那次的；
     * :meth:`write` 直接收记录时也走同一套合并，默认字段并进 ``record.extra``。
+
+    **只读 + 不登记**，这两条决定了它能不能长期用得下去：
+
+    * 默认字段是只读视图，``bind`` 只产出新视图（原视图不变），所以一份视图可以被
+      多个协程同时拿着写，谁也不污染谁；
+    * 它不进实例注册表，``bind`` 多少次都不会让注册表变长 —— 反过来正说明**请求级的
+      东西不该靠它来"造实例"**：``user_id`` 这类每请求都变的值要么当次传参
+      （``log.info("...", user_id=uid)``，多一个关键字参数的成本），要么一层 ``bind``
+      一个**随请求生命周期一起丢弃**的视图（用完即扔，也别指望之后还能按名字找回来）。
+      拿它去按用户/按请求登记名字（``nacho.api.user-42`` 那种），注册表就成了只增不减
+      的字典 —— 那是 :meth:`BaseLogger.child` 该操心的事，不是 ``bind`` 的。
+
+    一句话分工：**``child`` 换的是出口与名字（名字即身份），``bind`` 换的只有默认字段。**
     """
 
-    __slots__ = ("_logger", "_defaults")
+    __slots__: tuple[str, ...] = ("_logger", "_defaults", "_name", "_targets", "_level")
 
-    def __init__(self, logger: BaseLogger, **defaults: object) -> None:
+    def __init__(
+        self,
+        logger: BaseLogger,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> None:
         self._logger: BaseLogger = logger
-        self._defaults: dict[str, object] = dict(defaults)
+        #: 默认字段本身也是**只读视图**：视图之间可以纵向叠加、横向共享同一份字典，
+        #: 谁都改不到别人的那一层 —— 多个协程共用一份（一趟工作流里大家拿同一个
+        #: ``ctx.logger``）才安全。
+        self._defaults: Mapping[str, object] = MappingProxyType(dict(defaults))
+        #: 名字只是一条**标签**（写进 ``record.logger_name`` 给人 / 给检索看），不是身份：
+        #: 为 ``None`` 时沿用源实例的名字。
+        self._name: str | None = name
+        #: 目标快照：``None`` = 不指定，沿用源实例那份（分发时按名字解析）
+        self._targets: tuple[Target, ...] | None = None
+        if targets is not None:
+            normalized: list[Target] = [
+                item if isinstance(item, Target) else Target(item) for item in targets
+            ]
+            normalized.sort(key=lambda target: target.priority)
+            self._targets = tuple(normalized)
+            # 只在这里出现的处理机也要能被停机 flush、被检索、被统计
+            logger.adopt(*(target.processor for target in self._targets))
+        self._level: LogLevel | None = None if level is None else LogLevel.parse(level)
 
     @property
     def name(self) -> str:
-        """底下的实例名（与源实例同名：视图不换名字）。"""
-        return self._logger.name
+        """写进记录的名字：自己绑了就用绑的，否则沿用源实例的名字。"""
+        return self._name if self._name is not None else self._logger.name
+
+    @property
+    def level(self) -> LogLevel:
+        """本视图的生效级别（没单独绑就是源实例那份）。"""
+        return self._level if self._level is not None else self._logger.level
+
+    @property
+    def targets(self) -> "tuple[Target, ...] | None":
+        """本视图指定的目标快照；``None`` = 没指定，由分发按名字解析。"""
+        return self._targets
 
     @property
     def defaults(self) -> Mapping[str, object]:
         """这份视图的默认字段（只读：改它不影响视图，要改就再 ``bind`` 一层）。"""
-        return MappingProxyType(self._defaults)
+        return self._defaults
 
-    def bind(self, **defaults: object) -> BoundLogger:
-        """在既有默认字段上**再叠一层**（同名按新的），返回一份新视图（本视图不变）。"""
-        return BoundLogger(self._logger, **{**self._defaults, **defaults})
+    def bind(
+        self,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """在既有绑定上**再叠一层**（同名默认字段按新的），返回一份新视图（本视图不变）。
+
+        名字 / 目标 / 级别同样随给随覆盖：给了就换，没给就沿用**本视图**那一份。
+        """
+        return BoundLogger(
+            self._logger,
+            name=name if name is not None else self._name,
+            targets=targets if targets is not None else self._targets,
+            level=level if level is not None else self._level,
+            **{**self._defaults, **defaults},
+        )
+
+    def mute(self, channel: str) -> BoundLogger:
+        """给某个出口挂「全拒」：本视图的日志不再投给它（返回新视图，本视图不变）。
+
+        典型用途：访问日志一次请求一条，只配给人翻文件 —— 逐条流水进了库会把「谁在
+        什么时候干了什么」的审计时间线淹掉，于是把落库那条路在这份视图上堵住。
+        """
+        current: tuple[Target, ...] = (
+            self._targets if self._targets is not None else self._logger.targets
+        )
+        return BoundLogger(
+            self._logger,
+            name=self._name,
+            level=self._level,
+            targets=[
+                replace(target, log_filter=DENY_ALL)
+                if target.processor.name == channel
+                else target
+                for target in current
+            ],
+            **dict(self._defaults),
+        )
+
+    # ------------------------------------------------------------------ 读（一律走源实例）
+    @property
+    def processor_registry(self) -> list[BaseLogProcessor]:
+        """所有已接纳的处理机（视图不持有自己的清单，看的是源实例那份）。"""
+        return self._logger.processor_registry
+
+    @property
+    def named_routes(self) -> dict[str, BoundLogger]:
+        """已发布的具名路由（视图不持有自己的表，看的是源实例那份）。"""
+        return self._logger.named_routes
+
+    async def flush(self) -> None:
+        """刷新所有出口的缓冲区（视图不持有任何自己的状态，交给源实例做）。"""
+        await self._logger.flush()
+
+    async def search(
+        self,
+        *,
+        query: str | None = None,
+        level: "LogLevel | str | None" = None,
+        start: "TimestampLike" = None,
+        end: "TimestampLike" = None,
+        logger_name: str | None = None,
+        owner_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        processors: "Sequence[str] | None" = None,
+    ) -> LogSearchResult:
+        """检索：走源实例那份（视图不持有任何自己的状态，查的东西与它无异）。"""
+        return await self._logger.search(
+            query=query,
+            level=level,
+            start=start,
+            end=end,
+            logger_name=logger_name,
+            owner_id=owner_id,
+            limit=limit,
+            offset=offset,
+            processors=processors,
+        )
 
     def _merge(
         self, owner_id: str, extra: Mapping[str, object]
@@ -951,15 +931,20 @@ class BoundLogger:
 
     # ------------------------------------------------------------------ 写入
     def is_enabled_for(self, level: LogLevel | str) -> bool:
-        """本条日志是否达到**源实例**的生效级别。"""
-        return self._logger.is_enabled_for(level)
+        """本条日志是否达到本视图的生效级别（没单独绑就看源实例）。"""
+        return LogLevel.parse(level) >= self.level
 
     def write(self, record: LogRecord) -> bool:
-        """直接写一条记录（走的还是**源实例**的队列与出口）：默认字段并进 ``extra``。"""
+        """直接写一条记录：默认字段并进 ``extra``，名字与目标按本视图那份盖上。"""
+        patched: LogRecord = record
+        if self._name is not None:
+            patched = replace(patched, logger_name=self.name)
+        if self._targets is not None:
+            patched = replace(patched, targets=self._targets)
         if not self._defaults:
-            return self._logger.write(record)
-        owner_id, extra = self._merge(record.owner_id, record.extra)
-        return self._logger.write(replace(record, extra=extra, owner_id=owner_id))
+            return self._logger.write(patched)
+        owner_id, extra = self._merge(patched.owner_id, patched.extra)
+        return self._logger.write(replace(patched, extra=extra, owner_id=owner_id))
 
     def log(
         self,
@@ -971,9 +956,20 @@ class BoundLogger:
         **extra: object,
     ) -> bool:
         """写一条日志：``extra`` = 默认字段 + 当次字段（当次同名键优先）。"""
+        parsed_level = LogLevel.parse(level)
+        if not self.is_enabled_for(parsed_level):
+            return False
         merged_owner, merged_extra = self._merge(owner_id, extra)
-        return self._logger.log(
-            level, message, owner_id=merged_owner, exc_info=exc_info, **merged_extra
+        return             self._logger.write(
+            self._logger.new_record(
+                parsed_level,
+                message,
+                owner_id=merged_owner,
+                exc_info=exc_info,
+                extra=merged_extra,
+                logger_name=self.name,
+                targets=self._targets,
+            )
         )
 
     def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
@@ -999,6 +995,7 @@ class BoundLogger:
         """记录一条 ERROR 日志并附带当前异常堆栈（默认字段照带）。"""
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
 
+    @override
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         keys = ", ".join(self._defaults)
         return f"<BoundLogger name={self.name!r} defaults=[{keys}]>"

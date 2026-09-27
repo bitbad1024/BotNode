@@ -17,7 +17,7 @@
     from nacho.core.logger import LogCore, ConsoleLogProcessor, LevelFilter
 
     core = LogCore(console=False)
-    core.attach(ConsoleLogProcessor(), log_filter=LevelFilter("WARNING"))
+    core.mount(ConsoleLogProcessor(), log_filter=LevelFilter("WARNING"))
     # 从此控制台只收 WARNING 及以上；分发器在路由时就把它过滤掉了
 """
 from __future__ import annotations
@@ -32,8 +32,9 @@ class LogFilter(abc.ABC):
     """日志过滤器：分发器在**查找分发目标**时调用。
 
     子类只需实现 :meth:`match`：返回 ``True`` 表示这条日志允许投给挂着本过滤器的
-    出口。过滤器由 :meth:`~nacho.core.logger.base.BaseLogger.attach` 的
-    ``log_filter`` 参数交给日志系统，存放在分发器一侧。
+    出口。过滤器由 :meth:`~nacho.core.logger.base.BaseLogger.mount` 的 ``log_filter``
+    参数（或 :class:`~nacho.core.logger.models.Target` 上的那个）交给日志系统，
+    分发时按它筛。
     """
 
     @abc.abstractmethod

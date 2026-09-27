@@ -24,7 +24,7 @@
 
 处理机**不做任何路由与过滤**：它收到什么就写什么。日志该不该进某个出口，由分发器
 在查找分发时用 :class:`~nacho.core.logger.filters.LogFilter` 判断（见
-:meth:`~nacho.core.logger.base.BaseLogger.attach` 的 ``log_filter`` 参数），
+:meth:`~nacho.core.logger.base.BaseLogger.mount` 的 ``log_filter`` 参数），
 被过滤掉的日志根本不会走到这里。
 """
 from __future__ import annotations

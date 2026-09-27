@@ -849,7 +849,7 @@ async def test_context_logger_binds_who_the_run_is_for() -> None:
     collected: list[LogRecord] = []
     core = LogCore(console=False, dispatch_timeout=0.01)
     await core.start()
-    core.attach(LogCollector(collected))
+    core.mount(LogCollector(collected))
     try:
         ctx = NodeExecutionContext(
             logger=core, workflow_id="w1", owner_id="u-admin", user_id="10001"

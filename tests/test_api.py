@@ -708,7 +708,7 @@ def attach_file_outlet(
     outlet = LocalFileLogProcessor(
         directory, prefix=prefix, name="file", buffer_size=1, flush_interval=0
     )
-    core.attach(outlet)
+    core.mount(outlet)
     return outlet
 
 
@@ -861,7 +861,7 @@ class TestLogSearch:
 
     async def test_filters_pass_through(self, core: LogCore) -> None:
         """条件透传：归属 / 关键字 / 出口各自把目标那几条挑出来。"""
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
         log = get_logger(API_LOGGER_NAME)
         log.info("管理员干的活", owner_id="u-admin")
         log.warning("机器人干的活", owner_id="u-robot")
@@ -886,7 +886,7 @@ class TestLogSearch:
 
     async def test_reports_total_for_paging(self, core: LogCore) -> None:
         """响应带命中总数：`limit` / `offset` 只决定本页 items，total 始终是命中总数。"""
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
         log = get_logger(API_LOGGER_NAME)
         for index in range(5):
             log.info(f"第 {index} 条", owner_id="u-pager")
@@ -914,8 +914,8 @@ class TestLogSearch:
         recording = RecordingProcessor()
         # 直接塞一条「只有这个出口有」的日志：要测的是「查谁」，路由那套不参与
         recording.received.append(LogRecord(message="只有内存出口有这条", owner_id="u-admin"))
-        core.attach(recording)
-        core.attach(await memory_log_processor())
+        core.mount(recording)
+        core.mount(await memory_log_processor())
         log = get_logger(API_LOGGER_NAME)
         log.info("落库那份有这条", owner_id="u-admin")
         await drain(core)
@@ -938,11 +938,11 @@ class TestLogSearch:
         起名叫 ``file``；日志系统对不认识的出口名**直接忽略**，于是表现成「一条都没有」。
         这里故意把出口起成别的名字（``nacho.file``），证明认的是**类型**、不是名字。
         """
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
         outlet = LocalFileLogProcessor(
             tmp_path, prefix="nacho", name="nacho.file", buffer_size=1, flush_interval=0
         )
-        core.attach(outlet)
+        core.mount(outlet)
         # 直接起它（不等分发器那一轮）：这样落点当场就定得下来，好往当前那片塞一条标记记录
         await outlet.start()
         assert outlet.current_shard is not None
@@ -969,7 +969,7 @@ class TestLogSearch:
 
     async def test_source_and_outlet_names_are_validated(self, core: LogCore) -> None:
         """来源写错、出口名写错、两个来源参数一起写：一律 422，别静默当成「没有日志」。"""
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
         await asyncio.sleep(0.1)
 
         async with client_for(app_with()) as client:
@@ -997,7 +997,7 @@ class TestLogSearch:
 
     async def test_source_needs_admin_and_an_existing_outlet(self, core: LogCore) -> None:
         """来源只有管理员能选；选了但那一类出口没挂 -> 503 说清楚（不是「一条都没有」）。"""
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
         await asyncio.sleep(0.1)
 
         async with client_for(app_with()) as client:
@@ -1023,7 +1023,7 @@ class TestLogSearch:
 
     async def test_console_hint_is_not_a_log(self, core: LogCore) -> None:
         """控制台那条「本出口不支持检索」的提示记录不是日志，不会混进结果。"""
-        core.attach(ConsoleLogProcessor(stream=io.StringIO()))
+        core.mount(ConsoleLogProcessor(stream=io.StringIO()))
         await asyncio.sleep(0.1)  # 等分发器把它拉起来
 
         async with client_for(app_with()) as client:
@@ -1032,7 +1032,7 @@ class TestLogSearch:
 
     async def test_normal_user_only_sees_own(self, core: LogCore) -> None:
         """普通用户只看得到自己名下的；显式要别人的归属 -> 403。"""
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
         log = get_logger(API_LOGGER_NAME)
         log.info("管理员干的活", owner_id="u-admin")
         log.info("机器人干的活", owner_id="u-robot")
@@ -1042,7 +1042,11 @@ class TestLogSearch:
             headers = {"Authorization": f"Bearer {await token_of(client, ROBOT)}"}
 
             rows = await search_logs(client, headers)
-            assert [row.message for row in rows] == ["机器人干的活"]
+            # 登录那几步（登录成功 / 会话已开启）本身就是这个用户自己的操作，算他名下的
+            assert rows
+            assert all(row.owner_id == "u-robot" for row in rows)
+            assert "机器人干的活" in [row.message for row in rows]
+            assert "管理员干的活" not in [row.message for row in rows]
             assert rows[0].owner_id == "u-robot"
 
             forbidden = await client.get(
@@ -1052,7 +1056,7 @@ class TestLogSearch:
 
     async def test_normal_user_cannot_choose_the_source(self, core: LogCore) -> None:
         """来源只由管理员定：非管理员指定别的出口 -> 403；写成默认那份不报错。"""
-        core.attach(await memory_log_processor())
+        core.mount(await memory_log_processor())
 
         async with client_for(app_with()) as client:
             headers = {"Authorization": f"Bearer {await token_of(client, ROBOT)}"}
