@@ -157,7 +157,8 @@ class LocalFileLogProcessor(BaseLogProcessor):
         """
         self._dir.mkdir(parents=True, exist_ok=True)
         moment: datetime = self._now()
-        latest = self._list_shards()[0] if self._list_shards() else None
+        shards = self._list_shards()  # 扫一遍就够：只取最新的那份
+        latest = shards[0] if shards else None
         if latest is not None and latest[0] == moment.date():
             _day, seq, path = latest
             self._seq = seq
@@ -339,7 +340,9 @@ class LocalFileLogProcessor(BaseLogProcessor):
     ) -> Iterator[LogRecord]:
         """逐行扫描要读的那些片，产出满足条件的记录（检索就靠这一处解析）。"""
         for file_path in self._shards_within(start, end):
-            with open(file_path, "r", encoding=self._encoding) as handle:
+            # 片可能在「列完」之后被清理 / 轮转删掉（清理在写入线程那边跑）：读不到就跳过，
+            # 不能让它把这一趟的整段结果带没（核心那边只会记一条 error 并丢掉这个出口的结果）
+            with suppress(OSError), open(file_path, "r", encoding=self._encoding) as handle:
                 for line in handle:
                     line: str = line.strip()
                     if not line:

@@ -10,6 +10,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from nacho.core.logger.models import LogRecord
 from nacho.core.logger.processors.local import LocalFileLogProcessor
 
@@ -301,3 +303,19 @@ async def test_search_bounds_how_far_back_it_reads(tmp_path: Path) -> None:
         "昨天那条",
         "前天那条",
     ]
+
+
+async def test_search_skips_a_shard_that_vanished_after_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """片在「列完」之后被删掉（清理跑在写入线程那边）：跳过它，别把整段结果带没。"""
+    write_lines(tmp_path / "nacho-2026-09-28.log", log("还在的那条"))
+    processor = make_processor(tmp_path, FakeClock(), rotate_minutes=0)
+    gone = tmp_path / "nacho-2026-09-27.log"  # 列得到、真要读的时候已经没了
+    monkeypatch.setattr(
+        processor, "_shards_within", lambda start, end: [gone, *processor.shards()]
+    )
+
+    found = await processor.search()
+    assert [record.message for record in found.records] == ["还在的那条"]
+    assert found.total == 1
