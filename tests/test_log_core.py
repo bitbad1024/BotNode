@@ -21,6 +21,7 @@ import pytest
 
 from nacho.core.logger import (
     BaseLogProcessor,
+    BoundLogger,
     ConsoleLogProcessor,
     LevelFilter,
     LocalFileLogProcessor,
@@ -917,6 +918,27 @@ class TestDispatcherFiltering:
 
         assert db.received == ["恢复期"]
 
+    async def test_mixed_names_in_one_batch_each_to_its_own_outlet(self) -> None:
+        """同一批里混着不同名字：各自投自己的出口，不串。
+
+        目标是「按名字」解析的（同一批往往是同一个名字），分发时才先分组再解析——
+        这条是那处优化的回归闸：分组若把不同名字的记录并错了地方，这里立刻串味。
+        """
+        first = CollectingProcessor(name="first")
+        second = CollectingProcessor(name="second")
+        core = LogCore(console=False, dispatch_timeout=0.01)
+        core.attach(first, name="nacho.a")   # nacho.a 自层 -> 只投 first
+        core.attach(second, name="nacho.b")  # nacho.b 自层 -> 只投 second
+
+        await core.start()
+        try:
+            core.child("a").info("一号的事")
+            core.child("b").info("二号的事")
+            assert await wait_until(lambda: first.received == ["一号的事"]) is True
+            assert await wait_until(lambda: second.received == ["二号的事"]) is True
+        finally:
+            await core.stop()
+
 
 class TestManagerFacade:
     """进程门面：configure 增量挂载，get_logger 派生共享核心的子实例。"""
@@ -1062,3 +1084,59 @@ class TestBoundDefaults:
             assert processor.records[0].extra == {"workflow_id": "w1", "user_id": "10002"}
         finally:
             await core.stop()
+
+    async def test_no_defaults_write_is_passthrough(self) -> None:
+        """一个字段都没绑的视图：``write`` 原样投递，不重建记录。"""
+        core = LogCore(console=False)
+        processor = RecordingProcessor()
+        core.attach(processor)
+        await core.start()
+        try:
+            record = LogRecord(message="原样", extra={"k": "v"})
+            core.bind().write(record)
+
+            assert await wait_until(lambda: len(processor.records) >= 1)
+            assert processor.records[0] is record  # 没被 replace 过
+            assert processor.records[0].extra == {"k": "v"}
+        finally:
+            await core.stop()
+
+    async def test_one_view_is_safe_to_share_across_tasks(self) -> None:
+        """一份视图被多个协程同时拿着写：默认字段只读，当次字段互不污染。"""
+
+        async def emit(log: BoundLogger, user_id: str) -> None:
+            log.info("忙活", user_id=user_id)
+
+        core = LogCore(console=False)
+        processor = RecordingProcessor()
+        core.attach(processor)
+        await core.start()
+        try:
+            log = core.bind(workflow_id="w1")
+            await asyncio.gather(*(emit(log, f"u-{i}") for i in range(8)))
+
+            assert await wait_until(lambda: len(processor.records) >= 8)
+            assert {r.extra["workflow_id"] for r in processor.records} == {"w1"}
+            assert {r.extra["user_id"] for r in processor.records} == {f"u-{i}" for i in range(8)}
+        finally:
+            await core.stop()
+
+    def test_bind_never_grows_the_registry(self) -> None:
+        """``bind`` 视图不进注册表：叠多少层、绑多少个 id，实例表与 routes 都不变长。
+
+        这条是「请求级数据不许拿 ``bind`` 当实例用」的保险丝：哪天有人为了省参数去按
+        用户 / 按请求绑定出名字（``nacho.api.user-42`` 那种），实例表就成了只增不减的
+        字典 —— 那是 :meth:`BaseLogger.child` 该操心的事。
+        """
+        core = LogCore(console=False)
+        instances_before = len(core.routes)
+        registry_before = len(core.processor_registry)
+
+        view = core.bind(trace_id="t1")
+        for index in range(50):
+            _ = view.bind(step=index)
+            _ = core.bind(user_id=f"u-{index}")
+
+        assert len(core.routes) == instances_before
+        assert len(core.processor_registry) == registry_before
+        assert dict(view.defaults) == {"trace_id": "t1"}  # 原视图没被叠坏

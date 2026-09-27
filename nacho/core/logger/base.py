@@ -632,20 +632,25 @@ class BaseLogger:
             if self._queue.closed and self._queue.empty:
                 break
 
+    def _route_of(self, logger_name: str) -> tuple[list[BaseLogProcessor], dict[str, LogFilter]]:
+        """某个名字**投给谁 + 各出口挂什么过滤器**：只由名字决定，与记录内容无关。
+
+        名字没登记过实例（例如两个核心共用一个队列）时退回本实例的解析结果。
+        正因为目标是「按名字」而不是「按记录」的，一批日志可以同名分组、
+        每组只解析一次（见 :meth:`_dispatch`）。
+        """
+        instance: BaseLogger | None = self._shared.instances.get(logger_name)
+        if instance is None:
+            return self._resolved_outputs(), self._filters
+        return instance._resolved_outputs(), instance._filters
+
     def _targets_for(self, record: LogRecord) -> list[BaseLogProcessor]:
-        """一条日志该投给哪些处理机：只看**它所属实例**解析后的配置，再按过滤器筛。
+        """一条日志该投给哪些处理机：先看它所属实例解析后的配置，再按过滤器筛。
 
         不会沿名字向上回溯：子实例写日志时用的是它自己那份（自层覆盖，或自层没挂
         出口时回落父级的落回配置），因此同一条日志在同一个处理机上永远只投一次。
-        名字没登记过实例（例如两个核心共用一个队列）时退回本实例的解析结果。
         """
-        instance = self._shared.instances.get(record.logger_name)
-        if instance is None:
-            processors = self._resolved_outputs()
-            filters = self._filters
-        else:
-            processors = instance._resolved_outputs()
-            filters = instance._filters
+        processors, filters = self._route_of(record.logger_name)
         accepted: list[BaseLogProcessor] = []
         for processor in processors:
             log_filter = filters.get(processor.name)
@@ -654,17 +659,37 @@ class BaseLogger:
         return accepted
 
     async def _dispatch(self, records: list[LogRecord]) -> None:
-        # 按记录所属实例解析去向，再按处理机归并成批，一次喂给同一个处理机
-        batches: dict[int, tuple[BaseLogProcessor, list[LogRecord]]] = {}
+        """一批日志扇出给各处理机：**按名字分组**，每组只解析一次目标。
+
+        同一批日志常常来自同一个名字（一次业务调用里连着写的那几条），而目标
+        （``processors`` + ``filters``）只由名字决定 —— 所以先分组再解析，省掉
+        每条一次「重建目标列表」；逐条做的只剩过滤器判定（那确实要看记录内容）。
+
+        之后再按处理机归并成批，一次喂给同一个处理机。
+        """
+        grouped: dict[str, list[LogRecord]] = {}
         for record in records:
-            for processor in self._targets_for(record):
-                if not processor.healthy:
-                    continue
-                entry = batches.get(id(processor))
-                if entry is None:
-                    batches[id(processor)] = (processor, [record])
-                else:
-                    entry[1].append(record)
+            bucket = grouped.get(record.logger_name)
+            if bucket is None:
+                grouped[record.logger_name] = [record]
+            else:
+                bucket.append(record)
+
+        batches: dict[int, tuple[BaseLogProcessor, list[LogRecord]]] = {}
+        for name, group in grouped.items():
+            processors, filters = self._route_of(name)
+            for record in group:
+                for processor in processors:
+                    if not processor.healthy:
+                        continue
+                    log_filter = filters.get(processor.name)
+                    if log_filter is not None and not log_filter.match(record):
+                        continue
+                    entry = batches.get(id(processor))
+                    if entry is None:
+                        batches[id(processor)] = (processor, [record])
+                    else:
+                        entry[1].append(record)
 
         for processor, batch in batches.values():
             if not processor.running:
@@ -919,13 +944,29 @@ class BoundLogger:
     * ``owner_id`` 是日志的一等字段（不塞 ``extra``）：``bind(owner_id="u-admin")`` 之后
       不显式传就按绑定的归属记，显式传了按那次的；
     * :meth:`write` 直接收记录时也走同一套合并，默认字段并进 ``record.extra``。
+
+    **只读 + 不登记**，这两条决定了它能不能长期用得下去：
+
+    * 默认字段是只读视图，``bind`` 只产出新视图（原视图不变），所以一份视图可以被
+      多个协程同时拿着写，谁也不污染谁；
+    * 它不进实例注册表，``bind`` 多少次都不会让注册表变长 —— 反过来正说明**请求级的
+      东西不该靠它来"造实例"**：``user_id`` 这类每请求都变的值要么当次传参
+      （``log.info("...", user_id=uid)``，多一个关键字参数的成本），要么一层 ``bind``
+      一个**随请求生命周期一起丢弃**的视图（用完即扔，也别指望之后还能按名字找回来）。
+      拿它去按用户/按请求登记名字（``nacho.api.user-42`` 那种），注册表就成了只增不减
+      的字典 —— 那是 :meth:`BaseLogger.child` 该操心的事，不是 ``bind`` 的。
+
+    一句话分工：**``child`` 换的是出口与名字（名字即身份），``bind`` 换的只有默认字段。**
     """
 
-    __slots__ = ("_logger", "_defaults")
+    __slots__: tuple[str, str] = ("_logger", "_defaults")
 
     def __init__(self, logger: BaseLogger, **defaults: object) -> None:
         self._logger: BaseLogger = logger
-        self._defaults: dict[str, object] = dict(defaults)
+        #: 默认字段本身也是**只读视图**：视图之间可以纵向叠加、横向共享同一份字典，
+        #: 谁都改不到别人的那一层 —— 多个协程共用一份（一趟工作流里大家拿同一个
+        #: ``ctx.logger``）才安全。
+        self._defaults: Mapping[str, object] = MappingProxyType(dict(defaults))
 
     @property
     def name(self) -> str:
@@ -999,6 +1040,7 @@ class BoundLogger:
         """记录一条 ERROR 日志并附带当前异常堆栈（默认字段照带）。"""
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
 
+    @override
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         keys = ", ".join(self._defaults)
         return f"<BoundLogger name={self.name!r} defaults=[{keys}]>"

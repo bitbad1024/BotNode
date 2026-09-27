@@ -76,6 +76,30 @@
 **顺序很重要**：落回配置在实例创建（第一次 ``child`` / ``get_logger``）时定格，
 要挂出口请先挂载、再取实例。
 
+默认字段（``bind``）：一段执行打一次标记
+========================================
+
+:meth:`~nacho.core.logger.base.BaseLogger.child` 换的是**出口与名字**（派生一个新实例），
+:meth:`~nacho.core.logger.base.BaseLogger.bind` 换的只有**每条日志默认带什么** —— 返回
+一个 :class:`~nacho.core.logger.base.BoundLogger` 视图：共享源实例的队列、出口与级别，
+也不进实例注册表::
+
+    log = get_logger("workflow").bind(workflow_id="w1", owner_id="u-admin")
+    log.info("开始")                      # 自动带上 workflow_id / owner_id
+    log.info("换归属", owner_id="u-2")    # 当次传的同名键压过默认的
+
+一趟工作流、一次请求打一次标记，后面每个调用点只管写自己那句话，日志自己认得出是谁的。
+``owner_id`` 是日志的一等字段（不塞 ``extra``，能按它精确检索），同样可以给它绑默认值。
+
+两条约束决定了它能不能长期用得下去：
+
+* **只读**：再 ``bind`` 一层只产出新视图、原视图不变，所以一份视图可以被多个协程
+  同时拿着写，各自当次字段互不污染；
+* **不登记**：视图永远不会出现在 ``routes`` / ``stats`` 里，``bind`` 多少次也不会让
+  实例表变长。因此**请求级的值别拿它当实例用** —— ``user_id`` 这类每次都变的东西要么
+  当次传参（``log.info("...", user_id=uid)``，成本就是一个关键字参数），要么随请求
+  生命周期现绑现扔；真要给某个用户建一条固定的名字，那是 ``child`` 的事。
+
 运行期挂载与过滤器::
 
     from nacho.core.logger import LevelFilter
