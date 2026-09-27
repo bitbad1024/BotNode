@@ -21,10 +21,7 @@
   background: var(--nav-hover-bg);
   color: var(--text-1);
 }
-.icon-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
+/* 键盘焦点环由 base.css 的全局 :focus-visible 统一提供 */
 
 /* 按钮 */
 .btn {
@@ -152,10 +149,6 @@
 .switch:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-.switch:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .switch-knob {
   position: absolute;

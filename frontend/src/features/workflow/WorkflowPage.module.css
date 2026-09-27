@@ -138,6 +138,9 @@
   height: 1px;
   opacity: 0;
 }
+.switch input:focus-visible + :global(.switch) {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .switch input:disabled + :global(.switch) {
   opacity: 0.45;
 }

@@ -13,7 +13,6 @@
   --lp-brand: #4f46e5;
   --lp-brand-hover: #4338ca;
   --lp-brand-ink: #ffffff;
-  --lp-ring: rgba(79, 70, 229, 0.16);
   --lp-danger: #dc2626;
   --lp-danger-ink: #991b1b;
   --lp-danger-bg: #fef2f2;
@@ -44,7 +43,6 @@
   --lp-brand: #8b8dff;
   --lp-brand-hover: #a6a8ff;
   --lp-brand-ink: #0c0c14;
-  --lp-ring: rgba(139, 141, 255, 0.28);
   --lp-danger: #fb7185;
   --lp-danger-ink: #fecdd3;
   --lp-danger-bg: rgba(225, 29, 72, 0.14);
@@ -152,7 +150,7 @@
 }
 .control:focus-within {
   border-color: var(--lp-brand);
-  box-shadow: 0 0 0 4px var(--lp-ring);
+  box-shadow: 0 0 0 3px var(--accent-soft);
   background: var(--lp-card);
 }
 .control input {
@@ -186,6 +184,11 @@
 }
 .eye:hover {
   color: var(--lp-text);
+}
+/* 眼睛按钮的键盘焦点已由外层 .control:focus-within 光环体现，避免叠成双环 */
+.eye:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 .invalid,
 .invalid:focus-within {
@@ -236,7 +239,7 @@
   color: var(--lp-brand-ink);
 }
 .rememberBox:focus-visible + .rememberMark {
-  box-shadow: 0 0 0 4px var(--lp-ring);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .rememberText {
   font-size: 13px;
@@ -283,7 +286,7 @@
 }
 .submit:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 4px var(--lp-ring);
+  box-shadow: 0 8px 20px -8px var(--lp-brand), 0 0 0 3px var(--accent-soft);
 }
 .submit-inner {
   display: inline-flex;
@@ -368,7 +371,7 @@
 }
 .demo-chip:hover {
   border-color: var(--lp-brand);
-  background: var(--lp-ring);
+  background: var(--accent-soft);
   transform: translateY(-1px);
 }
 .demo-chip b {

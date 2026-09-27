@@ -183,10 +183,13 @@
   border-radius: var(--r-md);
   background: var(--surface);
   padding: 0 12px;
-  transition: border-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .control:focus-within {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .controlIcon {
   color: var(--text-3);

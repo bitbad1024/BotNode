@@ -222,6 +222,10 @@
   transform: translateY(-2px);
   box-shadow: var(--shadow-pop);
 }
+.module-card:focus-visible {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-card), 0 0 0 3px var(--accent-soft);
+}
 .module-icon {
   width: 44px;
   height: 44px;
