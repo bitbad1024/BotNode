@@ -254,6 +254,74 @@ class TestProfileService:
         assert first is not None and first.has_avatar is False
         assert second is not None and second.has_avatar is False
 
+    async def test_avatar_changes_are_logged(self, tmp_path: Path) -> None:
+        """换头像 / 删头像各留一条审计：谁的操作看 ``owner_id``，同一次请求看 ``trace_id``。
+
+        这两条是「哪个人什么时候换了头像」的唯一线索（访问日志只记了方法与路径、还不入库），
+        所以连字段口径一起钉住：消息、归属、trace_id 都要对得上。
+        """
+        import asyncio
+
+        from nacho.core.logger import (
+            BaseLogProcessor,
+            LogCore,
+            LogRecord,
+            LogSearchResult,
+        )
+
+        collected: list[LogRecord] = []
+
+        class _Collector(BaseLogProcessor):
+            name: str = "collector"
+
+            def __init__(self) -> None:
+                super().__init__(buffer_size=1, flush_interval=0)  # 逐条直写，不用等攒批
+
+            async def write(self, records: list[LogRecord]) -> None:
+                collected.extend(records)
+
+            async def search(
+                self,
+                *,
+                query: str | None = None,
+                level: object = None,
+                start: object = None,
+                end: object = None,
+                logger_name: str | None = None,
+                owner_id: str | None = None,
+                limit: int = 100,
+                offset: int = 0,
+            ) -> LogSearchResult:
+                return LogSearchResult()
+
+        core = LogCore(console=False, dispatch_timeout=0.01)
+        await core.start()
+        core.attach(_Collector())
+        try:
+            service = ProfileService(
+                await memory_user_store(),
+                FileAvatarStore(tmp_path / "avatars"),
+                logger=core,
+            )
+            assert await service.put_avatar("u-admin", PNG_BYTES, trace_id="t-1") is not None
+            assert await service.remove_avatar("u-admin", trace_id="t-2") is not None
+
+            for _ in range(100):  # 分发是异步的：等它落到出口
+                if len(collected) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert [(r.message, r.owner_id, r.extra["trace_id"]) for r in collected] == [
+                ("头像已更新", "u-admin", "t-1"),
+                ("头像已删除", "u-admin", "t-2"),
+            ]
+            # 换头像那条连类型与字节数一起记：只写「更新了」的话，事后没法判断换的是什么
+            assert (collected[0].extra["mime"], collected[0].extra["size"]) == (
+                "image/png",
+                len(PNG_BYTES),
+            )
+        finally:
+            await core.stop()
+
 
 # --------------------------------------------------------------------------- 选项 / 配置
 def test_options_take_avatar_settings() -> None:

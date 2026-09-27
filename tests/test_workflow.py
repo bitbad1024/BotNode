@@ -2937,6 +2937,113 @@ async def test_load_published_workflows_registers_crons() -> None:
         await engine.dispose()
 
 
+async def test_load_published_workflows_logs_what_it_loaded() -> None:
+    """启动载入自己也要留痕：开头一条、结尾一条带各档条数，**一条没登记也照记**。
+
+    「载入跑过了，只是没得跑」和「载入压根没跑」在日志里得能分开，所以完成那条不带
+    ``if primed`` 的条件；扫过多少 / 登记上几条 / 开关关着跳过几条一并给出来 —— 排
+    「某条流为何没跑」时不用再猜。运行时的日志走**进程默认核心**（模块里的 ``_log()``
+    不注入），所以这里把默认核心配成自己的出口。
+    """
+    import asyncio
+
+    from nacho.core.logger import (
+        BaseLogProcessor,
+        LogCore,
+        LogRecord,
+        LogSearchResult,
+        configure,
+        manager,
+    )
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    collected: list[LogRecord] = []
+
+    class _Collector(BaseLogProcessor):
+        name: str = "collector"
+
+        def __init__(self) -> None:
+            super().__init__(buffer_size=1, flush_interval=0)  # 逐条直写，不用等攒批
+
+        async def write(self, records: list[LogRecord]) -> None:
+            collected.extend(records)
+
+        async def search(
+            self,
+            *,
+            query: str | None = None,
+            level: object = None,
+            start: object = None,
+            end: object = None,
+            logger_name: str | None = None,
+            owner_id: str | None = None,
+            limit: int = 100,
+            offset: int = 0,
+        ) -> LogSearchResult:
+            return LogSearchResult()
+
+    # 默认核心是**进程级、且 configure 会复用已有的那份**：先前用例要是已经建过一个，
+    # 它派生过的子实例早把「当时的出口」冻结在落回配置里，这会儿再挂出口补不进去。
+    # 先解除引用，下面这份才是全新的、从一开始就带收集出口的核心。
+    manager.reset()
+    core: LogCore = configure(
+        "nacho", console=False, processors=[_Collector()], dispatch_timeout=0.01
+    )
+    await core.start()
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    # 三条定义：发布 + 开（登记）、发布但开关关着（跳过）、只存了版本没发布（跳过）
+    on_def = await store.create("u-admin", "要跑的流")
+    await store.add_version(
+        on_def, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+    assert await store.publish(on_def.id, 1) is not None
+    assert await store.set_enabled(on_def.id, True) is not None
+
+    off_def = await store.create("u-admin", "发了但不跑的流")
+    await store.add_version(
+        off_def, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+    assert await store.publish(off_def.id, 1) is not None
+
+    draft_def = await store.create("u-admin", "草稿流")
+    await store.add_version(
+        draft_def,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+
+    scheduler = TaskManager()
+    try:
+        assert await load_published_workflows(store, scheduler) == 1
+        for _ in range(100):  # 分发是异步的：等它落到出口
+            if len(collected) >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        messages = [record.message for record in collected]
+        assert messages[0] == "开始载入已发布工作流"  # 时间线的起点
+        assert messages[-1] == "已发布工作流启动载入完成"  # 结尾这条最后到
+        assert collected[-1].extra == {
+            "scanned": 3,  # 扫过的定义
+            "registered": 1,  # 登记上的工作流
+            "triggers": 1,  # 登记到的开始节点
+            "disabled": 1,  # 开关关着跳过的
+        }
+    finally:
+        await engine.dispose()
+        await core.stop()
+        manager.reset()  # 默认核心是进程级的：用完还回去，别影响别的用例
+
+
 async def test_load_published_workflows_pages_past_the_first_page() -> None:
     """启动载入**翻页翻到底**：超过一页的已发布工作流一个都不能漏。
 

@@ -278,10 +278,20 @@ async def load_published_workflows(
 
     ``onebot``（OneBot 服务端，可选）由装配层传进来，跟着登记一起进到点闭包（见
     :func:`make_trigger`）；没接 OneBot 的场合不传，``onebot`` 节点跑到时当场报错。
+
+    日志：开头一条「开始载入」，结尾一条「载入完成」带各档条数（扫过多少、登记了哪些、开关
+    关着跳过了多少、登记到几个开始节点）—— **一条都没登记也照记**，好把「载入跑过了，只是
+    没得跑」和「载入压根没跑」分开。哪条工作流被登记，看开始节点那条（``已登记到调度器`` /
+    ``工作流开始（消息触发…）``，都带 ``workflow_id``）。
     """
-    primed = 0
+    log: BaseLogger = _log()
+    primed = 0  # 登记到的开始节点数
+    registered = 0  # 真正登记上的工作流条数
+    disabled = 0  # 已发布但开关关着：跳过
+    scanned = 0  # 扫过的定义数（含没发布 / 开关关着的）
     seen: set[str] = set()
     offset = 0
+    log.info("开始载入已发布工作流")
     while True:
         definitions = await store.list(owner_id=None, limit=page_size, offset=offset)
         if not definitions:
@@ -290,9 +300,11 @@ async def load_published_workflows(
             if definition.id in seen:
                 continue
             seen.add(definition.id)
+            scanned += 1
             if definition.status != "published" or definition.published_version <= 0:
                 continue
             if not definition.enabled:
+                disabled += 1
                 continue  # 已发布但开关关着：不登记、不跑（新发布默认就是这个状态）
             try:
                 primed += await register_published_workflow(
@@ -302,8 +314,9 @@ async def load_published_workflows(
                     scheduler,
                     onebot=onebot,
                 )
+                registered += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
-                _log().error(
+                log.error(
                     "启动载入已发布工作流失败",
                     workflow_id=definition.id,
                     version=definition.published_version,
@@ -312,6 +325,11 @@ async def load_published_workflows(
         offset += len(definitions)
         if len(definitions) < page_size:
             break
-    if primed:
-        _log().info("已发布工作流启动载入完成", count=primed)
+    log.info(
+        "已发布工作流启动载入完成",
+        scanned=scanned,  # 扫过的定义
+        registered=registered,  # 登记上的工作流
+        triggers=primed,  # 登记到的开始节点
+        disabled=disabled,  # 开关关着跳过的
+    )
     return primed
