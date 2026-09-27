@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import override
 
 from ..interfaces import LogStore
-from ..models import LogLevel, LogRecord, TimestampLike
+from ..models import LogLevel, LogRecord, LogSearchResult, TimestampLike
 from ..queue import OverflowPolicy
 from .base import BaseLogProcessor, ProcessorStats
 
@@ -82,7 +82,8 @@ class DatabaseLogProcessor(BaseLogProcessor):
         owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
+    ) -> LogSearchResult:
+        # 检索与总数都在 store 那边一次做完（同一套 WHERE），这里只转手
         return await self._store.search(
             query=query,
             level=level,

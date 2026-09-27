@@ -8,7 +8,8 @@
 
 * 建表：:meth:`LogStore.ensure_schema`（幂等，起步时调一次）；
 * 增加：:meth:`LogStore.add`（一次一批，处理机攒够了才交过来）；
-* 查询：:meth:`LogStore.search`（条件与处理机的 ``search`` 一一对应）；
+* 查询：:meth:`LogStore.search`（条件与处理机的 ``search`` 一一对应）——**顺带给出命中总数**
+  （:class:`~nacho.core.logger.models.LogSearchResult`），翻页算总页数不用再问一次；
 * 清理历史日志：:meth:`LogStore.delete_before`，
   调用方只需传入「删除该时刻之前」的时间参数。
 
@@ -21,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from .models import LogLevel, LogRecord, TimestampLike
+from .models import LogLevel, LogSearchResult, TimestampLike
 
 
 @runtime_checkable
@@ -50,12 +51,15 @@ class LogStore(Protocol):
         owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
-        """查询：按条件检索已落地的日志。
+    ) -> LogSearchResult:
+        """查询：按条件检索已落地的日志，并给出同一条件下的**命中总数**。
+
+        ``limit`` / ``offset`` 只裁 :attr:`LogSearchResult.records`；
+        :attr:`LogSearchResult.total` 是这批条件一共命中多少条（翻页算总页数用），与翻到第几页
+        无关。
 
         ``owner_id`` 精确匹配所有者：``None`` 不限（默认），空串 = 只要公共的。
         """
-        ...
         ...
 
     async def delete_before(self, before: TimestampLike) -> int:

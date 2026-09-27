@@ -59,6 +59,7 @@ from nacho.core.logger import (  # noqa: E402
     DatabaseLogProcessor,
     LogCore,
     LogRecord,
+    LogSearchResult,
     configure,
     get_logger,
     manager,
@@ -820,8 +821,8 @@ class RecordingProcessor(BaseLogProcessor):
         self.received.extend(records)
 
     @override
-    async def search(self, **kwargs: object) -> list[LogRecord]:
-        return list(self.received)
+    async def search(self, **kwargs: object) -> LogSearchResult:
+        return LogSearchResult(records=list(self.received), total=len(self.received))
 
 
 class TestLogSearch:

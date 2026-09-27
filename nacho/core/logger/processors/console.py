@@ -20,7 +20,7 @@ from __future__ import annotations
 import sys
 from typing import TextIO, override
 
-from ..models import LogLevel, LogRecord, TimestampLike
+from ..models import LogLevel, LogRecord, LogSearchResult, TimestampLike
 from .base import BaseLogProcessor, ProcessorStats
 
 #: 各日志级别的 ANSI 颜色，仅在 ``color=True`` 时使用
@@ -121,26 +121,28 @@ class ConsoleLogProcessor(BaseLogProcessor):
         owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
+    ) -> LogSearchResult:
         """控制台不留存日志：返回一条提示记录，说明本出口不支持检索。
 
         不返回空列表，是为了避免调用方把「控制台查不到」误当成「真的没有日志」。
         提示记录带有 ``extra["search_supported"] = False`` 标记，便于上游识别并
-        从结果里剔除；``limit <= 0`` 时仍返回空列表。
+        从结果里剔除；``limit <= 0`` 时仍返回空列表。总数恒为 0 —— 这里确实没东西可数。
         """
         if limit <= 0:
-            return []
-        return [
-            LogRecord(
-                message=(
-                    "控制台处理机不支持日志检索：控制台输出不留存，"
-                    "需要回读请改用本地文件或数据库处理机"
-                ),
-                level=LogLevel.WARNING,
-                logger_name=self.name,
-                extra={"processor": self.name, "search_supported": False},
-            )
-        ]
+            return LogSearchResult()
+        return LogSearchResult(
+            records=[
+                LogRecord(
+                    message=(
+                        "控制台处理机不支持日志检索：控制台输出不留存，"
+                        "需要回读请改用本地文件或数据库处理机"
+                    ),
+                    level=LogLevel.WARNING,
+                    logger_name=self.name,
+                    extra={"processor": self.name, "search_supported": False},
+                )
+            ]
+        )
 
     # ------------------------------------------------------------------ 状态
     @property

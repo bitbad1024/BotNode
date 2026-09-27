@@ -152,3 +152,18 @@ class LogRecord:
             if needle not in haystack:
                 return False
         return True
+
+
+@dataclass(slots=True)
+class LogSearchResult:
+    """一次检索的结果：**这一页**的记录 + 同条件下的**命中总数**。
+
+    总数只跟筛选条件有关，与 ``limit`` / ``offset`` 无关 —— 所以它跟 ``search`` 一起回来：
+    翻页要算总页数，调用方不必再拿同一套条件去问一次「有多少条」。
+
+    ``total`` 的口径与 ``records`` 略有差别（多出口时）：各出口独立计数后相加、**不去重**，
+    同一个 ``record_id`` 落在两个出口就会被数两次；默认只查单个出口（如落库那份）时即精确总数。
+    """
+
+    records: list[LogRecord] = field(default_factory=list)
+    total: int = 0

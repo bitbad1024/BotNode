@@ -27,12 +27,18 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import cast
 
-from sqlalchemy import Column, Double, Text
+from sqlalchemy import Column, ColumnElement, Double, Text, func
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, col, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from nacho.core.logger.models import LogLevel, LogRecord, TimestampLike, normalize_timestamp
+from nacho.core.logger.models import (
+    LogLevel,
+    LogRecord,
+    LogSearchResult,
+    TimestampLike,
+    normalize_timestamp,
+)
 
 
 class LogTable(SQLModel, table=True):
@@ -147,6 +153,41 @@ class SqlLogStore:
             return len(records)
 
     # ------------------------------------------------------------------ 检索
+    def _filter_clauses(
+        self,
+        *,
+        query: str | None,
+        level: LogLevel | str | None,
+        start: TimestampLike,
+        end: TimestampLike,
+        logger_name: str | None,
+        owner_id: str | None,
+    ) -> list[ColumnElement[bool]]:
+        """把检索条件拼成一维 ``WHERE`` 子句：``search`` 的**这一页**与**总数**共用同一套。
+
+        共用一处，是为了让「翻页的条目」与「翻页的总数」永远算同一批记录。
+        ``owner_id`` 给 ``None`` 不限所有者，给空串就是只看公共日志。
+        """
+        clauses: list[ColumnElement[bool]] = []
+        if level is not None:
+            clauses.append(col(LogTable.level) == LogLevel.parse(level).name)
+        if logger_name is not None:
+            clauses.append(col(LogTable.logger_name) == logger_name)
+        if owner_id is not None:
+            clauses.append(col(LogTable.owner_id) == owner_id)
+
+        start_ts = normalize_timestamp(start)
+        if start_ts is not None:
+            clauses.append(col(LogTable.timestamp) >= start_ts)
+
+        end_ts = normalize_timestamp(end)
+        if end_ts is not None:
+            clauses.append(col(LogTable.timestamp) <= end_ts)
+
+        if query:
+            clauses.append(col(LogTable.message).contains(query))
+        return clauses
+
     async def search(
         self,
         *,
@@ -158,39 +199,36 @@ class SqlLogStore:
         owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
+    ) -> LogSearchResult:
         """按条件检索：级别 / 实例名 / 所有者精确匹配，正文模糊匹配，时间戳闭区间，按时间倒序。
 
         过滤与排序都交给数据库做（条件拼进 ``WHERE`` / ``ORDER BY``），不全表捞回来再筛。
         ``owner_id`` 给 ``None`` 不限所有者，给空串就是只看公共日志。
+
+        **一页 + 总数**：两条语句共用同一套 ``WHERE``（:meth:`_filter_clauses`），开在同一个
+        会话里 —— 总数只跟条件有关，与 ``limit`` / ``offset`` 无关，所以翻到第几页都算得出总页数。
         """
-        statement = select(LogTable)
-        if level is not None:
-            statement = statement.where(LogTable.level == LogLevel.parse(level).name)
-        if logger_name is not None:
-            statement = statement.where(LogTable.logger_name == logger_name)
-        if owner_id is not None:
-            statement = statement.where(LogTable.owner_id == owner_id)
-
-        start_ts = normalize_timestamp(start)
-        if start_ts is not None:
-            statement = statement.where(LogTable.timestamp >= start_ts)
-
-        end_ts = normalize_timestamp(end)
-        if end_ts is not None:
-            statement = statement.where(LogTable.timestamp <= end_ts)
-
-        if query:
-            statement = statement.where(col(LogTable.message).contains(query))
-
-        statement = (
-            statement.order_by(col(LogTable.timestamp).desc())
+        clauses = self._filter_clauses(
+            query=query,
+            level=level,
+            start=start,
+            end=end,
+            logger_name=logger_name,
+            owner_id=owner_id,
+        )
+        page_statement = (
+            select(LogTable)
+            .where(*clauses)
+            .order_by(col(LogTable.timestamp).desc())
             .offset(int(offset))
             .limit(int(limit))
         )
+        total_statement = select(func.count()).select_from(LogTable).where(*clauses)
         async with self._sessions() as session:
-            result = await session.exec(statement)
-            return [_to_record(row) for row in result]
+            result = await session.exec(page_statement)
+            records = [_to_record(row) for row in result]
+            total = int((await session.exec(total_statement)).one())
+        return LogSearchResult(records=records, total=total)
 
     # ------------------------------------------------------------------ 清理
     async def delete_before(self, before: TimestampLike) -> int:

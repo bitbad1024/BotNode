@@ -206,7 +206,8 @@ async def search_logs(
             )
         names = [DEFAULT_PROCESSOR]
 
-    records = await logger.search(
+    # 检索回的是「本页记录 + 命中总数」：这里只取本页
+    found = await logger.search(
         query=query,
         level=chosen_level,
         start=chosen_start,
@@ -217,5 +218,5 @@ async def search_logs(
         offset=offset,
         processors=names,
     )
-    data: list[LogData] = [_log_of(record) for record in records if _is_log(record)]
+    data: list[LogData] = [_log_of(record) for record in found.records if _is_log(record)]
     return ApiResponse[list[LogData]](data=data, trace_id=trace_id)
