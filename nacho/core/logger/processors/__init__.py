@@ -11,7 +11,7 @@
 处理机**不做路由也不做过滤**——路由由日志实例自己那份配置副本负责
 （见 :meth:`~nacho.core.logger.base.BaseLogger.child`），内容过滤由分发器持有的
 :class:`~nacho.core.logger.filters.LogFilter` 在查找分发时完成（挂载出口时通过
-``log_filter`` 传入，见 :meth:`~nacho.core.logger.base.BaseLogger.attach`）。
+``log_filter`` 传入，见 :meth:`~nacho.core.logger.base.BaseLogger.mount`）。
 """
 
 from .base import BaseLogProcessor

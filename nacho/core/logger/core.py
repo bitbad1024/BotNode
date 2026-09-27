@@ -1,13 +1,12 @@
-"""日志核心实例：实例化即可用，输出通道按需增量挂载。
+"""进程默认核心与模块挂载便捷入口。
 
-与 :class:`~nacho.core.logger.manager.LogManager` 的分工：
+日志系统本体就是 :class:`~nacho.core.logger.base.BaseLogger`（:data:`LogCore` 是它的
+别名，构造时默认带一路控制台输出）；本模块只负责**进程级那一层**：
 
-* :class:`LogCore` 是**日志系统本体**，不依赖任何全局状态，可以自由实例化
-  （一个进程里想要几套互不干扰的日志系统就建几个）；构造时默认挂一路控制台
-  输出，所以 :meth:`~nacho.core.logger.base.BaseLogger.start` 之后立刻就有
-  可见输出，不必先把文件 / 数据库后端准备好；
-* :class:`LogManager` 是**进程级门面**：管理一个默认核心，并按名字缓存子实例，
-  供 ``get_logger("api.robot")`` 这类调用使用。
+* :func:`default_core` / :func:`current_default_core` / :func:`set_default_core`：
+  进程默认核心的存取。业务模块不该各自新建核心，而应通过 :func:`mount_module`
+  把自己的出口挂到这个默认核心上，从而与主程序共用同一个队列与分发器；
+* :func:`mount_module`：给一个模块单独定去处（等价于发布一条具名路由）。
 
 典型用法（分阶段启动 + 增量挂载）::
 
@@ -20,106 +19,36 @@
     await logger.start()
 
     db = create_async_engine("sqlite+aiosqlite:///logs/nacho.db")
-    logger.attach(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
-    logger.attach(LocalFileLogProcessor("logs", prefix="nacho"))   # 按天分片：nacho-<日期>.log
+    logger.mount(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
+    logger.mount(LocalFileLogProcessor("logs", prefix="nacho"))   # 按天分片：nacho-<日期>.log
 
     logger.info("机器人已启动", robot_id="r-001")
     await logger.stop()                         # 自动冲刷余量
 
 模块解耦（推荐给子模块）::
 
-    from nacho.core.logger import attach_mount, get_logger, LocalFileLogProcessor
+    from nacho.core.logger import get_logger, LocalFileLogProcessor
+    from nacho.core.logger import mount_module
 
-    attach_mount("module_a", LocalFileLogProcessor("logs", prefix="module_a"))   # 名字相对核心 = nacho.module_a
-    get_logger("module_a").info("模块内日志")   # 只进 module_a 的片（外加控制台），不再进核心那份
+    mount_module("module_a", LocalFileLogProcessor("logs", prefix="module_a"))
+    get_logger("module_a").info("模块内日志")   # 只进 module_a 那份
 
-名字是纯字符串，**相对核心**（``"module_a"`` 即核心名下的 ``"nacho.module_a"``，写全名也行）。
-一个名字对应一个日志实例：它一旦挂了自层出口（如 ``attach_mount`` 给的出口），写日志就
-**只投自层那些**，不再带上核心的文件出口——即「一个模块一处落点」；没挂自层出口时，
-才整份走派生那一刻从核心复制的**落回配置**。所以 ``attach_mount`` 要**在取实例之前**调用，
-模块才拿得到这个出口。
+绑定才是常态：一段执行要把字段带上、要换去处、要定级别，都在
+:meth:`~nacho.core.logger.base.BaseLogger.bind` 上做 —— 没有派生实例，也没有「先挂载
+再取实例」的顺序坑。
 """
 from __future__ import annotations
 
-from typing import TextIO, override
-
-from .base import BaseLogger, LoggerStats
-from .filters import LevelFilter
-from .models import LogLevel
+from .base import BaseLogger
+from .models import Target
 from .processors.base import BaseLogProcessor
-from .processors.console import ConsoleLogProcessor
-from .queue import AsyncLogQueue, OverflowPolicy
-
-
-class CoreStats(LoggerStats):
-    """核心实例的运行状态快照（比基类多一个控制台开关）。"""
-
-    console: bool
-
-
-class LogCore(BaseLogger):
-    """日志核心实例：默认挂控制台，其余输出通道运行时挂载。"""
-
-    def __init__(
-        self,
-        name: str = "nacho",
-        *,
-        level: "LogLevel | str" = LogLevel.INFO,
-        console: bool = True,
-        console_stream: TextIO | None = None,
-        console_level: "LogLevel | str | None" = None,
-        console_color: bool = True,
-        processors: "list[BaseLogProcessor] | None" = None,
-        queue: AsyncLogQueue | None = None,
-        overflow_policy: "OverflowPolicy | str" = OverflowPolicy.DROP_OLDEST,
-        queue_maxsize: int = 10000,
-        dispatch_batch_size: int = 200,
-        dispatch_timeout: float = 0.2,
-    ) -> None:
-        """
-        :param console: 是否默认挂一路控制台输出，默认 ``True``。
-            库 / 服务端不想要任何标准输出时传 ``False``。
-        :param console_stream: 控制台输出流，默认 ``sys.stdout``。
-        :param console_level: 控制台最低输出级别，默认与 ``level`` 一致
-            （控制台通常只给人看，可以比文件出口更粗）。它会变成一个
-            :class:`~nacho.core.logger.filters.LevelFilter` 交给分发器，
-            由分发器在查找分发时过滤——控制台处理机自己不做过滤。
-        :param console_color: 控制台是否用 ANSI 颜色区分级别。
-        :param processors: 额外要挂的输出通道，等价于构造后逐个 :meth:`attach`。
-        """
-        super().__init__(
-            name,
-            level=level,
-            queue=queue,
-            processors=processors,
-            overflow_policy=overflow_policy,
-            queue_maxsize=queue_maxsize,
-            dispatch_batch_size=dispatch_batch_size,
-            dispatch_timeout=dispatch_timeout,
-        )
-        self._console_enabled: bool = console
-        if console:
-            # 控制台也是一个普通目标：级别判定交给挂在它上面的 LevelFilter（给出口挂一层
-            # 过滤，而不是让处理机自己认级别）。装配层已经挂过控制台就不重复挂一次。
-            if not any(isinstance(target.processor, ConsoleLogProcessor) for target in self.targets):
-                self.mount(
-                ConsoleLogProcessor(stream=console_stream, color=console_color),
-                log_filter=LevelFilter(level if console_level is None else console_level),
-            )
-
-    @property
-    def console_enabled(self) -> bool:
-        """构造时是否要求了默认控制台输出。"""
-        return self._console_enabled
-
-    @property
-    @override
-    def stats(self) -> CoreStats:
-        return CoreStats(**super().stats, console=self._console_enabled)
-
 
 #: 进程默认核心实例，由 :func:`default_core` 懒创建
-_default_core: LogCore | None = None
+_default_core: BaseLogger | None = None
+
+#: 日志系统本体（默认带一路控制台）。曾经它是一个带控制台的子类，如今构造函数把控制台
+#: 收进本体，这里留作别名，老代码 ``LogCore(...)`` 照旧可用。
+LogCore = BaseLogger
 
 
 def current_default_core() -> LogCore | None:
@@ -130,7 +59,7 @@ def current_default_core() -> LogCore | None:
 def default_core() -> LogCore:
     """获取进程默认核心，首次调用时按默认参数创建（带控制台输出）。
 
-    子模块不该各自新建核心实例，而应通过 :func:`attach_mount` 把输出挂到
+    子模块不该各自新建核心实例，而应通过 :func:`mount_module` 把输出挂到
     这个默认核心上，从而与主程序共用同一个队列与分发器。
     """
     global _default_core

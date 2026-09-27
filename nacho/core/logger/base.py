@@ -1,47 +1,37 @@
-"""异步日志系统基类。
+"""异步日志系统：一根 root + 若干绑定视图。
 
 职责划分
 ========
 
 * :meth:`BaseLogger.write`：**写入方法**。默认把日志推到消息队列（非阻塞），
   业务侧永远不会因为落盘 / 落库而卡住；
-* :meth:`BaseLogger.bind`：**默认字段**。得到一份「每条日志都自动带上某几个键」的视图
-  （:class:`BoundLogger`），适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
+* :meth:`BaseLogger.bind`：**绑定**。得到一份 :class:`BoundLogger` 视图：名字、出口、
+  级别、默认字段四样都能换，适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
   不用每个调用点手抄一遍；
-* 内部分发器从队列批量取日志，扇出给**这条日志所属实例**的处理机；
+* 内部分发器从队列批量取日志，**照着每条记录自带的目标**扇出给各处理机；
 * :meth:`BaseLogger.flush`：**刷新缓冲区方法**，刷新所有处理机的缓冲区；
 * :meth:`BaseLogger.search`：**检索方法**，聚合各处理机的检索结果。
 
-子实例 = 一个名字 + 一份「落回配置」+ 自己的出口
-================================================
+没有派生实例
+============
 
-:meth:`BaseLogger.child` 派生一个子实例：换一个名字，并把**当前实例实际生效的
-处理机列表与过滤器复制一份**作为自己的「落回配置」（``_inherited``），之后两者各改各的：
+曾经有一套「名字 -> 派生实例」的树：``get_logger("a.b")`` 会派生一个子实例，把父级
+的出口复制成「落回配置」（创建即冻结），于是**取实例的先后顺序会影响它能收到什么**
+—— 那个坑连同 ``child`` / ``attach`` / 落回配置一起删了。现在：
 
-* **自层覆盖**：子实例一旦自己 ``attach`` 过出口，写日志就**只投自层那些**，不再带上
-  父级 / 核心的文件出口（这就是「一个模块一个文件」）；标了
-  :attr:`~nacho.core.logger.processors.base.BaseLogProcessor.inherit_on_override`
-  的出口（控制台）例外，仍从落回配置里保留；
-* **无自层出口就回落**：子实例没挂过任何出口时，整份走落回配置——像 ``arm`` 这种
-  没单独挂文件的名字，照旧写进核心的 ``nacho.log``；
-* 落回配置**创建即冻结**：父实例之后再 ``attach`` / ``detach`` 都不回头影响已经建好的
-  子实例；子实例要变就自己 ``attach``；
-* 名字按 ``.`` 分层，``child("a.b")`` 等价于 ``child("a").child("b")``：逐段派生，
-  于是 ``a.b`` 的落回配置是 ``a`` 那一份。
+* **出口长在 root 身上**：构造给（``processors=``）或后来 :meth:`mount` 上去；
+* **一个模块另一处去处**就 :meth:`route` 发布一条具名路由（一个名字 = 一份绑定好的
+  视图）；不发布就跟着 root 那份走；
+* **目标随记录走**：写入那一刻目标就钉死在 :attr:`~nacho.core.logger.models
+  .LogRecord.targets` 上，分发只是照着投，不再查任何名字表。
 
-因为「自层覆盖」，写日志**只按记录所属实例自己那份解析结果投递**，不会沿名字向上
-回溯、也不会重复投给同一个处理机。
+过滤器
+======
 
-因此**顺序很重要**：落回配置在 ``child`` 创建（或第一次 ``get_logger``）时定格，
-要先挂出口、再取子实例。
-
-输出的挂载与过滤
-================
-
-* :meth:`attach` 把一个处理机挂到**本实例**（或用 ``name`` 指定某个派生实例）上；
-* ``log_filter``（:class:`~nacho.core.logger.filters.LogFilter`）挂在出口一侧、由
-  分发器持有：一条日志只有通过某个出口的过滤器才会被投递给它，被过滤掉的日志连
-  处理机的缓冲区都不进。过滤器因此不属于处理机——处理机只负责落地。
+``log_filter``（:class:`~nacho.core.logger.filters.LogFilter`）挂在**目标**一侧
+（:class:`~nacho.core.logger.models.Target`）：一条日志只有通过某个目标的过滤器才会
+被投递给它，被过滤掉的日志连处理机的缓冲区都不进。过滤器因此不属于处理机——处理机
+只负责落地。
 
 **两级缓冲，分工明确**：
 
@@ -62,11 +52,12 @@ from contextlib import suppress
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType, TracebackType
-from typing import TypedDict, cast, override
+from typing import TextIO, TypedDict, cast, override
 
-from .filters import DENY_ALL, LogFilter
+from .filters import DENY_ALL, LevelFilter, LogFilter
 from .models import LogLevel, LogRecord, LogSearchResult, Target, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
+from .processors.console import ConsoleLogProcessor
 from .queue import AsyncLogQueue, OverflowPolicy
 
 _fallback = logging.getLogger("nacho.core.logger")
@@ -95,6 +86,8 @@ class LoggerStats(TypedDict):
     name: str
     level: str
     running: bool
+    #: 构造时是否要求了默认控制台输出（运行时也能看出来「有没有那一路」）
+    console: bool
     queue: QueueStats
     processors: list[ProcessorStats]
     dropped: DroppedStats
@@ -138,6 +131,10 @@ class BaseLogger:
         level: LogLevel | str = LogLevel.INFO,
         queue: AsyncLogQueue | None = None,
         processors: "Sequence[Target | BaseLogProcessor] | None" = None,
+        console: bool = True,
+        console_stream: TextIO | None = None,
+        console_level: "LogLevel | str | None" = None,
+        console_color: bool = True,
         overflow_policy: OverflowPolicy | str = OverflowPolicy.DROP_OLDEST,
         queue_maxsize: int = 10000,
         dispatch_batch_size: int = 200,
@@ -146,6 +143,11 @@ class BaseLogger:
         """
         :param processors: 默认目标。元素可以是 :class:`Target`（带过滤器与优先级），
             也可以直接是处理机（等价于 ``Target(processor)``：全收、优先级 0）。
+        :param console: 是否默认挂一路控制台输出（默认 ``True``）：库 / 服务端不想
+            要任何标准输出就传 ``False``。已经挂过控制台就不重复挂。
+        :param console_level: 控制台最低级别，默认与 ``level`` 一致（控制台通常只给
+            人看，可以比文件出口更粗）。它会变成一个 :class:`LevelFilter` 挂在那个
+            目标上 —— 控制台处理机自己不做过滤。
         :param dispatch_batch_size: 分发器一次最多从队列取多少条。这是**交接批量**，
             不是攒批水位线——攒批由各处理机的 ``buffer_size`` 决定。
         :param dispatch_timeout: 队列取不到新日志时，最多再等多久就把手上这批先交出去。
@@ -176,6 +178,20 @@ class BaseLogger:
         self._routes: dict[str, BoundLogger] = {}
         if processors:
             self.mount(*processors)
+        #: 构造时是否要求了默认控制台输出（看得出「有没有那一路」）
+        self._console_enabled: bool = console
+        if console and self.get_processor(ConsoleLogProcessor.name) is None:
+            # 控制台也是一个普通目标：级别判定交给挂在它上面的 LevelFilter（给出口挂一层
+            # 过滤，而不是让处理机自己认级别）
+            self.mount(
+                ConsoleLogProcessor(stream=console_stream, color=console_color),
+                log_filter=LevelFilter(level if console_level is None else console_level),
+            )
+
+    @property
+    def console_enabled(self) -> bool:
+        """是否挂了默认的控制台输出。"""
+        return self._console_enabled
 
     # ------------------------------------------------------------------ 目标
     @property
@@ -302,32 +318,22 @@ class BaseLogger:
 
 
     def get_processor(self, name: str) -> BaseLogProcessor | None:
-        """按名称取已挂载的输出通道（在所有实例的配置里找）。"""
+        """按名称取已接纳的输出通道（在共享清单里找）。"""
         for processor in self._shared.registry:
             if processor.name == name:
                 return processor
         return None
 
-    # 兼容旧名：``inject`` 系列即 ``attach`` 系列
-
-
-
-
     @property
     def processor_registry(self) -> list[BaseLogProcessor]:
-        """全部实例已挂载处理机的清单本身（请勿直接修改）。
+        """所有已接纳处理机的清单本身（请勿直接修改）。
 
-        与 :attr:`processors` 的区别：这是所有派生实例的并集，
-        生命周期与刷新 / 检索都按它来。
+        与 :attr:`processors` 的区别：那是 root 的**默认目标**，这里还包含只在某个
+        ``bind`` 里出现过的出口 —— 生命周期与刷新 / 检索都按这份来。
         """
         return self._shared.registry
 
-
-    # ------------------------------------------------------------------ 通道静音
-
-
-
-    # ------------------------------------------------------------------ 派生实例
+    # ------------------------------------------------------------------ 名字
     def qualify(self, name: str) -> str:
         """把**相对名字**补全成本实例名下的完整名字：``LogCore("nacho").qualify("a1")`` ->
         ``"nacho.a1"``。
@@ -351,35 +357,24 @@ class BaseLogger:
         level: "LogLevel | str | None" = None,
         **defaults: object,
     ) -> BoundLogger:
-        """派生一份**绑定过的视图**：默认字段、名字、出口、级别都可以换，视图本身不登记。
+        """绑一份**视图**：默认字段、名字、出口、级别都可以换，视图本身不登记。
 
-        四个维度随用随给，每一项都是「给了就覆盖、没给就沿用来源那份」：
+        四个维度随用随给，每一项都是「给了就覆盖、没给就沿用 root 那份」：
 
-        :param name: 写进 ``record.logger_name`` 的名字（不给就用源实例的名字）。它是
-            **标签**，不是身份 —— 分发不再靠它查表（除了没绑目标的记录走老路径）；
+        :param name: 写进 ``record.logger_name`` 的名字（不给就用 root 的名字）。它是
+            **标签**，不是身份 —— 分发照着目标投，不查名字；
         :param targets: 这条路上每条日志投给哪些出口。元素可以是
             :class:`~nacho.core.logger.models.Target`（能带过滤器与优先级），也可以直接
             是处理机（等价于 ``Target(processor)``，全收、优先级 0）。给了的话，里面的
             处理机会被**接纳进共享清单**，停机照样 flush、``search`` / ``stats`` 照样
-            看得到 —— 不给就沿用源实例那份（解析方式和现在一致）；
-        :param level: 本视图的最低级别（不给就用源实例的）；
+            看得到 —— 不给就沿用 root 的默认目标；
+        :param level: 本视图的最低级别（不给就用 root 的）；
         :param defaults: 默认字段。``owner_id`` 也是可绑的一等字段，其余进 ``extra``；
             当次调用传了同名键就按当次的。
 
         详见 :class:`BoundLogger`。
         """
         return BoundLogger(self, name=name, targets=targets, level=level, **defaults)
-
-
-
-
-    def set_level(self, level: LogLevel | str) -> None:
-        """改**本实例**的级别。
-
-        级别是配置的一部分，同样「复制不回溯」：之后的子实例会复制到新级别，
-        已经建好的子实例维持自己那份不变。
-        """
-        self._level = LogLevel.parse(level)
 
 
 
@@ -720,6 +715,7 @@ class BaseLogger:
             "name": self.name,
             "level": self._level.name,
             "running": self._running,
+            "console": self._console_enabled,
             "queue": {
                 "size": self._queue.qsize(),
                 "maxsize": self._queue.maxsize,

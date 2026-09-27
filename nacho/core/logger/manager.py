@@ -1,22 +1,21 @@
-"""日志管理器：进程级门面，管理默认核心与按名缓存的子实例。
+"""日志管理器：进程级门面，管理默认核心与按名取回的那份绑定。
 
 这里是「便捷用法」的入口，底层就是 :class:`~nacho.core.logger.core.LogCore`：
-:func:`configure` 建立（或复用）进程默认核心，:func:`get_logger` 从它派生子实例，
-子实例与核心共享同一个消息队列与分发器。子实例自己挂了出口就只投那份（自层覆盖），
-没挂才整份走派生那一刻从核心**复制**的落回配置（创建即冻结），因此不需要重复启动分发器。
+:func:`configure` 建立（或复用）进程默认核心，:func:`get_logger` 按名字取一条
+**具名绑定**（:class:`~nacho.core.logger.base.BoundLogger`），与核心共享同一个
+队列与分发器，所以不需要重复启动分发器。
 
-重复调用 :func:`configure` 不再静默丢弃参数：新传入的处理机会增量挂到已有核心上，
+重复调用 :func:`configure` 不再静默丢弃参数：新传入的处理机会挂到已有核心上，
 同名的会被替换（换输出路径时用得上）。
 
-需要「一个模块一种输出路径」时，用
-:func:`~nacho.core.logger.core.attach_mount` 按模块挂载，或直接用
-:class:`~nacho.core.logger.core.LogCore` 建多套互不干扰的日志系统。
+需要「一个模块一种输出路径」时，用 :func:`~nacho.core.logger.core.mount_module`
+按模块发布一条具名路由。
 """
 from __future__ import annotations
 
 from typing import TextIO
 
-from .base import BaseLogger
+from .base import BaseLogger, BoundLogger
 from .core import LogCore, current_default_core, set_default_core
 from .models import LogLevel
 from .processors.base import BaseLogProcessor
@@ -24,10 +23,10 @@ from .queue import AsyncLogQueue, OverflowPolicy
 
 
 class LogManager:
-    """进程级日志管理器：管理默认核心与按名缓存的子实例。"""
+    """进程级日志管理器：管理默认核心与按名取回的绑定。"""
 
     def __init__(self) -> None:
-        self._loggers: dict[str, BaseLogger] = {}
+        self._loggers: dict[str, BaseLogger | BoundLogger] = {}
 
     @property
     def core(self) -> LogCore | None:
@@ -40,7 +39,7 @@ class LogManager:
         return current_default_core()
 
     @property
-    def loggers(self) -> dict[str, BaseLogger]:
+    def loggers(self) -> dict[str, BaseLogger | BoundLogger]:
         return dict(self._loggers)
 
     def configure(
@@ -88,19 +87,15 @@ class LogManager:
         self._loggers[name] = core
         return core
 
-    def get_logger(self, name: str | None = None) -> BaseLogger:
-        """获取日志实例；未配置时先按默认参数建立默认核心。
+    def get_logger(self, name: str | None = None) -> BaseLogger | BoundLogger:
+        """按名字取一条绑定；未配置时先按默认参数建立默认核心。
 
-        非核心名的实例是核心的 :meth:`~nacho.core.logger.base.BaseLogger.child`，
-        名字**相对核心**：``get_logger("api.robot")`` 得到的名字是 ``nacho.api.robot``
-        （核心名 ``nacho``）；写全名也行。名字按 ``.`` 逐段派生（``nacho.api`` ->
-        ``nacho.api.robot``），所以每一层的落回配置来自它上一层。
+        非核心名走 :meth:`~nacho.core.logger.base.BaseLogger.route`：名字**相对核心**
+        （``get_logger("api.robot")`` -> ``nacho.api.robot``，写全名也行），发布过就
+        一直返回同一份视图，没发布过就跟着 root 的默认目标走。
 
-        实例与核心共享同一个队列与分发器；落回配置是**派生那一刻复制的副本**，
-        创建即冻结：先 ``configure`` / ``attach`` 再 ``get_logger``，否则模块
-        拿不到之后才挂的出口。实例自己 :meth:`~nacho.core.logger.base.BaseLogger.attach`
-        了出口后就只投那份（自层覆盖），不再带上核心的文件出口。同名实例只建一次，
-        重复调用返回同一个对象。
+        视图与核心共享同一个队列与分发器，**没有落回配置、没有冻结**，所以也不再有
+        「先挂载、再取实例」的顺序要求。同名只建一次，重复调用返回同一个对象。
         """
         core: LogCore = current_default_core() or self.configure()
         if name is None or name == core.name:
@@ -166,6 +161,6 @@ def configure(
     )
 
 
-def get_logger(name: str | None = None) -> BaseLogger:
+def get_logger(name: str | None = None) -> BaseLogger | BoundLogger:
     """便捷函数，等价于 ``manager.get_logger(name)``。"""
     return manager.get_logger(name)

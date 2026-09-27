@@ -15,11 +15,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
-from typing import TYPE_CHECKING, cast, TypeAlias
+from typing import TYPE_CHECKING, Protocol, cast, TypeAlias
 
 if TYPE_CHECKING:  # 只为类型标注：运行期引入会成环（processors.base 反过来 import 本模块）
-    from .filters import LogFilter
     from .processors.base import BaseLogProcessor
+
+
+class FilterLike(Protocol):
+    """目标上那个过滤器的形状：只要有 ``match(record)`` 就算。
+
+    刻意只认形状不认 :class:`~nacho.core.logger.filters.LogFilter` 这个类：过滤器在自己
+    的模块里，反过来 import 本模块，按类引就成环了。
+    """
+
+    def match(self, record: LogRecord) -> bool: ...
 
 #: 允许的时间表示形式：时间戳 / ISO 字符串 / datetime / None
 TimestampLike: TypeAlias = int | float | str | datetime | None
@@ -82,7 +91,7 @@ class Target:
     """
 
     processor: BaseLogProcessor
-    log_filter: "LogFilter | None" = None
+    log_filter: "FilterLike | None" = None
     priority: int = 0
 
 
