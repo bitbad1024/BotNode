@@ -43,6 +43,7 @@
   --danger-ink: #b91c1c;
   --danger-bg: #fef2f2;
   --danger-line: #f7d2d2;
+  --danger-contrast: #ffffff;
   --success: #059669;
   --success-soft: rgba(5, 150, 105, 0.1);
   --warning: #d97706;
@@ -52,6 +53,10 @@
   --shadow-card: 0 1px 2px rgba(16, 16, 20, 0.04);
   --shadow-pop: 0 18px 44px -18px rgba(16, 16, 20, 0.22),
     0 4px 12px -8px rgba(16, 16, 20, 0.1);
+
+  /* 骨架屏 */
+  --skeleton-base: #e8eaef;
+  --skeleton-shine: rgba(255, 255, 255, 0.85);
 
   /* 圆角 */
   --r-sm: 8px;
@@ -86,7 +91,7 @@
 
   --text-1: #f4f4f6;
   --text-2: #a4a4ae;
-  --text-3: #6a6b76;
+  --text-3: #83848f;
 
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.17);
@@ -105,6 +110,7 @@
   --danger-ink: #fda4af;
   --danger-bg: rgba(225, 29, 72, 0.13);
   --danger-line: rgba(251, 113, 133, 0.28);
+  --danger-contrast: #1a0508;
   --success: #34d399;
   --success-soft: rgba(52, 211, 153, 0.12);
   --warning: #fbbf24;
@@ -113,4 +119,8 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 22px 52px -18px rgba(0, 0, 0, 0.78),
     0 6px 16px -10px rgba(0, 0, 0, 0.55);
+
+  /* 骨架屏 */
+  --skeleton-base: rgba(255, 255, 255, 0.06);
+  --skeleton-shine: rgba(255, 255, 255, 0.11);
 }

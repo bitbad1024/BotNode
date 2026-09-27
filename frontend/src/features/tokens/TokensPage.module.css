@@ -161,61 +161,12 @@
   justify-content: flex-end;
   gap: 8px;
 }
-.danger {
-  color: var(--danger);
-}
-.danger:hover {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-}
-
-/* 启用 / 停用开关 */
+/* 启用 / 停用开关：外框与圆点走公共类 .switch / .switch-knob，
+   这里只保留行内布局与状态标签 */
 .switchRow {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.switch {
-  position: relative;
-  flex-shrink: 0;
-  width: 38px;
-  height: 22px;
-  padding: 0;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  transition:
-    background 0.18s ease,
-    border-color 0.18s ease;
-}
-.switch:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.switch:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.switchDot {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--text-3);
-  transition:
-    transform 0.18s var(--ease-out),
-    background 0.18s ease;
-}
-.switchOn {
-  background: var(--success-soft);
-  border-color: color-mix(in srgb, var(--success) 35%, transparent);
-}
-.switchOn .switchDot {
-  transform: translateX(16px);
-  background: var(--success);
 }
 .switchOnLabel {
   font-size: 12px;
@@ -224,20 +175,8 @@
 }
 
 
-.empty {
-  padding: 28px 18px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-
-.loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 34px 4px;
-  color: var(--text-2);
-  font-size: 13px;
+.skeletonPad {
+  padding: 0 18px;
 }
 .failure {
   display: flex;

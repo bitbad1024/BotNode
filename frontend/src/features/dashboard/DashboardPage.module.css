@@ -1,13 +1,3 @@
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding-top: 90px;
-  color: var(--text-2);
-  font-size: 13.5px;
-}
-
 /* 欢迎 */
 .greet {
   margin-bottom: 24px;
@@ -31,6 +21,27 @@
 
 .card {
   padding: 22px 24px;
+}
+
+/* 加载骨架 */
+.skel-greet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.skel-module {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
 }
 
 .card-head {
@@ -125,6 +136,7 @@
   font-family: var(--font-mono);
   font-size: 22px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--accent);
   min-width: 72px;
   text-align: center;
@@ -221,6 +233,10 @@
   border-color: var(--accent-border);
   transform: translateY(-2px);
   box-shadow: var(--shadow-pop);
+}
+.module-card:focus-visible {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-card), 0 0 0 3px var(--accent-soft);
 }
 .module-icon {
   width: 44px;

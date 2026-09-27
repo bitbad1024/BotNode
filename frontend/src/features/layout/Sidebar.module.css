@@ -122,14 +122,6 @@
   overflow: hidden;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--success);
-  flex-shrink: 0;
-}
-
 /* ---------------------------------------------------------------------------
    桌面折叠：收成仅图标条
    --------------------------------------------------------------------------- */
@@ -161,6 +153,11 @@
   display: none;
 }
 
+/* 桌面折叠态：底部文案已藏，整块隐掉，避免只剩一条空分隔线 */
+.is-collapsed .footer {
+  display: none;
+}
+
 /* ---------------------------------------------------------------------------
    小屏：始终全宽抽屉，默认藏到左侧，is-open 滑入
    --------------------------------------------------------------------------- */
@@ -181,6 +178,9 @@
   .is-collapsed .nav-item,
   .is-collapsed .footer {
     justify-content: flex-start;
+  }
+  .is-collapsed .footer {
+    display: flex;
   }
   .is-collapsed .brand {
     padding: 0 20px;

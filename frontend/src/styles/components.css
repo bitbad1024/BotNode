@@ -21,10 +21,7 @@
   background: var(--nav-hover-bg);
   color: var(--text-1);
 }
-.icon-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
+/* 键盘焦点环由 base.css 的全局 :focus-visible 统一提供 */
 
 /* 按钮 */
 .btn {
@@ -50,6 +47,45 @@
   border-color: var(--text-3);
   color: var(--text-1);
   background: var(--surface-2);
+}
+
+/* 按钮语义变体（与 .btn 叠加使用）：
+   btn-primary       主操作（强调色实心）
+   btn-danger        破坏性（红色描边，悬停填实）
+   btn-danger-ghost  破坏性（静默，悬停才染红，适合行内操作） */
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-danger {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--danger-contrast);
+  border-color: var(--danger);
+}
+
+.btn-danger-ghost {
+  color: var(--danger);
+}
+.btn-danger-ghost:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+
+/* 禁用态：全站统一 */
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* 卡片 */
@@ -83,6 +119,161 @@
   background: var(--success-soft);
 }
 
+/* 空态 / 加载态占位盒 */
+.state-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 56px 0;
+  color: var(--text-3);
+  font-size: 13.5px;
+}
+
+/* 骨架屏：加载占位块，shimmer 扫光（明 / 暗主题自动适配） */
+.skeleton {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  background: var(--skeleton-base);
+  border-radius: var(--r-sm);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--skeleton-shine) 55%,
+    transparent
+  );
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+}
+
+/* 列表型骨架：每行「头像块 + 两行文字 + 右侧操作块」，横向内边距交给外层容器 */
+.skeleton-list {
+  display: flex;
+  flex-direction: column;
+}
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.skeleton-row:last-child {
+  border-bottom: none;
+}
+.skeleton-avatar {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+}
+.skeleton-lines {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skeleton-pill {
+  flex: none;
+  width: 70px;
+  height: 30px;
+  border-radius: var(--r-sm);
+}
+
+/* 空态：图标 + 标题 + 说明 + 可选操作，比一句灰字多给出下一步 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 44px 24px;
+  text-align: center;
+}
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 14px;
+  border-radius: 14px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+}
+.empty-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.empty-state-hint {
+  margin-top: 6px;
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+.empty-state-action {
+  margin-top: 16px;
+}
+
+/* 开关：全站统一尺寸 38×22、圆点 16。
+   - 按钮型：<button class="switch [switch-on]"><span class="switch-knob"/></button>
+   - 输入型：<label class="局部"><input hidden/><span class="switch">…</span></label> */
+.switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+.switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition:
+    transform 0.18s var(--ease-out),
+    background 0.18s ease;
+}
+.switch-on {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+.switch-on .switch-knob {
+  transform: translateX(16px);
+  background: var(--success);
+}
+
 /* Toast */
 .toast-layer {
   position: fixed;
@@ -96,6 +287,8 @@
 }
 .toast {
   pointer-events: auto;
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -137,4 +330,56 @@
 }
 .toast-close:hover {
   color: var(--text-1);
+}
+
+/* 自动消失进度条：从满到空走 duration，悬停与计时一起暂停 */
+.toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: left center;
+  animation: toast-progress linear forwards;
+}
+.toast-success .toast-progress {
+  background: var(--success);
+}
+.toast-error .toast-progress {
+  background: var(--danger);
+}
+.toast-info .toast-progress {
+  background: var(--accent);
+}
+.toast:hover .toast-progress {
+  animation-play-state: paused;
+}
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* 退场：先播完再卸载（时长与 Toast.tsx 的 LEAVE_MS 对齐） */
+.toast-leaving {
+  animation: toast-out 0.2s var(--ease-out) forwards;
+}
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast-leaving {
+    animation: none;
+  }
+  .toast-progress {
+    animation: none;
+    transform: scaleX(1);
+  }
 }

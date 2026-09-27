@@ -82,20 +82,6 @@
   margin-left: auto;
   padding-bottom: 1px;
 }
-.primaryBtn {
-  border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-contrast);
-}
-.primaryBtn:hover {
-  background: var(--accent-hover);
-  border-color: transparent;
-  color: var(--accent-contrast);
-}
-.primaryBtn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
 .status {
   display: inline-flex;
   align-items: center;

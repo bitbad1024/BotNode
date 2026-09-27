@@ -53,6 +53,18 @@ a {
   text-decoration: none;
 }
 
+/* 键盘焦点环：链接 / 按钮统一为强调色柔光环，仅键盘触发（:focus-visible），
+   鼠标点击不出现。输入类控件由各组件自行定义，避免与外层 wrapper 的
+   :focus-within 叠加成双光环。组件如需特殊焦点效果可自行覆盖。 */
+a:focus-visible,
+button:focus-visible,
+[role='button']:focus-visible,
+[role='switch']:focus-visible,
+[role='menuitem']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 ul,
 ol {
   list-style: none;

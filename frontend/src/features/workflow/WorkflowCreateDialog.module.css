@@ -8,7 +8,7 @@
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(8, 8, 12, 0.5);
+  background: var(--overlay);
   backdrop-filter: blur(2px);
   animation: overlayIn 0.16s ease;
 }
@@ -95,16 +95,6 @@
   display: flex;
   gap: 10px;
 }
-.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  color: #fff;
-}
-
 @keyframes overlayIn {
   from {
     opacity: 0;

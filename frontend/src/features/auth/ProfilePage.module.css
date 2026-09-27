@@ -78,6 +78,21 @@
   color: var(--text-1);
 }
 
+/* 加载骨架 */
+.skelLines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.skelAvatarRow {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 16px;
+}
+
 .divider {
   height: 1px;
   background: var(--border);
@@ -159,17 +174,6 @@
   flex-wrap: wrap;
 }
 
-.dangerBtn {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-}
-.dangerBtn:hover:not(:disabled) {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
-}
-
 /* 昵称表单 */
 .form {
   display: flex;
@@ -194,10 +198,13 @@
   border-radius: var(--r-md);
   background: var(--surface);
   padding: 0 12px;
-  transition: border-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .control:focus-within {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .controlIcon {
   color: var(--text-3);
@@ -223,14 +230,6 @@
   color: var(--danger);
 }
 
-.primaryBtn {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: transparent;
-}
-.primaryBtn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
 
 .busyInner {
   display: inline-flex;
@@ -241,15 +240,6 @@
   width: 13px;
   height: 13px;
   border-width: 2px;
-}
-
-.stateBox {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 56px 0;
-  color: var(--text-3);
-  font-size: 13.5px;
 }
 
 /* 预览卡片 */

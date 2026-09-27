@@ -49,10 +49,11 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* 底部状态 */}
+      {/* 底部：中性标识。
+          这里不声称任何服务状态——原先写死的「服务运行中」与真实后端无关，会误导人；
+          要真实在线指示需另接健康检查。 */}
       <div className={styles.footer}>
-        <span className={styles.statusDot} />
-        <span className={styles.footerText}>服务运行中</span>
+        <span className={styles.footerText}>nacho 控制台</span>
       </div>
     </aside>
   )

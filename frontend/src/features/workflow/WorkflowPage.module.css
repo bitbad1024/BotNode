@@ -41,16 +41,6 @@
   min-width: 0;
 }
 
-.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  color: #fff;
-}
-
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -110,27 +100,8 @@
   justify-content: flex-end;
   gap: 8px;
 }
-.danger {
-  color: var(--danger);
-}
-.danger:hover {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-}
-.empty {
-  padding: 28px 18px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-.loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 34px 4px;
-  color: var(--text-2);
-  font-size: 13px;
+.skeletonPad {
+  padding: 0 18px;
 }
 .failure {
   margin-bottom: 16px;
@@ -141,7 +112,8 @@
   color: var(--danger);
   font-size: 13px;
 }
-/* 运行开关：发布 ≠ 运行 —— 拨开才真的跑（默认关） */
+/* 运行开关：发布 ≠ 运行 —— 拨开才真的跑（默认关）。
+   轨道 / 圆点走公共类 .switch / .switch-knob，这里只留 label 布局与禁用态 */
 .switch {
   display: inline-flex;
   align-items: center;
@@ -155,35 +127,10 @@
   height: 1px;
   opacity: 0;
 }
-.switchTrack {
-  position: relative;
-  flex: none;
-  width: 34px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  transition: background 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
+.switch input:focus-visible + :global(.switch) {
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.switchDot {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--text-3);
-  transition: transform 0.18s var(--ease-out), background 0.18s var(--ease-out);
-}
-.switch input:checked + .switchTrack {
-  background: var(--success-soft);
-  border-color: var(--success);
-}
-.switch input:checked + .switchTrack .switchDot {
-  transform: translateX(16px);
-  background: var(--success);
-}
-.switch input:disabled + .switchTrack {
+.switch input:disabled + :global(.switch) {
   opacity: 0.45;
 }
 .switch input:disabled ~ .switchText {

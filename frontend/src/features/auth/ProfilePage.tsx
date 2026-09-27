@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { ApiRequestError, http } from '../../lib/http'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
+import { Skeleton } from '../../common/Skeleton'
 import { useAuth } from './authStore'
 import { useToast } from '../../common/Toast'
 import AvatarImage from './AvatarImage'
@@ -208,7 +209,39 @@ export default function ProfilePage() {
   if (!profile) {
     return (
       <div className={styles.page}>
-        <div className={styles.stateBox}>加载中…</div>
+        <div className={styles.head}>
+          <h1 className={styles.title}>个人设置</h1>
+          <p className={styles.sub}>修改你的昵称和头像，其他用户可以看到。</p>
+        </div>
+        <div className={styles.grid}>
+          <div className={styles.card}>
+            <Skeleton width={56} height={18} />
+            <div className={styles.skelAvatarRow}>
+              <Skeleton width={80} height={80} radius="50%" />
+              <div className={styles.skelLines}>
+                <Skeleton width="68%" height={13} />
+                <Skeleton width="42%" height={11} />
+                <Skeleton width={168} height={34} radius={10} />
+              </div>
+            </div>
+            <div className={styles.divider} />
+            <Skeleton width={48} height={18} />
+            <div className={styles.skelLines} style={{ marginTop: 16 }}>
+              <Skeleton width="100%" height={46} radius={11} />
+              <Skeleton width={128} height={40} radius={10} />
+            </div>
+          </div>
+          <div className={styles.card}>
+            <Skeleton width={56} height={18} />
+            <div className={styles.skelAvatarRow}>
+              <Skeleton width={64} height={64} radius="50%" />
+              <div className={styles.skelLines}>
+                <Skeleton width="62%" height={14} />
+                <Skeleton width="40%" height={11} />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
@@ -287,7 +320,7 @@ export default function ProfilePage() {
                 </button>
                 {hasAvatar && (
                   <button
-                    className={`btn ${styles.dangerBtn}`}
+                    className="btn btn-danger"
                     type="button"
                     disabled={removing}
                     onClick={() => setConfirm('avatar')}
@@ -345,7 +378,7 @@ export default function ProfilePage() {
               )}
             </div>
             <button
-              className={`btn ${styles.primaryBtn}`}
+              className="btn btn-primary"
               type="submit"
               disabled={!canSubmitNickname}
             >

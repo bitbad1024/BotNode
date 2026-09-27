@@ -8,7 +8,7 @@
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(8, 8, 12, 0.5);
+  background: var(--overlay);
   backdrop-filter: blur(2px);
   animation: overlayIn 0.16s ease;
 }
@@ -47,24 +47,6 @@
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-}
-.primaryBtn {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: transparent;
-}
-.primaryBtn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-.dangerBtn {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-}
-.dangerBtn:hover:not(:disabled) {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
 }
 .busyInner {
   display: inline-flex;
