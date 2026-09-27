@@ -258,7 +258,7 @@ async def load_published_workflows(
     scheduler: TaskManager,
     *,
     onebot: Any | None = None,
-    limit: int = 500,
+    page_size: int = 500,
 ) -> int:
     """启动时把**开着运行开关**的已发布工作流登记就绪，返回载入的开始节点数量。
 
@@ -267,27 +267,51 @@ async def load_published_workflows(
     :func:`register_published_workflow`）。发布 ≠ 运行：刚发布的（开关默认关）不在这里被跑。
     单个失败不影响其他工作流，异常只记 error。
 
+    **翻页翻到底，不给自己设总量上限**：以前是写死 ``limit=500`` 一次拉完 —— 超过 500 条的
+    那些工作流开机根本不会登记（静默漏跑，最难查的那种）。现在按 ``page_size`` 一页页拉
+    （``store.list`` 的 ``limit``/``offset``），拉空为止。
+
+    分页按 ``updated_at`` 倒序进行，而这一趟**只读库**（登记不写定义表，见
+    :func:`register_published_workflow`），所以遍历期间顺序稳定；即便如此，接口层此刻已经在
+    跑、可能并发保存暂存区（会改 ``updated_at``、把行挪到另一页），因此对同一 id 只登记一次
+    —— 重复登记无害，漏掉才致命。
+
     ``onebot``（OneBot 服务端，可选）由装配层传进来，跟着登记一起进到点闭包（见
     :func:`make_trigger`）；没接 OneBot 的场合不传，``onebot`` 节点跑到时当场报错。
     """
-    definitions = await store.list(owner_id=None, limit=limit)
     primed = 0
-    for definition in definitions:
-        if definition.status != "published" or definition.published_version <= 0:
-            continue
-        if not definition.enabled:
-            continue  # 已发布但开关关着：不登记、不跑（新发布默认就是这个状态）
-        try:
-            primed += await register_published_workflow(
-                definition.id, definition.published_version, store, scheduler, onebot=onebot
-            )
-        except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
-            _log().error(
-                "启动载入已发布工作流失败",
-                workflow_id=definition.id,
-                version=definition.published_version,
-                error=str(exc),
-            )
+    seen: set[str] = set()
+    offset = 0
+    while True:
+        definitions = await store.list(owner_id=None, limit=page_size, offset=offset)
+        if not definitions:
+            break
+        for definition in definitions:
+            if definition.id in seen:
+                continue
+            seen.add(definition.id)
+            if definition.status != "published" or definition.published_version <= 0:
+                continue
+            if not definition.enabled:
+                continue  # 已发布但开关关着：不登记、不跑（新发布默认就是这个状态）
+            try:
+                primed += await register_published_workflow(
+                    definition.id,
+                    definition.published_version,
+                    store,
+                    scheduler,
+                    onebot=onebot,
+                )
+            except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
+                _log().error(
+                    "启动载入已发布工作流失败",
+                    workflow_id=definition.id,
+                    version=definition.published_version,
+                    error=str(exc),
+                )
+        offset += len(definitions)
+        if len(definitions) < page_size:
+            break
     if primed:
         _log().info("已发布工作流启动载入完成", count=primed)
     return primed
