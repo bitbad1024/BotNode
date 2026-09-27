@@ -1042,7 +1042,11 @@ class TestLogSearch:
             headers = {"Authorization": f"Bearer {await token_of(client, ROBOT)}"}
 
             rows = await search_logs(client, headers)
-            assert [row.message for row in rows] == ["机器人干的活"]
+            # 登录那几步（登录成功 / 会话已开启）本身就是这个用户自己的操作，算他名下的
+            assert rows
+            assert all(row.owner_id == "u-robot" for row in rows)
+            assert "机器人干的活" in [row.message for row in rows]
+            assert "管理员干的活" not in [row.message for row in rows]
             assert rows[0].owner_id == "u-robot"
 
             forbidden = await client.get(

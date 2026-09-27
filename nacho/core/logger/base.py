@@ -1176,6 +1176,47 @@ class BoundLogger:
             **dict(self._defaults),
         )
 
+    # ------------------------------------------------------------------ 读（一律走源实例）
+    @property
+    def processor_registry(self) -> list[BaseLogProcessor]:
+        """所有已接纳的处理机（视图不持有自己的清单，看的是源实例那份）。"""
+        return self._logger.processor_registry
+
+    @property
+    def named_routes(self) -> dict[str, BoundLogger]:
+        """已发布的具名路由（视图不持有自己的表，看的是源实例那份）。"""
+        return self._logger.named_routes
+
+    async def flush(self) -> None:
+        """刷新所有出口的缓冲区（视图不持有任何自己的状态，交给源实例做）。"""
+        await self._logger.flush()
+
+    async def search(
+        self,
+        *,
+        query: str | None = None,
+        level: "LogLevel | str | None" = None,
+        start: "TimestampLike" = None,
+        end: "TimestampLike" = None,
+        logger_name: str | None = None,
+        owner_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        processors: "Sequence[str] | None" = None,
+    ) -> LogSearchResult:
+        """检索：走源实例那份（视图不持有任何自己的状态，查的东西与它无异）。"""
+        return await self._logger.search(
+            query=query,
+            level=level,
+            start=start,
+            end=end,
+            logger_name=logger_name,
+            owner_id=owner_id,
+            limit=limit,
+            offset=offset,
+            processors=processors,
+        )
+
     def _merge(
         self, owner_id: str, extra: Mapping[str, object]
     ) -> tuple[str, dict[str, object]]:

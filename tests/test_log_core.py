@@ -517,18 +517,20 @@ class TestModuleConfigCopy:
         finally:
             await core.stop()
 
-    async def test_attach_mount_uses_default_core_and_routes(self) -> None:
-        processor = CollectingProcessor()
-        attached = attach_mount("module_a", processor)
-        assert attached is processor
-        # 默认核心带控制台；module_a 那份配置是「核心配置的副本 + 本层挂的」
-        core = default_core()
-        assert core.routes["nacho.module_a"] == [core.get_processor("console"), processor]
+    async def test_module_route_gets_its_own_outlet(self) -> None:
+        """一个模块一条自己的出口：显式发布成具名路由，不再靠派生 / 落回配置。
 
+        名字只是标签：没发布的模块（``module_b``）跟着核心那份走，发布过的
+        （``module_a``）才有自己的去处。
+        """
+        processor = CollectingProcessor(name="module-file")
         core = default_core()
+        core.route("module_a", targets=[processor])
+        assert core.named_routes["nacho.module_a"] is core.route("module_a")
+
         await core.start()
         try:
-            get_logger("module_b").info("别的模块")  # 先发，保证它已被分发并丢弃
+            get_logger("module_b").info("别的模块")  # 没发布 -> 走核心那份
             get_logger("module_a").info("本模块")
             assert await wait_until(lambda: processor.received == ["本模块"]) is True
             assert processor.received == ["本模块"]
@@ -972,14 +974,16 @@ class TestManagerFacade:
         assert core.processors == [second]
         assert core.get_processor("local") is second
 
-    def test_get_logger_returns_shared_child(self) -> None:
+    def test_get_logger_returns_the_named_route(self) -> None:
+        """:func:`get_logger` 不再是「派生实例」，而是取一条**具名绑定**。"""
         core = configure("nacho", console=False)
         assert get_logger() is core
 
-        child = get_logger("api")
-        assert child is not core
-        assert child.queue is core.queue
-        assert get_logger("api") is child  # 同名会命中缓存
+        view = get_logger("api")
+        assert isinstance(view, BoundLogger)
+        assert view.name == "nacho.api"  # 相对核心的名字
+        assert get_logger("api") is view  # 同名就是同一份
+        assert view.processor_registry is core.processor_registry  # 共享同一批出口
 
     async def test_manager_start_stop_delegates_to_core(self) -> None:
         core = configure("nacho", console=False)

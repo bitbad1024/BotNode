@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .store import SqlWorkflowStore
 
 
-def _log() -> BaseLogger:
+def _log() -> BaseLogger | BoundLogger:
     """取本模块的日志实例：**用到才取**，不要在模块级取。
 
     模块级 ``_logger = get_logger(...)`` 是**导入即执行**的：谁先 import 这个模块，谁就顺手把

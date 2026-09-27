@@ -106,9 +106,10 @@ class LogManager:
         if name is None or name == core.name:
             return core
 
-        logger = core.child(name)
-        self._loggers[logger.name] = logger
-        return logger
+        # 就是一份「带名字的绑定」，没有派生实例这回事了
+        view = core.route(name)
+        self._loggers[view.name] = view
+        return view
 
     async def start(self) -> None:
         core = current_default_core()
