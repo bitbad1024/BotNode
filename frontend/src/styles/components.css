@@ -197,6 +197,42 @@
   border-radius: var(--r-sm);
 }
 
+/* 空态：图标 + 标题 + 说明 + 可选操作，比一句灰字多给出下一步 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 44px 24px;
+  text-align: center;
+}
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 14px;
+  border-radius: 14px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+}
+.empty-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.empty-state-hint {
+  margin-top: 6px;
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+.empty-state-action {
+  margin-top: 16px;
+}
+
 /* 开关：全站统一尺寸 38×22、圆点 16。
    - 按钮型：<button class="switch [switch-on]"><span class="switch-knob"/></button>
    - 输入型：<label class="局部"><input hidden/><span class="switch">…</span></label> */

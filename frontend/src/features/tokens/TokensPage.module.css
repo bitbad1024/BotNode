@@ -175,13 +175,6 @@
 }
 
 
-.empty {
-  padding: 28px 18px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-
 .skeletonPad {
   padding: 0 18px;
 }

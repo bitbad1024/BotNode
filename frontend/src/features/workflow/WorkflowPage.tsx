@@ -16,6 +16,7 @@ import {
 import { ApiRequestError } from '../../lib/http'
 import { useToast } from '../../common/Toast'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
+import { EmptyState } from '../../common/EmptyState'
 import { ListSkeleton } from '../../common/Skeleton'
 import {
   IconEdit,
@@ -171,7 +172,17 @@ export default function WorkflowPage() {
             <ListSkeleton rows={5} />
           </div>
         ) : items.length === 0 ? (
-          <div className={styles.empty}>还没有工作流，点右上角「新建」建一个吧</div>
+          <EmptyState
+            icon={IconEdit}
+            title="还没有工作流"
+            hint="用节点 + 连线编排自动化流程：开始节点支持时间触发（cron）与消息触发，搭配日志 / 测试节点。"
+            action={
+              <button className="btn btn-primary" onClick={() => setCreating(true)}>
+                <IconPlus size={15} />
+                新建工作流
+              </button>
+            }
+          />
         ) : (
           <table className={styles.table}>
             <thead>

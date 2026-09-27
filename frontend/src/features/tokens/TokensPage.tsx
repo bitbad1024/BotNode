@@ -10,7 +10,7 @@
  * - **停用 ≠ 吊销**：停用只是不许再连（记录还在，开关能拨回来，所以不弹二次确认），
  *   吊销是删记录、不可逆，所以那颗按钮要走确认。
  */
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   fetchClients,
   fetchTokens,
@@ -27,10 +27,12 @@ import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
 import { ListSkeleton } from '../../common/Skeleton'
+import { EmptyState } from '../../common/EmptyState'
 import {
   IconAlert,
   IconCopy,
   IconKey,
+  IconMonitor,
   IconPlus,
   IconRefresh,
   IconTrash,
@@ -150,6 +152,16 @@ export default function TokensPage() {
     }
   }
 
+  const accountInputRef = useRef<HTMLInputElement>(null)
+
+  /** 空态引导：把焦点送进签发表单，省得用户自己找 */
+  function focusIssueForm() {
+    const el = accountInputRef.current
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.focus({ preventScroll: true })
+  }
+
   return (
     <div className="rise">
       <header className={styles.head}>
@@ -189,6 +201,7 @@ export default function TokensPage() {
             </label>
             <input
               id="token-account"
+              ref={accountInputRef}
               className={styles.input}
               value={account}
               onChange={(e) => setAccount(e.target.value)}
@@ -246,7 +259,17 @@ export default function TokensPage() {
             <ListSkeleton rows={4} />
           </div>
         ) : clients.length === 0 ? (
-          <div className={styles.empty}>当前没有客户端连着</div>
+          <EmptyState
+            icon={IconMonitor}
+            title="当前没有客户端连着"
+            hint="签发令牌后，让 OneBot 实现用反向 WS 连上来，就会出现在这里。"
+            action={
+              <button className="btn" onClick={focusIssueForm}>
+                <IconKey size={15} />
+                去签发令牌
+              </button>
+            }
+          />
         ) : (
           <table className={styles.table}>
             <thead>
@@ -309,7 +332,17 @@ export default function TokensPage() {
             <ListSkeleton rows={5} />
           </div>
         ) : tokens.length === 0 ? (
-          <div className={styles.empty}>还没有任何令牌，客户端连上来会被拒</div>
+          <EmptyState
+            icon={IconKey}
+            title="还没有任何令牌"
+            hint="没有令牌，客户端连上来会被拒。先签发一个，明文只显示这一次。"
+            action={
+              <button className="btn btn-primary" onClick={focusIssueForm}>
+                <IconPlus size={15} />
+                签发令牌
+              </button>
+            }
+          />
         ) : (
           <table className={styles.table}>
             <thead>
