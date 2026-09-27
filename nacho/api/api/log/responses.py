@@ -19,6 +19,8 @@ class LogData(BaseModel):
 
     #: 记录编号（同一批日志去重、回头对某一条时用）
     record_id: str = Field(description="记录编号")
+    #: 自增序号（落库那份的插入顺序，本页就是按它倒序的）；查的是不留存序号的出口（如文件）时是 0
+    seq: int = Field(default=0, description="自增序号（插入顺序；0 = 该出口不留存序号）")
     #: Unix 时间戳（秒）；前端自己按本地时区格式化
     timestamp: float = Field(description="Unix 时间戳（秒）")
     #: 级别名：DEBUG / INFO / WARNING / ERROR / CRITICAL
@@ -40,7 +42,7 @@ class LogPage(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    #: 本页的日志（按时间倒序）
+    #: 本页的日志（按自增序号倒序，即插入顺序的倒序）
     items: list[LogData] = Field(description="本页日志条目")
     #: 命中条件的**总条数**（不受本页 ``limit`` / ``offset`` 限制）
     total: int = Field(description="命中总条数")

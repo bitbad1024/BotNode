@@ -231,7 +231,7 @@ export default function LogsPage() {
         <div>
           <h1 className={styles.title}>运行日志</h1>
           <p className={styles.sub}>
-            检索框架落库的运行日志，按时间倒序。
+            检索框架落库的运行日志，按写入顺序倒序（最新的在最前）。
             {isAdmin
               ? '你是管理员，可以查看所有人的日志并切换来源。'
               : '普通账号只显示自己名下的日志。'}
@@ -472,7 +472,10 @@ export default function LogsPage() {
                             {JSON.stringify(entry.extra, null, 2)}
                           </pre>
                         )}
-                        <div className={styles.recordId}>record_id · {entry.record_id}</div>
+                        <div className={styles.recordId}>
+                          {entry.seq > 0 && <>seq · {entry.seq} · </>}
+                          record_id · {entry.record_id}
+                        </div>
                       </div>
                     )}
                   </li>

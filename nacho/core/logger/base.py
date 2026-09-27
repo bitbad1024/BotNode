@@ -797,7 +797,11 @@ class BaseLogger:
         offset: int = 0,
         processors: Sequence[str] | None = None,
     ) -> LogSearchResult:
-        """检索方法：聚合所有（或指定）处理机的检索结果，按时间倒序返回，并带上总数。
+        """检索方法：聚合所有（或指定）处理机的检索结果，按**插入顺序**倒序返回，并带上总数。
+
+        排序键是 ``(timestamp, seq)``：落库那份按自增序号定序（同一毫秒的几条也有先后），
+        没有序号的出口（控制台 / 文件）退回时间戳；跨出口比较时时间戳是唯一共同尺度，序号
+        只用来把同一时刻的顺序钉死。
 
         ``records`` 是翻页后的这一页（跨出口按 ``record_id`` 去重）；
         ``total`` 是各出口同一条件下的命中数**相加、不去重** —— 默认只查单个出口（如落库
@@ -835,7 +839,8 @@ class BaseLogger:
             merged.extend(result.records)
             total += result.total
 
-        merged.sort(key=lambda item: item.timestamp, reverse=True)
+        # 时间倒序打底，同一时刻（时间戳粒度不够时，见 LogRecord.seq）用自增序号定序
+        merged.sort(key=lambda item: (item.timestamp, item.seq), reverse=True)
 
         # 多个处理机可能存有同一条日志（同一 record_id），按 id 去重
         deduped: list[LogRecord] = []

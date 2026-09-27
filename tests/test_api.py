@@ -881,6 +881,8 @@ class TestLogSearch:
             first = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=0)
             assert first.total == 5  # 总数不受本页大小限制
             assert len(first.items) == 2
+            # 本页按**自增序号**倒序，序号也随响应回来（5 条日志 → 最新的两条是 5、4）
+            assert [row.seq for row in first.items] == [5, 4]
 
             second = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=2)
             assert second.total == 5

@@ -13,7 +13,7 @@
     level / logger_name / owner_id    精确匹配（``owner_id=`` 给空串就是只看公共日志）
     query                            正文模糊匹配
     start / end                      时间**闭区间**，Unix 时间戳或 ISO 字符串都收
-    limit / offset                   分页（按时间倒序：先排序，再翻页）
+    limit / offset                   分页（按自增序号倒序：先排序，再翻页）
     processors                       只看某些出口（逗号分隔，**仅管理员**）；不写就只查落库那份
 
 响应给**一页**：``{ items, total }``——``items`` 是本页日志，``total`` 是条件命中的总条数
@@ -61,6 +61,7 @@ def _log_of(record: LogRecord) -> LogData:
     """把一条日志装成响应模型：字段原样搬，不在这里做格式化 / 过滤。"""
     return LogData(
         record_id=record.record_id,
+        seq=record.seq,
         timestamp=record.timestamp,
         level=record.level.name,
         logger_name=record.logger_name,
