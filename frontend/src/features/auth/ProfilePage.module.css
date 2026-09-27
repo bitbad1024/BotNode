@@ -166,7 +166,7 @@
 }
 .dangerBtn:hover:not(:disabled) {
   background: var(--danger);
-  color: #fff;
+  color: var(--danger-contrast);
   border-color: var(--danger);
 }
 

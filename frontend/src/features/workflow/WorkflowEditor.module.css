@@ -57,12 +57,12 @@
 }
 .primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
   border-color: var(--accent);
 }
 .primary:hover {
   background: var(--accent-hover);
-  color: #fff;
+  color: var(--accent-contrast);
 }
 
 /* 画布区占满，面板悬浮 */
@@ -120,7 +120,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-pop);
   z-index: 10;
 }
 .paletteTitle {
@@ -374,7 +374,7 @@
   padding: 0 4px;
   border-radius: 9px;
   background: var(--danger);
-  color: #fff;
+  color: var(--danger-contrast);
   font-size: 10.5px;
   font-weight: 700;
   display: flex;
@@ -418,7 +418,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-pop);
   z-index: 10;
 }
 .inspectorHead {

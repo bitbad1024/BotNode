@@ -43,6 +43,7 @@
   --danger-ink: #b91c1c;
   --danger-bg: #fef2f2;
   --danger-line: #f7d2d2;
+  --danger-contrast: #ffffff;
   --success: #059669;
   --success-soft: rgba(5, 150, 105, 0.1);
   --warning: #d97706;
@@ -105,6 +106,7 @@
   --danger-ink: #fda4af;
   --danger-bg: rgba(225, 29, 72, 0.13);
   --danger-line: rgba(251, 113, 133, 0.28);
+  --danger-contrast: #1a0508;
   --success: #34d399;
   --success-soft: rgba(52, 211, 153, 0.12);
   --warning: #fbbf24;

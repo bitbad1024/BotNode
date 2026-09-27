@@ -228,7 +228,7 @@ input[type='datetime-local'].control {
   background: var(--danger-bg);
 }
 .levelBadge[data-level='CRITICAL'] {
-  color: #fff;
+  color: var(--danger-contrast);
   border-color: var(--danger);
   background: var(--danger);
 }

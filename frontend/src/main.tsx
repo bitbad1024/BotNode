@@ -6,6 +6,7 @@ import { AuthProvider } from './features/auth/authStore'
 import { ToastProvider } from './common/Toast'
 import AppRouter from './app/AppRouter'
 
+import './styles/fonts.css'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/components.css'

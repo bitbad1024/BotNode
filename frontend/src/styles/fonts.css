@@ -1,0 +1,63 @@
+/* ==========================================================================
+   自托管字体：字体文件放在 public/fonts/ 下，构建时原样拷贝到 /fonts/。
+   文件缺失时浏览器会静默回退到 tokens.css 字体栈中的下一项，不影响可用性。
+   --------------------------------------------------------------------------
+   需要放入的文件（woff2 web 字体）：
+     Inter  —— 官方 release（v4.1）web/ 目录，可变字体：
+       InterVariable.woff2              正体（字重 100–900）
+       InterVariable-Italic.woff2       斜体（字重 100–900，可选）
+     JetBrains Mono —— 官方 release（v2.304）fonts/webfonts/ 目录，按字重拆分：
+       JetBrainsMono-Regular.woff2      400
+       JetBrainsMono-Medium.woff2       500
+       JetBrainsMono-SemiBold.woff2     600
+       JetBrainsMono-Bold.woff2         700
+   —— 若下载到的文件名不同，改成上面的名字，或同步修改下面的 url()。
+   ========================================================================== */
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable-Italic.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
