@@ -226,8 +226,24 @@ class BaseLogger:
         self._dispatch_timeout: float = dispatch_timeout
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._running: bool = False
+        #: 目标快照缓存（``None`` = 还没算过）：挂载 / 摘除 / 静音会把它置空，下次重算
+        self._cache_targets: tuple[Target, ...] | None = None
         self._shared.instances[name] = self
         self._sync_registry()
+
+    # ------------------------------------------------------------------ 目标
+    def current_targets(self) -> tuple[Target, ...]:
+        """**本实例现在要把日志投给谁**（目标 + 过滤器，按优先级排好）。
+
+        挂载 / 摘除 / 静音比写日志少得多，所以算一次缓存起来：写日志是热路径，不该
+        每次都把「这一层实际会投哪些出口 + 每个出口挂什么过滤器」重新拼一遍。
+        """
+        if self._cache_targets is None:
+            processors, filters = self._resolved_outputs(), self._filters
+            self._cache_targets = tuple(
+                Target(processor, filters.get(processor.name)) for processor in processors
+            )
+        return self._cache_targets
 
     # ------------------------------------------------------------------ 注册表
     def _sync_registry(self) -> None:
@@ -328,11 +344,13 @@ class BaseLogger:
                     continue
                 if not any(existing is processor for existing in instance._inherited):
                     instance._inherited.append(processor)
+                    instance._cache_targets = None  # 落回配置变了，目标快照作废
         if log_filter is None:
             target._filters.pop(processor.name, None)
         else:
             target._filters[processor.name] = log_filter
         self._sync_registry()
+        target._cache_targets = None
         return processor
 
     def attach_many(self, *processors: BaseLogProcessor) -> list[BaseLogProcessor]:
@@ -354,6 +372,7 @@ class BaseLogger:
                         bucket.remove(processor)
                         found = processor
             instance._filters.pop(name, None)
+            instance._cache_targets = None
         if found is not None:
             self._sync_registry()
         return found
@@ -412,10 +431,12 @@ class BaseLogger:
         调用也 harmless——将来就算这个通道经落回配置传进来，也会被这道闸拦住。
         """
         self._filters[processor_name] = DENY_ALL
+        self._cache_targets = None
 
     def unmute(self, processor_name: str) -> None:
         """解除 :meth:`mute`：恢复本实例对该出口的正常投递。"""
         self._filters.pop(processor_name, None)
+        self._cache_targets = None
 
     @property
     def muted(self) -> list[str]:
@@ -731,7 +752,14 @@ class BaseLogger:
         return LogLevel.parse(level) >= self.effective_level()
 
     def write(self, record: LogRecord) -> bool:
-        """写入方法：默认把日志推到消息队列（非阻塞），返回是否入队成功。"""
+        """写入方法：默认把日志推到消息队列（非阻塞），返回是否入队成功。
+
+        没带目标的记录在这里**补上本实例此刻的目标**：目标在写入那一刻定死，分发就只
+        剩「照着投」，不必再按名字反查实例表（那条老路只留给极少数手工塞进队列的
+        记录兜底）。
+        """
+        if record.targets is None:
+            record.targets = self.current_targets()
         try:
             return self._queue.put_nowait(record)
         except Exception:  # noqa: BLE001 - 写入永不抛出，避免拖垮业务

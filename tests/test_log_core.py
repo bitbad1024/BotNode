@@ -1163,6 +1163,39 @@ class TestBoundTargets:
     名字退回来只当标签用。
     """
 
+    async def test_every_record_carries_its_targets(self) -> None:
+        """普通入口写出的记录也带目标：目标在写入那一刻定死，分发只剩照着投。"""
+        outlet = RecordingProcessor()
+        core = LogCore(console=False, processors=[outlet])
+        await core.start()
+        try:
+            core.info("一条")
+            assert await wait_until(lambda: len(outlet.records) >= 1)
+
+            targets = outlet.records[0].targets
+            assert targets is not None
+            assert [target.processor for target in targets] == [outlet]
+        finally:
+            await core.stop()
+
+    async def test_target_snapshot_is_invalidated_on_mount(self) -> None:
+        """目标有缓存，但挂载 / 静音会把它作废旧重算 —— 缓存不能骗自己人。"""
+        first = CollectingProcessor(name="first")
+        second = CollectingProcessor(name="second")
+        core = LogCore(console=False, processors=[first])
+        await core.start()
+        try:
+            core.info("挂载前")
+            assert await wait_until(lambda: first.received == ["挂载前"]) is True
+
+            core.attach(second)
+            core.info("挂载后")
+            assert await wait_until(lambda: second.received == ["挂载后"]) is True
+            # 同一个核心，挂载前后目标不同：第二次投递要带上新出口
+            assert await wait_until(lambda: len(first.received) == 2) is True
+        finally:
+            await core.stop()
+
     async def test_bound_targets_override_name_based_routing(self) -> None:
         """绑了目标就只投绑定的那些：核心那份收不到（哪怕名字还是核心那条）。"""
         core_file = CollectingProcessor(name="core-file")
