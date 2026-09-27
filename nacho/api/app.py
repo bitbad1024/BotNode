@@ -22,9 +22,8 @@
 
 用法::
 
-    from nacho.api import ApiOptions, attach_api_logging, create_app
+    from nacho.api import ApiOptions, create_app
 
-    attach_api_logging(Path("logs/api.log"))          # 先挂载日志，再建应用
     app = create_app(ApiOptions.from_mapping(settings.api.model_dump()))
 
     # uvicorn nacho_api:app --port 18080

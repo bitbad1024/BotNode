@@ -21,7 +21,7 @@
 
     db = create_async_engine("sqlite+aiosqlite:///logs/nacho.db")
     logger.attach(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
-    logger.attach(LocalFileLogProcessor("logs/nacho.log"))
+    logger.attach(LocalFileLogProcessor("logs", prefix="nacho"))   # 按天分片：nacho-<日期>.log
 
     logger.info("机器人已启动", robot_id="r-001")
     await logger.stop()                         # 自动冲刷余量
@@ -30,12 +30,12 @@
 
     from nacho.core.logger import attach_mount, get_logger, LocalFileLogProcessor
 
-    attach_mount("module_a", LocalFileLogProcessor("logs/module_a.log"))   # 名字相对核心 = nacho.module_a
-    get_logger("module_a").info("模块内日志")   # 只进 module_a.log（外加控制台），不再进核心的 nacho.log
+    attach_mount("module_a", LocalFileLogProcessor("logs", prefix="module_a"))   # 名字相对核心 = nacho.module_a
+    get_logger("module_a").info("模块内日志")   # 只进 module_a 的片（外加控制台），不再进核心那份
 
 名字是纯字符串，**相对核心**（``"module_a"`` 即核心名下的 ``"nacho.module_a"``，写全名也行）。
-一个名字对应一个日志实例：它一旦挂了自层出口（如 ``attach_mount`` 给的文件），写日志就
-**只投自层那些**，不再带上核心的文件出口——即「一个模块一个文件」；没挂自层出口时，
+一个名字对应一个日志实例：它一旦挂了自层出口（如 ``attach_mount`` 给的出口），写日志就
+**只投自层那些**，不再带上核心的文件出口——即「一个模块一处落点」；没挂自层出口时，
 才整份走派生那一刻从核心复制的**落回配置**。所以 ``attach_mount`` 要**在取实例之前**调用，
 模块才拿得到这个出口。
 """

@@ -78,7 +78,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `nacho/api/__init__.py` | 接口层总览 + 公开导出（`create_app`、`ApiOptions`、各业务服务、错误体系、日志接入点）。分层约定写在模块 docstring 里。 |
 | `nacho/api/app.py` | 唯一装配入口 `create_app()`：建 `FastAPI` → 装访问日志中间件 → 注册异常处理器 → 挂路由并把各业务服务挂到 `app.state` 供注入。不传 `user_store` / `hasher` / `session_store` / `workflow_store` / `avatar_store` 也能跑（走默认实现）；`onebot` 不传时那组接口回 503。跨包的两块（OneBot / 工作流）只认协议，工作流的默认实现**按需 import**；头像存储默认落 `avatar_dir` 那个本地目录。 |
 | `nacho/api/options.py` | 接口层选项 `ApiOptions`（对应配置 `[api]`）。**不读配置文件**，靠 `from_mapping` 普通映射解耦；含 `DEFAULT_PREFIX`（`/api`）、`DEFAULT_TOKEN_TTL`（7200s，访问令牌滑动有效期）、`DEFAULT_REMEMBER_TTL`（30 天，「记住设备」的长期有效期）、`DEFAULT_AVATAR_DIR`（头像目录）与 `DEFAULT_AVATAR_MAX_BYTES`（2 MiB 上限）。 |
-| `nacho/api/logging.py` | 日志接入点：`api`（业务日志）/`api.access`（访问日志）两个 logger 名；`attach_api_logging()` 挂载文件出口。 |
+| `nacho/api/logging.py` | 日志接入点：`api`（业务日志）/`api.access`（访问日志）两个 logger 名 + `keep_access_off_audit()`（访问日志不进审计库）。**不挂文件出口** —— 文件是整进程一份、按天分片的，来源靠 `logger_name` 区分。 |
 
 ---
 

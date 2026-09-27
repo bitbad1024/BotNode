@@ -153,7 +153,7 @@ def _load(
 ) -> _ModelT:
     """校验一节配置：没写的项按字段默认值补，值写错就翻成 :class:`ConfigError`。
 
-    ``where`` 给出一项的完整出处（如 ``logging.file.path``），只在报错时用。
+    ``where`` 给出一项的完整出处（如 ``logging.file.dir``），只在报错时用。
     """
     try:
         return model.model_validate(section)
@@ -231,14 +231,28 @@ class DatabaseSettings(_Region):
 
 # ----------------------------------------------------------------------- 区域：[logging]
 class FileLogSettings(_Region):
-    """``[logging.file]``：本地文件出口。"""
+    """``[logging.file]``：本地文件出口 —— **一个目录、按天分片**。
+
+    片名是 ``<前缀>-<YYYY-MM-DD>[.<序号>].log``（``nacho-2026-09-28.log``）：跨天换日期片，
+    同一天里写满 ``rotate_minutes``（或顶到 ``max_bytes``）就加序号再开一片。模块的区分靠
+    记录里的 ``logger_name`` 字段，不靠文件 —— 所以整进程只有这一份文件出口。
+
+    配置里旧版的 ``path`` / ``backup_count`` 已经不用了（改成 ``dir`` + ``prefix`` +
+    ``keep_days``）：写在这里的旧键会被忽略（多余键不报错），但别指望它还起作用。
+    """
 
     enabled: bool = True  # false 就只有控制台
-    path: ConfigPath = BASE_DIR / "logs" / "nacho.log"
+    dir: ConfigPath = BASE_DIR / "logs"  # 放片的目录
+    prefix: str = ""  # 片名前缀；留空 = 用 [app].name
+    rotate_minutes: float = Field(
+        default=60.0, ge=0, description="不小于 0 的分钟数（0 = 只按天分片）"
+    )
+    max_bytes: int = Field(
+        default=20 * 1024 * 1024, ge=0, description="不小于 0 的整数（单片上限兜底，0 = 不限）"
+    )
+    keep_days: int = Field(default=14, ge=0, description="不小于 0 的天数（0 = 不清理）")
     buffer_size: int = Field(default=200, ge=1, description="不小于 1 的整数")
     flush_interval: float = Field(default=2.0, gt=0, description="大于 0 的秒数")
-    max_bytes: int = Field(default=20 * 1024 * 1024, ge=0, description="不小于 0 的整数")
-    backup_count: int = Field(default=3, ge=0, description="不小于 0 的整数")
 
 
 class DatabaseLogSettings(_Region):

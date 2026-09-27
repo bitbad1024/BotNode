@@ -50,7 +50,6 @@ from nacho.api import (  # noqa: E402
     SessionService,
     SqlSessionStore,
     SqlUserStore,
-    attach_api_logging,
     create_app,
     profile_of,
 )
@@ -702,13 +701,32 @@ class TestSecurity:
 
 
 # --------------------------------------------------------------------- 日志接入点
-class TestLogging:
-    """日志接入点：挂上文件出口之后，业务日志与访问日志都进同一个文件。"""
+def attach_file_outlet(
+    core: LogCore, directory: Path, *, prefix: str = "nacho"
+) -> LocalFileLogProcessor:
+    """挂一份文件出口（整进程一份、按天分片）；返回它，好去读落下来的片。"""
+    outlet = LocalFileLogProcessor(
+        directory, prefix=prefix, name="file", buffer_size=1, flush_interval=0
+    )
+    core.attach(outlet)
+    return outlet
 
-    async def test_api_and_access_logs_land_in_mounted_file(self, tmp_path: Path, core: LogCore) -> None:
-        log_path: Path = tmp_path / "api.log"
-        logger = attach_api_logging(log_path)
-        assert logger.name.endswith(API_LOGGER_NAME)
+
+def shard_records(outlet: LocalFileLogProcessor) -> list[dict[str, object]]:
+    """读某个文件出口**所有片**里的记录（一份日志可能不止一个片文件）。"""
+    rows: list[dict[str, object]] = []
+    for path in outlet.shards():
+        rows.extend(records_of(path))
+    return rows
+
+
+class TestLogging:
+    """日志接入：整进程一份文件出口，业务日志与访问日志都进那一份，靠 logger_name 分来源。"""
+
+    async def test_api_and_access_logs_land_in_the_file_outlet(
+        self, tmp_path: Path, core: LogCore
+    ) -> None:
+        outlet = attach_file_outlet(core, tmp_path)
         await asyncio.sleep(0.1)  # 等分发器把刚挂上的文件出口拉起来
 
         async with client_for(app_with()) as client:
@@ -717,18 +735,18 @@ class TestLogging:
         assert (ok.status_code, bad.status_code) == (200, 401)
 
         await drain(core)
-        records = records_of(log_path)
+        records = shard_records(outlet)
         messages: list[str] = [str(record["message"]) for record in records]
         names: set[str] = {str(record["logger_name"]) for record in records}
         assert "登录成功" in messages  # 业务日志（api）
         assert "登录失败" in messages  # 失败也留痕
         assert messages.count("请求完成") == 2  # 访问日志：两条请求各一条
         assert any(name.endswith(ACCESS_LOGGER_NAME) for name in names)
+        assert outlet.current_shard is not None  # 落点就是当天那片
 
     async def test_access_log_can_be_turned_off(self, tmp_path: Path, core: LogCore) -> None:
         """``access_log = false``：访问日志一条不记，业务日志照旧。"""
-        log_path: Path = tmp_path / "api.log"
-        attach_api_logging(log_path)
+        outlet = attach_file_outlet(core, tmp_path)
         await asyncio.sleep(0.1)  # 同上：等文件出口被拉起来
         async with client_for(
             create_app(
@@ -739,7 +757,7 @@ class TestLogging:
             assert (await client.post(LOGIN_PATH, json=ADMIN)).status_code == 200
 
         await drain(core)
-        messages: list[str] = [str(record["message"]) for record in records_of(log_path)]
+        messages: list[str] = [str(record["message"]) for record in shard_records(outlet)]
         assert "登录成功" in messages
         assert "请求完成" not in messages
 
@@ -749,8 +767,7 @@ class TestLogging:
         归属由鉴权依赖认出用户后挂到 ``request.state``，中间件读它填 ``owner_id``；登录接口
         本身不走鉴权，所以它那一行没有归属。
         """
-        log_path: Path = tmp_path / "api.log"
-        attach_api_logging(log_path)
+        outlet = attach_file_outlet(core, tmp_path)
         await asyncio.sleep(0.1)  # 同上：等文件出口被拉起来
 
         async with client_for(app_with()) as client:
@@ -758,13 +775,12 @@ class TestLogging:
             await client.get("/api/auth/me")  # 靠登录时发的 Cookie 认证 -> u-admin
 
         await drain(core)
-        access = [row for row in records_of(log_path) if str(row["message"]) == "请求完成"]
+        access = [row for row in shard_records(outlet) if str(row["message"]) == "请求完成"]
         assert [row["owner_id"] for row in access] == ["", "u-admin"]
 
     async def test_trace_id_ties_request_and_logs_together(self, tmp_path: Path, core: LogCore) -> None:
         """请求自带 X-Trace-Id 时沿用：日志里的编号与响应头、响应体一致。"""
-        log_path: Path = tmp_path / "api.log"
-        attach_api_logging(log_path)
+        outlet = attach_file_outlet(core, tmp_path)
         await asyncio.sleep(0.1)  # 同上：等文件出口被拉起来
         async with client_for(app_with()) as client:
             response = await client.post(LOGIN_PATH, json=ADMIN, headers={"X-Trace-Id": "trace-1"})
@@ -774,7 +790,7 @@ class TestLogging:
         await drain(core)
         traced: list[dict[str, object]] = [
             record
-            for record in records_of(log_path)
+            for record in shard_records(outlet)
             if str(record["message"]) in ("请求完成", "登录成功")
         ]
         assert traced
@@ -922,15 +938,16 @@ class TestLogSearch:
         起名叫 ``file``；日志系统对不认识的出口名**直接忽略**，于是表现成「一条都没有」。
         这里故意把出口起成别的名字（``nacho.file``），证明认的是**类型**、不是名字。
         """
-        path: Path = tmp_path / "nacho.log"
         core.attach(await memory_log_processor())
-        core.attach(
-            LocalFileLogProcessor(path, name="nacho.file", buffer_size=1, flush_interval=0)
+        outlet = LocalFileLogProcessor(
+            tmp_path, prefix="nacho", name="nacho.file", buffer_size=1, flush_interval=0
         )
-        await asyncio.sleep(0.1)  # 等分发器把这个出口拉起来
-        # 直接往文件里补一条（只有文件出口有它）：要测的是「查谁」，用哪条做标记最直接
+        core.attach(outlet)
+        # 直接起它（不等分发器那一轮）：这样落点当场就定得下来，好往当前那片塞一条标记记录
+        await outlet.start()
+        assert outlet.current_shard is not None
         only_in_file = LogRecord(message="只有文件里有这条", owner_id="u-fileonly")
-        path.write_text(
+        outlet.current_shard.write_text(
             json.dumps(only_in_file.to_dict(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
 
