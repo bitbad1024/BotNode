@@ -2937,6 +2937,47 @@ async def test_load_published_workflows_registers_crons() -> None:
         await engine.dispose()
 
 
+async def test_load_published_workflows_pages_past_the_first_page() -> None:
+    """启动载入**翻页翻到底**：超过一页的已发布工作流一个都不能漏。
+
+    回归：以前那边写死 ``limit=500`` 一次拉完，第 501 条起的工作流开机不会登记（静默漏跑）。
+    这里用 ``page_size=2`` 造 5 条，逼它翻三页（最后一页不满）。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import load_published_workflows
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    expected: list[str] = []
+    for i in range(5):
+        # 每条用各自的节点 id：任务名是 wf-<工作流 id>-<节点 id>，不该互相顶掉
+        graph = {
+            "nodes": [
+                node(f"s{i}", "start", trigger="time", cron="*/5 * * * *"),
+                node("e", "end"),
+            ],
+            "edges": [edge(f"s{i}", "e")],
+        }
+        definition = await store.create("u-admin", f"定时流 {i}")
+        await store.add_version(
+            definition,
+            graph_json=canonical_graph_json(graph),
+            checksum=graph_checksum(graph),
+        )
+        assert await store.publish(definition.id, 1) is not None
+        assert await store.set_enabled(definition.id, True) is not None
+        expected.append(f"wf-{definition.id}-s{i}")
+
+    scheduler = TaskManager()
+    try:
+        assert await load_published_workflows(store, scheduler, page_size=2) == 5
+        assert sorted(task.task_id for task in scheduler.list()) == sorted(expected)
+    finally:
+        await engine.dispose()
+
+
 async def test_load_published_workflows_passes_the_instance_strategy_to_the_scheduler() -> None:
     """实例策略是**工作流设置**（定义表里的列）：登记时传给调度器，单 / 多实例各按各的。
 
