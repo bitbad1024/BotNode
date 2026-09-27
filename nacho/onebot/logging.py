@@ -10,6 +10,11 @@
 :class:`~nacho.core.logger.processors.LocalFileLogProcessor`），接口层 / OneBot / 工作流的日志都进
 那一份，靠记录里的 ``logger_name``（``nacho.onebot`` 这类）区分来源 —— 想只看某一路就按
 ``logger_name`` 检索，不必再拆文件。
+
+**一个进程一份，前缀得各不相同**：片名由 ``[logging.file] prefix``（留空取 ``[app] name``）决定，
+同机跑两个进程时它们会往**同一片**追加（行互相交错），``keep_days`` 清理时还会把对方正在写的片
+当过期片删掉 —— 独立进程（例如主程序之外再单独跑 OneBot）要把 ``[app] name`` 或
+``[logging.file] prefix`` 设成别的值（``nacho-onebot`` 这类）。
 """
 from __future__ import annotations
 
