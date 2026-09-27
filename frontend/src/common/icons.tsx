@@ -160,6 +160,30 @@ export const IconChevronDown = (p: IconProps) => (
   </svg>
 )
 
+export const IconChevronLeft = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M14.5 6l-6 6 6 6" />
+  </svg>
+)
+
+export const IconChevronRight = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M9.5 6l6 6-6 6" />
+  </svg>
+)
+
+export const IconChevronsLeft = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12.5 6l-6 6 6 6M18 6l-6 6 6 6" />
+  </svg>
+)
+
+export const IconChevronsRight = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M11.5 6l6 6-6 6M6 6l6 6-6 6" />
+  </svg>
+)
+
 export const IconBolt = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M13 3L5 13h6l-1 8 8-10h-6l1-8z" />

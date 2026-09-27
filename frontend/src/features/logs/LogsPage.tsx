@@ -5,8 +5,8 @@
  * - 筛选（级别 / 模块 / 关键字 / 时间范围）点「查询」才生效，避免边打边请求；
  * - 管理员额外能选归属（全部 / 仅公共 / 指定 owner_id）与日志来源（落库 / 本机文件）；
  *   普通用户后端强制只返回自己名下的，UI 上直接不露出这两个条件；
- * - 响应带 total，底部做完整分页：可选当前页（页码下拉）与每页条数（20/50/100/200），
- *   上一页 / 下一页跳转；筛选条件 / 每页条数一变就回到第 1 页；
+ * - 响应带 total，底部走通用分页条（`common/Pagination`）：页码 + 首尾 / 上下页 + 跳页，
+ *   每页条数 20/50/100/200；筛选条件 / 每页条数一变就回到第 1 页，数据变少时页码自动收口；
  * - 可选 10 秒自动刷新：静默重拉当前页（新日志本来就出现在最前），不闪骨架屏。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -15,6 +15,7 @@ import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
 import { IconRefresh, IconChevronDown, IconAlert, IconClock } from '../../common/icons'
 import { ListSkeleton } from '../../common/Skeleton'
+import Pagination, { totalPagesOf } from '../../common/Pagination'
 import styles from './LogsPage.module.css'
 
 /** 每页条数可选项；后端单次上限 500，这里给几档常用值。 */
@@ -217,7 +218,12 @@ export default function LogsPage() {
     return n
   }, [draft, isAdmin])
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const totalPages = totalPagesOf(total, pageSize)
+
+  // 数据变少（比如自动刷新时旧日志被清理）会让当前页越界：收口到最后一页，别停在空白页
+  useEffect(() => {
+    setPage((current) => (current > totalPages ? totalPages : current))
+  }, [totalPages])
 
   return (
     <div className={styles.page}>
@@ -474,65 +480,16 @@ export default function LogsPage() {
               })}
             </ul>
 
-            <div className={styles.pager}>
-              <span className={styles.pagerTotal}>共 {total} 条</span>
-
-              <div className={styles.pagerControls}>
-                <label className={styles.pageSize}>
-                  每页
-                  <select
-                    className={styles.pageSelect}
-                    value={pageSize}
-                    onChange={(e) => changePageSize(Number(e.target.value))}
-                    disabled={loading}
-                  >
-                    {PAGE_SIZE_OPTIONS.map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                  条
-                </label>
-
-                <div className={styles.pagerNav}>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => goToPage(page - 1)}
-                    disabled={loading || page <= 1}
-                  >
-                    上一页
-                  </button>
-
-                  <label className={styles.pageJump}>
-                    第
-                    <select
-                      className={styles.pageSelect}
-                      value={page}
-                      onChange={(e) => goToPage(Number(e.target.value))}
-                      disabled={loading}
-                    >
-                      {Array.from({ length: totalPages }, (_, index) => index + 1).map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
-                      ))}
-                    </select>
-                    / {totalPages} 页
-                  </label>
-
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => goToPage(page + 1)}
-                    disabled={loading || page >= totalPages}
-                  >
-                    下一页
-                  </button>
-                </div>
-              </div>
-            </div>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onChange={goToPage}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              onPageSizeChange={changePageSize}
+              disabled={loading}
+              className={styles.pager}
+            />
           </>
         )}
       </section>

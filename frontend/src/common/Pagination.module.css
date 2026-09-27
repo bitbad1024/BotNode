@@ -1,0 +1,192 @@
+/* 通用分页条：左侧「共 N 条 / 每页条数」，右侧「首尾 + 上下页 + 页码 + 跳页」 */
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  padding: 14px 2px 18px;
+}
+
+/* ---------- 左侧：总数与每页条数 ---------- */
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.total {
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.total b {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.size {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* ---------- 右侧：导航与跳页 ---------- */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 首尾 / 上下页：方形图标按钮 */
+.step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.step:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+.step:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 页码：当前页实心强调色，其余悬停才浮出来 */
+.page {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.page:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.pageActive,
+.pageActive:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.page:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 省略号：不占按钮位，只是「中间还有」的视觉提示 */
+.gap {
+  min-width: 20px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.jumpLabel {
+  white-space: nowrap;
+}
+.jumpInput {
+  width: 50px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.jumpInput:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.jumpInput:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 下拉（每页条数）：与筛选区控件同一副皮 */
+.select {
+  padding: 5px 26px 5px 9px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background-color: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 52%,
+    calc(100% - 10px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.select:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 窄屏：两组各自铺满一行，居中排 */
+@media (max-width: 720px) {
+  .pager {
+    justify-content: center;
+  }
+  .nav {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
