@@ -21,6 +21,7 @@ import {
   IconChevronDown,
 } from '../../common/icons'
 import { backendUrl } from '../../config/env'
+import { Skeleton } from '../../common/Skeleton'
 import styles from './DashboardPage.module.css'
 
 const MODULE_ICONS = {
@@ -110,9 +111,39 @@ export default function DashboardPage() {
 
   if (loading || !user) {
     return (
-      <div className={styles.loading}>
-        <span className="spinner" />
-        <span>正在加载工作台…</span>
+      <div>
+        <div className={styles.skelGreet}>
+          <Skeleton width={230} height={26} />
+          <Skeleton width={340} height={13} />
+        </div>
+        <section className={styles.grid}>
+          {[0, 1].map((i) => (
+            <div key={i} className={`card ${styles.card}`}>
+              <Skeleton width={88} height={15} />
+              <div className={styles.skelLines} style={{ marginTop: 16 }}>
+                <Skeleton width="70%" height={12} />
+                <Skeleton width="52%" height={12} />
+                <Skeleton width="64%" height={12} />
+              </div>
+            </div>
+          ))}
+        </section>
+        <section className={styles.modules}>
+          <div className={styles.sectionHead}>
+            <Skeleton width={92} height={16} />
+          </div>
+          <div className={styles.moduleGrid}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className={`card ${styles.skelModule}`}>
+                <Skeleton width={44} height={44} radius={12} />
+                <div className={styles.skelLines}>
+                  <Skeleton width="58%" height={13} />
+                  <Skeleton width="84%" height={11} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     )
   }

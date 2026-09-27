@@ -16,6 +16,7 @@ import {
 import { ApiRequestError } from '../../lib/http'
 import { useToast } from '../../common/Toast'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
+import { ListSkeleton } from '../../common/Skeleton'
 import {
   IconEdit,
   IconPlus,
@@ -166,9 +167,8 @@ export default function WorkflowPage() {
           </button>
         </div>
         {loading ? (
-          <div className={styles.loading}>
-            <span className="spinner" />
-            正在加载…
+          <div className={styles.skeletonPad}>
+            <ListSkeleton rows={5} />
           </div>
         ) : items.length === 0 ? (
           <div className={styles.empty}>还没有工作流，点右上角「新建」建一个吧</div>

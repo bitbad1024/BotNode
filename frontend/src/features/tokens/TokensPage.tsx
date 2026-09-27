@@ -26,6 +26,7 @@ import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
+import { ListSkeleton } from '../../common/Skeleton'
 import {
   IconAlert,
   IconCopy,
@@ -241,9 +242,8 @@ export default function TokensPage() {
           <h3 className={styles.panelTitle}>在线客户端</h3>
         </div>
         {loading ? (
-          <div className={styles.loading}>
-            <span className="spinner" />
-            正在加载…
+          <div className={styles.skeletonPad}>
+            <ListSkeleton rows={4} />
           </div>
         ) : clients.length === 0 ? (
           <div className={styles.empty}>当前没有客户端连着</div>
@@ -305,9 +305,8 @@ export default function TokensPage() {
           <h3 className={styles.panelTitle}>令牌列表</h3>
         </div>
         {loading ? (
-          <div className={styles.loading}>
-            <span className="spinner" />
-            正在加载…
+          <div className={styles.skeletonPad}>
+            <ListSkeleton rows={5} />
           </div>
         ) : tokens.length === 0 ? (
           <div className={styles.empty}>还没有任何令牌，客户端连上来会被拒</div>

@@ -130,6 +130,73 @@
   font-size: 13.5px;
 }
 
+/* 骨架屏：加载占位块，shimmer 扫光（明 / 暗主题自动适配） */
+.skeleton {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  background: var(--skeleton-base);
+  border-radius: var(--r-sm);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--skeleton-shine) 55%,
+    transparent
+  );
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+}
+
+/* 列表型骨架：每行「头像块 + 两行文字 + 右侧操作块」，横向内边距交给外层容器 */
+.skeleton-list {
+  display: flex;
+  flex-direction: column;
+}
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.skeleton-row:last-child {
+  border-bottom: none;
+}
+.skeleton-avatar {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+}
+.skeleton-lines {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skeleton-pill {
+  flex: none;
+  width: 70px;
+  height: 30px;
+  border-radius: var(--r-sm);
+}
+
 /* 开关：全站统一尺寸 38×22、圆点 16。
    - 按钮型：<button class="switch [switch-on]"><span class="switch-knob"/></button>
    - 输入型：<label class="局部"><input hidden/><span class="switch">…</span></label> */

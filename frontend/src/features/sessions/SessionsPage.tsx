@@ -15,6 +15,7 @@ import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
 import { useToast } from '../../common/Toast'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
+import { ListSkeleton } from '../../common/Skeleton'
 import {
   IconRefresh,
   IconMonitor,
@@ -138,10 +139,7 @@ export default function SessionsPage() {
 
       <section className={`card ${styles.listCard}`}>
         {loading ? (
-          <div className="state-box">
-            <span className="spinner" />
-            <span>正在加载登录设备…</span>
-          </div>
+          <ListSkeleton rows={5} />
         ) : sessions.length === 0 ? (
           <div className="state-box">
             <IconDevices size={28} className={styles.stateIcon} />

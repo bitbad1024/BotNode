@@ -78,6 +78,21 @@
   color: var(--text-1);
 }
 
+/* 加载骨架 */
+.skelLines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.skelAvatarRow {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 16px;
+}
+
 .divider {
   height: 1px;
   background: var(--border);

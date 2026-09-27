@@ -54,6 +54,10 @@
   --shadow-pop: 0 18px 44px -18px rgba(16, 16, 20, 0.22),
     0 4px 12px -8px rgba(16, 16, 20, 0.1);
 
+  /* 骨架屏 */
+  --skeleton-base: #e8eaef;
+  --skeleton-shine: rgba(255, 255, 255, 0.85);
+
   /* 圆角 */
   --r-sm: 8px;
   --r-md: 10px;
@@ -115,4 +119,8 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 22px 52px -18px rgba(0, 0, 0, 0.78),
     0 6px 16px -10px rgba(0, 0, 0, 0.55);
+
+  /* 骨架屏 */
+  --skeleton-base: rgba(255, 255, 255, 0.06);
+  --skeleton-shine: rgba(255, 255, 255, 0.11);
 }

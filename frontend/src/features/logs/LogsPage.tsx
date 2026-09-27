@@ -13,6 +13,7 @@ import { searchLogs, LOG_LEVELS, type LogEntry } from './logsApi'
 import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
 import { IconRefresh, IconChevronDown, IconAlert, IconClock } from '../../common/icons'
+import { ListSkeleton } from '../../common/Skeleton'
 import styles from './LogsPage.module.css'
 
 /** 每页条数；后端上限 500，这里取 50，靠「加载更多」翻。 */
@@ -371,10 +372,7 @@ export default function LogsPage() {
       {/* 结果区 */}
       <section className={`card ${styles.listCard}`}>
         {loading ? (
-          <div className="state-box">
-            <IconRefresh size={18} className={styles.spin} />
-            正在检索日志…
-          </div>
+          <ListSkeleton rows={6} />
         ) : error ? (
           <div className={styles.errorBox} role="alert">
             <IconAlert size={20} className={styles.errorIcon} />

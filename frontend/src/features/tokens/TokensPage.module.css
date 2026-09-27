@@ -182,13 +182,8 @@
   font-size: 13px;
 }
 
-.loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 34px 4px;
-  color: var(--text-2);
-  font-size: 13px;
+.skeletonPad {
+  padding: 0 18px;
 }
 .failure {
   display: flex;
