@@ -195,6 +195,47 @@ class TestErrors:
         assert str(info.value).startswith(prefix)
 
 
+class TestLegacyKeys:
+    """旧版键直接在报错里指路：静默忽略会变成「配了没生效」，比报错难查得多。"""
+
+    @pytest.mark.parametrize(
+        ("text", "prefix", "replacement"),
+        [
+            ('[logging.file]\npath = "logs/nacho.log"\n', "logging.file.path", "dir"),
+            ("[logging.file]\nbackup_count = 3\n", "logging.file.backup_count", "keep_days"),
+        ],
+    )
+    def test_file_outlet_rejects_legacy_keys(
+        self, tmp_path: Path, text: str, prefix: str, replacement: str
+    ) -> None:
+        with pytest.raises(ConfigError) as info:
+            Settings.load(write(tmp_path, text))
+        message = str(info.value)
+        assert message.startswith(prefix)  # 报在它真正所处的节上
+        assert replacement in message  # 顺手告诉人该改成哪个键
+
+    def test_file_outlet_reads_the_new_shape(self, tmp_path: Path) -> None:
+        """新形状照常读：目录 + 前缀 + 保留天数 + 检索窗口。"""
+        settings = Settings.load(
+            write(
+                tmp_path,
+                dedent(
+                    """\
+                    [logging.file]
+                    dir = "logs/here"
+                    prefix = "nacho-web"
+                    keep_days = 3
+                    search_days = 0
+                    """
+                ),
+            )
+        )
+        file_log = settings.logging.file
+        assert file_log.dir == BASE_DIR / "logs" / "here"
+        assert file_log.prefix == "nacho-web"
+        assert (file_log.keep_days, file_log.search_days) == (3, 0)
+
+
 class TestTemplate:
     def test_example_template_loads(self) -> None:
         """模板必须始终可加载：它既是文档，也是新环境的起点。"""
