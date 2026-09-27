@@ -296,7 +296,7 @@ class TestProfileService:
 
         core = LogCore(console=False, dispatch_timeout=0.01)
         await core.start()
-        core.attach(_Collector())
+        core.mount(_Collector())
         try:
             service = ProfileService(
                 await memory_user_store(),

@@ -151,9 +151,9 @@
 from .base import BaseLogger, BoundLogger
 from .core import (
     LogCore,
-    attach_mount,
     current_default_core,
     default_core,
+    mount_module,
     set_default_core,
 )
 from .filters import LevelFilter, LogFilter
@@ -177,7 +177,7 @@ __all__ = [
     "configure",
     "get_logger",
     "manager",
-    "attach_mount",
+    "mount_module",
     "default_core",
     "current_default_core",
     "set_default_core",

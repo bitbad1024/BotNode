@@ -98,8 +98,11 @@ class LogCore(BaseLogger):
             dispatch_timeout=dispatch_timeout,
         )
         self._console_enabled: bool = console
-        if console and self.get_processor(ConsoleLogProcessor.name) is None:
-            self.attach(
+        if console:
+            # 控制台也是一个普通目标：级别判定交给挂在它上面的 LevelFilter（给出口挂一层
+            # 过滤，而不是让处理机自己认级别）。装配层已经挂过控制台就不重复挂一次。
+            if not any(isinstance(target.processor, ConsoleLogProcessor) for target in self.targets):
+                self.mount(
                 ConsoleLogProcessor(stream=console_stream, color=console_color),
                 log_filter=LevelFilter(level if console_level is None else console_level),
             )
@@ -146,27 +149,20 @@ def set_default_core(core: LogCore | None) -> None:
     _default_core = core
 
 
-def attach_mount(
+def mount_module(
     name: str,
-    processor: BaseLogProcessor,
+    processor: "Target | BaseLogProcessor",
     *,
     core: LogCore | None = None,
-) -> BaseLogProcessor:
-    """子模块挂载自己的日志出口（模块解耦的便捷入口）。
+) -> None:
+    """给一个模块单独定去处：发布一条具名路由（名字**相对默认核心**）。
 
-    等价于 ``core.attach(processor, name=core.qualify(name), replace=True)``：名字**相对核心**
-    （``"module_a"`` -> 核心名下的 ``"nacho.module_a"``，写全名也行），处理机写进该名字
-    实例的**自层出口**；该实例写日志就只投这份（外加控制台），不再带上核心的文件出口，
-    因此各模块的输出文件互不混杂。同一个名字永远对应同一个实例（有则载入），重复挂载
-    会替换同名通道（模块热重载 / 换路径）。
+    等价于给 ``core.route(name)`` 绑上这份目标并发布：那条路上的日志从此只投这里，
+    不再跟着 root 的默认目标走。
 
-    注意落回配置是**派生时复制、创建即冻结**的：模块实例一旦被 ``get_logger`` / ``child``
-    取出来，之后再 ``attach_mount`` 也不会影响它已定格的落回配置，所以先挂载、再取实例。
-
-    :param name: 模块名字，**相对默认核心**：``"module_a"`` 对应 ``"nacho.module_a"``
-        这个实例（写成 ``"nacho.module_a"`` 这样的全名也行）。
-    :param processor: 要挂载的处理机，建议先构造好再传进来。
-    :param core: 挂到哪个核心实例；默认进程默认核心，见 :func:`default_core`。
+    :param name: 模块名字，``"module_a"`` 即 ``"nacho.module_a"``（写全名也行）。
+    :param processor: 这条路的出口。
+    :param core: 挂到哪个核心；默认进程默认核心，见 :func:`default_core`。
     """
     target: LogCore = core if core is not None else default_core()
-    return target.attach(processor, name=target.qualify(name), replace=True)
+    target.route(name, targets=[processor])

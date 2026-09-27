@@ -66,8 +66,8 @@ class LogManager:
         """
         existing: LogCore | None = current_default_core()
         if existing is not None:
-            for processor in processors or []:
-                _ = existing.attach(processor, replace=True)
+            # 重复 configure：同名换成新的（换输出路径 / 热重载），其余追加
+            existing.mount(*(processors or []), replace=True)
             return existing
 
         core = LogCore(

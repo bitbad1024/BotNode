@@ -23,7 +23,7 @@
 """
 from __future__ import annotations
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, BoundLogger, current_default_core, get_logger
 
 #: api 层业务日志的名字（**相对核心**：核心名 nacho -> nacho.api）
 API_LOGGER_NAME: str = "api"
@@ -43,18 +43,24 @@ def api_logger(name: str = API_LOGGER_NAME) -> BaseLogger:
     return get_logger(name)
 
 
-def keep_access_off_audit(channel: str = DATABASE_CHANNEL_NAME) -> BaseLogger:
-    """访问日志只进文件与控制台、**不进审计库**：把 ``api.access`` 实例的落库通道静音。
+def keep_access_off_audit(channel: str = DATABASE_CHANNEL_NAME) -> BoundLogger:
+    """访问日志只进文件与控制台、**不进审计库**：把 ``api.access`` 那条路上的落库出口堵上。
 
-    落库出口是**全局留存出口**，会跟着落回配置进到每一路日志；而访问日志一次请求一条、
-    只配给人翻文件，进了库只会把「谁在什么时候干了什么」的审计事件（登录、开会话、
-    签发 / 吊销令牌……）淹掉。落库的那份要当审计时间线用（网页 ``/logs`` 查的就是它），
-    所以在装配时给 ``api.access`` 这份实例配置把库通道 mute 掉：文件与控制台照常收，
+    访问日志一次请求一条、只配给人翻文件，进了库只会把「谁在什么时候干了什么」的审计
+    事件（登录、开会话、签发 / 吊销令牌……）淹掉 —— 落库那份要当审计时间线用（网页
+    ``/logs`` 查的就是它），所以装配时给这条具名路由堵住库通道：文件与控制台照常收，
     只有库不收。
 
-    :param channel: 要静音的通道名，默认落库出口那个（``"database"``）。
-    :return: 静音后的访问日志实例（``api.access``）。
+    ``mute`` 不改任何共享状态，只产出一份新视图；这里把它**发布**回去，之后按同一个
+    名字取到的就是堵过的那份。
+
+    :param channel: 要堵掉的出口名，默认落库那份（``"database"``）。
+    :return: 堵过之后的那条路由（``api.access``）。
     """
     logger = api_logger(ACCESS_LOGGER_NAME)
-    logger.mute(channel)  # mute 是就地改过滤器（返回 None），logger 本身照旧返回
-    return logger
+    muted = logger.mute(channel)
+    if isinstance(logger, BoundLogger):
+        core = current_default_core()
+        if core is not None:
+            core.publish(muted)
+    return muted

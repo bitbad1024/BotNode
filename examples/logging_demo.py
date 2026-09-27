@@ -76,22 +76,32 @@ async def main() -> None:
     # 库出口只认「存储」（见 SqlLogStore）：这里挂一块内存 sqlite，要落文件就换
     # "sqlite+aiosqlite:///logs/nacho-log.db"（表由处理机启动时建好）
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    logger.attach(DatabaseLogProcessor(SqlLogStore(engine), buffer_size=5, flush_interval=0.2))
-    logger.attach(
+    logger.mount(DatabaseLogProcessor(SqlLogStore(engine), buffer_size=5, flush_interval=0.2))
+    logger.mount(
         LocalFileLogProcessor(log_dir, prefix=all_prefix, buffer_size=5, flush_interval=0.2)
     )
     # 故意挂一个会崩溃的出口：连续 2 批写入失败后自动停用，业务与其它出口不受影响
-    logger.attach(BrokenLogProcessor(buffer_size=5, flush_interval=0.2, max_failures=2))
+    logger.mount(BrokenLogProcessor(buffer_size=5, flush_interval=0.2, max_failures=2))
 
-    # ---- 阶段 3：子模块设置名字 + 设置输出设备 ---------------------------
-    # robot 派生时把核心的解析结果复制成落回配置（控制台 + 数据库 + nacho 的片 + broken）；
-    # robot.attach 挂上自层文件后进入「自层覆盖」：只投 robot 的片（外加控制台），
-    # 数据库 / nacho 的片等核心出口对 robot 就失效了
-    robot = logger.child("nacho.robot")
-    robot.attach(
-        LocalFileLogProcessor(
-            log_dir, prefix=robot_prefix, name="local-robot", buffer_size=5, flush_interval=0.2
-        )
+    # ---- 阶段 3：给一个模块单独定去处 = 发布一条具名路由 ------------------
+    # 目标绑定在视图上：robot 这条路上每条日志只投这里（外加控制台），不再跟着 root
+    # 的默认目标走；没有派生、没有落回配置、没有「先挂再取」的顺序坑
+    console = logger.get_processor(ConsoleLogProcessor.name)
+    robot = logger.route(
+        "nacho.robot",
+        targets=[
+            Target(
+                LocalFileLogProcessor(
+                    log_dir,
+                    prefix=robot_prefix,
+                    name="local-robot",
+                    buffer_size=5,
+                    flush_interval=0.2,
+                )
+            ),
+            # 控制台那份也照收（它自带 LevelFilter，所以 DEBUG 还是进不去）
+            *([] if console is None else [Target(console)]),
+        ],
     )
     # 运行期挂载的通道由分发器补启动，这里不需要手动 start
     logger.info(message="子模块 nacho.robot 已挂载自己的日志文件")
@@ -105,20 +115,20 @@ async def main() -> None:
     except ValueError:
         robot.exception(message="机器人执行失败", robot_id="r-001")
 
-    # 父模块也能按名字挂载；``attach_mount(name, processor, core=...)`` 是等价的便捷函数
-    attach_mount(
+    # 模块自己的去处也能一步挂好：``mount_module(name, processor, core=...)`` 就是
+    # ``core.route(name, targets=[processor])`` 的便捷写法
+    mount_module(
         "nacho.vision",
         LocalFileLogProcessor(
             log_dir, prefix=vision_prefix, name="local-vision", buffer_size=5, flush_interval=0.2
         ),
         core=logger,
     )
-    logger.child("nacho.vision").info(message="视觉模块开始工作")
+    logger.route("nacho.vision").info(message="视觉模块开始工作")
 
-    # ---- 阶段 4：没单独挂出口的名字，走的是从核心复制来的那份落回配置 ----------
-    # arm 没挂自层出口，整份回落核心（控制台 + 数据库 + nacho 的片 + broken）；
-    # 想让它有专属文件就 arm.attach(...)
-    logger.child("nacho.arm").warning(message="arm 没有专属文件，走核心复制来的落回配置")
+    # ---- 阶段 4：没发布过路由的名字，跟着 root 的默认目标走 --------------------
+    # arm 没定自己的目标，就走 root 那份（控制台 + 数据库 + nacho 的片 + broken）
+    logger.route("nacho.arm").warning(message="arm 没有专属文件，走 root 的默认目标")
 
     await logger.flush()
     await asyncio.sleep(0.3)

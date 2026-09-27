@@ -277,7 +277,7 @@ async def load_published_workflows(
     归属：开头 / 结尾这两条是**跨所有工作流**的全局事件，归公共；单条工作流的事（载入失败的
     error、开始节点那几条）挂在它自己的 ``owner_id`` 名下。
     """
-    log: BaseLogger = _log()
+    log: BaseLogger | BoundLogger = _log()
     primed = 0  # 登记到的开始节点数
     registered = 0  # 真正登记上的工作流条数
     disabled = 0  # 已发布但开关关着：跳过
