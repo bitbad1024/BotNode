@@ -98,6 +98,9 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
                 rotate_minutes=file_log.rotate_minutes,
                 max_bytes=file_log.max_bytes if file_log.max_bytes > 0 else None,
                 keep_days=file_log.keep_days,
+                # 检索没给时间范围时往回找几天（页面上默认不带 start/end）：翻页与自动刷新
+                # 都要各查一遍，没有这个下限就是每次都把保留期内的片全读一遍
+                search_days=file_log.search_days,
                 name="file",
                 buffer_size=file_log.buffer_size,
                 flush_interval=file_log.flush_interval,

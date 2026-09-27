@@ -251,6 +251,9 @@ class FileLogSettings(_Region):
         default=20 * 1024 * 1024, ge=0, description="不小于 0 的整数（单片上限兜底，0 = 不限）"
     )
     keep_days: int = Field(default=14, ge=0, description="不小于 0 的天数（0 = 不清理）")
+    search_days: int = Field(
+        default=2, ge=0, description="不小于 0 的天数（检索默认往回找几天，0 = 不限）"
+    )
     buffer_size: int = Field(default=200, ge=1, description="不小于 1 的整数")
     flush_interval: float = Field(default=2.0, gt=0, description="大于 0 的秒数")
 

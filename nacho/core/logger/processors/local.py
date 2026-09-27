@@ -10,9 +10,10 @@
 对上这种问法；模块的区分靠记录里的 ``logger_name`` 字段，不靠文件 —— 所以「一个模块一个
 文件」那套在这里没有必要，装配层只挂一份。
 
-检索把该目录下同前缀的**所有片**当一份数据读（:meth:`_iter_matching_sync`）；给了
-``start`` / ``end`` 时按**片名的日期**先裁掉不相干的天 —— 片名带日期是个便宜又好用的索引，
-省得为了「昨天的日志」把半个月的片全扫一遍。
+检索把该目录下同前缀的片当一份数据读（:meth:`_iter_matching_sync`）；给了 ``start`` / ``end``
+时按**片名的日期**先裁掉不相干的天 —— 片名带日期是个便宜又好用的索引，省得为了「昨天的日志」
+把半个月的片全扫一遍；没给 ``start`` 时按 ``search_days`` 兜一个下限（默认最近两天），因为
+翻一页、自动刷新一次都要查一遍，没有边界就等于每次都把保留期内的片全读一遍。
 
 几处实现取舍：
 
@@ -76,6 +77,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
         rotate_minutes: float = 60.0,
         max_bytes: int | None = 20 * 1024 * 1024,
         keep_days: int = 14,
+        search_days: int = 2,
         name: str | None = None,
         buffer_size: int = 200,
         flush_interval: float = 2.0,
@@ -90,6 +92,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
         :param rotate_minutes: 一片最多写多久（分钟）；``0`` = 只按天分片；
         :param max_bytes: 单片大小兜底（字节）：到了也换片；``None`` / ``0`` = 不限；
         :param keep_days: 保留几天（按片名里的日期算），到期的片在换片时删掉；``0`` = 不清理；
+        :param search_days: 检索没给 ``start`` 时往回找几天（``0`` = 不限，整目录当一份数据读）；
         :param name: 处理机名称，默认 ``"local"``；挂多份（如再落一个备份目录）时各自命名，
             名称即唯一标识；
         :param now: 取当前时刻的函数，默认 :func:`datetime.now`；测试可以喂假时钟来验换片。
@@ -106,6 +109,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
         self._rotate_minutes: float = rotate_minutes
         self._max_bytes: int | None = max_bytes
         self._keep_days: int = keep_days
+        self._search_days: int = search_days
         self._encoding: str = encoding
         self._now: Callable[[], datetime] = datetime.now if now is None else now
         #: 当前正在写的片；没认领过（没启动、也没写过）就是 ``None``
@@ -305,8 +309,15 @@ class LocalFileLogProcessor(BaseLogProcessor):
         )
 
     def _shards_within(self, start: TimestampLike, end: TimestampLike) -> list[Path]:
-        """这一趟要读哪些片：给了 ``start`` / ``end`` 就按**片名的日期**先裁掉不相干的天。"""
+        """这一趟要读哪些片：按**片名的日期**先裁掉不相干的天。
+
+        给了 ``start`` 就以它为准；没给就按 ``search_days`` 兜一个下限（``0`` = 不限，整目录
+        当一份数据读）—— 日志页翻一页、自动刷新一次都要查一遍，没有边界的话每次都把保留期
+        （``keep_days``）内的片全读一遍。
+        """
         first: date | None = _day_of(start)
+        if first is None and self._search_days > 0:
+            first = self._now().date() - timedelta(days=self._search_days)
         last: date | None = _day_of(end)
         picked: list[Path] = []
         for day, _seq, path in self._list_shards():  # 新的在前

@@ -38,6 +38,7 @@ def make_processor(
     rotate_minutes: float = 60.0,
     max_bytes: int | None = 20 * 1024 * 1024,
     keep_days: int = 14,
+    search_days: int = 2,
 ) -> LocalFileLogProcessor:
     """一份文件出口：``buffer_size=1`` 逐条直写，时间走假时钟。"""
     return LocalFileLogProcessor(
@@ -46,6 +47,7 @@ def make_processor(
         rotate_minutes=rotate_minutes,
         max_bytes=max_bytes,
         keep_days=keep_days,
+        search_days=search_days,
         buffer_size=1,
         flush_interval=0,
         now=clock,
@@ -262,3 +264,40 @@ async def test_broken_lines_are_skipped(tmp_path: Path) -> None:
     processor = make_processor(tmp_path, FakeClock(), rotate_minutes=0)
     found = await processor.search()
     assert [record.message for record in found.records] == ["好的一条"]
+
+
+async def test_search_bounds_how_far_back_it_reads(tmp_path: Path) -> None:
+    """没给 ``start`` 时按 ``search_days`` 兜一个下限：翻一页不该把保留期内的片全读一遍。
+
+    给了 ``start`` 就以调用方为准（窗口只是兜底）；``0`` = 不限，整目录当一份数据读。
+    """
+    write_lines(
+        tmp_path / "nacho-2026-09-25.log",
+        log("前天那条", datetime(2026, 9, 25, 1, 0, tzinfo=UTC)),
+    )
+    write_lines(
+        tmp_path / "nacho-2026-09-27.log",
+        log("昨天那条", datetime(2026, 9, 27, 1, 0, tzinfo=UTC)),
+    )
+    write_lines(
+        tmp_path / "nacho-2026-09-28.log",
+        log("今天那条", datetime(2026, 9, 28, 1, 0, tzinfo=UTC)),
+    )
+
+    # 假时钟停在 09-28，窗口 1 天 -> 只读 09-27 与 09-28
+    processor = make_processor(tmp_path, FakeClock(), rotate_minutes=0, search_days=1)
+    found = await processor.search()
+    assert [record.message for record in found.records] == ["今天那条", "昨天那条"]
+    assert found.total == 2  # 总数也跟着窗口走：没读的片不参与
+
+    # 显式给了 start：以调用方为准，窗口不参与
+    explicit = await processor.search(start=datetime(2026, 9, 1, tzinfo=UTC))
+    assert explicit.total == 3
+
+    # 0 = 不限：整目录当一份数据读（老行为）
+    unbounded = make_processor(tmp_path, FakeClock(), rotate_minutes=0, search_days=0)
+    assert [record.message for record in (await unbounded.search()).records] == [
+        "今天那条",
+        "昨天那条",
+        "前天那条",
+    ]
