@@ -123,7 +123,7 @@ export default function WorkflowSettingsDialog({ workflow, onClose, onSaved }: P
               取消
             </button>
             <button
-              className={`btn ${styles.primary}`}
+              className="btn btn-primary"
               onClick={() => void save()}
               disabled={saving || !dirty}
             >

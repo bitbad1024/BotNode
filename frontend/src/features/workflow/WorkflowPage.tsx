@@ -160,7 +160,7 @@ export default function WorkflowPage() {
           <div className={styles.panelHeadText}>
             <h3 className={styles.panelTitle}>工作流列表</h3>
           </div>
-          <button className={`btn ${styles.primary}`} onClick={() => setCreating(true)}>
+          <button className="btn btn-primary" onClick={() => setCreating(true)}>
             <IconPlus size={15} />
             新建
           </button>
@@ -230,8 +230,8 @@ export default function WorkflowPage() {
                           disabled={busy || w.published_version === 0}
                           onChange={() => void toggleEnabled(w)}
                         />
-                        <span className={styles.switchTrack}>
-                          <span className={styles.switchDot} />
+                        <span className={`switch ${w.enabled ? 'switch-on' : ''}`}>
+                          <span className="switch-knob" />
                         </span>
                         <span className={styles.switchText}>
                           {w.enabled ? '运行中' : '已停止'}
@@ -277,7 +277,7 @@ export default function WorkflowPage() {
                           发布最新版
                         </button>
                         <button
-                          className={`btn ${styles.danger}`}
+                          className="btn btn-danger-ghost"
                           disabled={busy}
                           onClick={() => setConfirmId(w.id)}
                         >

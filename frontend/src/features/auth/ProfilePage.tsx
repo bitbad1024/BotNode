@@ -208,7 +208,7 @@ export default function ProfilePage() {
   if (!profile) {
     return (
       <div className={styles.page}>
-        <div className={styles.stateBox}>加载中…</div>
+        <div className="state-box">加载中…</div>
       </div>
     )
   }
@@ -287,7 +287,7 @@ export default function ProfilePage() {
                 </button>
                 {hasAvatar && (
                   <button
-                    className={`btn ${styles.dangerBtn}`}
+                    className="btn btn-danger"
                     type="button"
                     disabled={removing}
                     onClick={() => setConfirm('avatar')}
@@ -345,7 +345,7 @@ export default function ProfilePage() {
               )}
             </div>
             <button
-              className={`btn ${styles.primaryBtn}`}
+              className="btn btn-primary"
               type="submit"
               disabled={!canSubmitNickname}
             >

@@ -127,7 +127,7 @@ export default function SessionsPage() {
           </button>
           <button
             type="button"
-            className={`btn ${styles.dangerBtn}`}
+            className="btn btn-danger"
             onClick={() => setConfirm({ kind: 'all', count: activeCount })}
             disabled={loading || activeCount === 0}
           >
@@ -138,12 +138,12 @@ export default function SessionsPage() {
 
       <section className={`card ${styles.listCard}`}>
         {loading ? (
-          <div className={styles.stateBox}>
+          <div className="state-box">
             <span className="spinner" />
             <span>正在加载登录设备…</span>
           </div>
         ) : sessions.length === 0 ? (
-          <div className={styles.stateBox}>
+          <div className="state-box">
             <IconDevices size={28} className={styles.stateIcon} />
             <span>没有任何登录记录</span>
           </div>
@@ -187,7 +187,7 @@ export default function SessionsPage() {
                   {s.current ? (
                     <button
                       type="button"
-                      className={`btn ${styles.dangerBtn}`}
+                      className="btn btn-danger"
                       onClick={() => setConfirm({ kind: 'one', session: s })}
                     >
                       退出登录

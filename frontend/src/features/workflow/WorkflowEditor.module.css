@@ -55,16 +55,6 @@
   display: flex;
   gap: 8px;
 }
-.primary {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: var(--accent);
-}
-.primary:hover {
-  background: var(--accent-hover);
-  color: var(--accent-contrast);
-}
-
 /* 画布区占满，面板悬浮 */
 .body {
   position: relative;

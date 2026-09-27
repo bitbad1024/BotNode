@@ -31,42 +31,9 @@
   flex-shrink: 0;
 }
 
-/* 按钮 */
-.primaryBtn {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: transparent;
-}
-.primaryBtn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-.dangerBtn {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-}
-.dangerBtn:hover:not(:disabled) {
-  background: var(--danger);
-  color: var(--danger-contrast);
-  border-color: var(--danger);
-}
-.btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 /* 列表 */
 .listCard {
   padding: 6px 18px;
-}
-.stateBox {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 56px 0;
-  color: var(--text-3);
-  font-size: 13.5px;
 }
 .stateIcon {
   opacity: 0.5;

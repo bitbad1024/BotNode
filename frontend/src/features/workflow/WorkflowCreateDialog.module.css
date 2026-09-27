@@ -95,16 +95,6 @@
   display: flex;
   gap: 10px;
 }
-.primary {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: var(--accent);
-}
-.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  color: var(--accent-contrast);
-}
-
 @keyframes overlayIn {
   from {
     opacity: 0;

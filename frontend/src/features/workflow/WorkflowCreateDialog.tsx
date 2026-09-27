@@ -93,7 +93,7 @@ export default function WorkflowCreateDialog({ onClose, onCreated }: Props) {
                 取消
               </button>
               <button
-                className={`btn ${styles.primary}`}
+                className="btn btn-primary"
                 type="submit"
                 disabled={saving || !name.trim()}
               >

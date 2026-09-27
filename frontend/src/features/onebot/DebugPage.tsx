@@ -163,7 +163,7 @@ export default function DebugPage() {
           ) : (
             <button
               type="button"
-              className={`btn ${styles.primaryBtn}`}
+              className="btn btn-primary"
               onClick={connect}
               disabled={status === 'connecting'}
             >
@@ -241,7 +241,7 @@ export default function DebugPage() {
           <div className={styles.sendRow}>
             <button
               type="button"
-              className={`btn ${styles.primaryBtn}`}
+              className="btn btn-primary"
               onClick={send}
               disabled={!open}
             >

@@ -48,24 +48,6 @@
   justify-content: flex-end;
   gap: 10px;
 }
-.primaryBtn {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: transparent;
-}
-.primaryBtn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-.dangerBtn {
-  color: var(--danger);
-  border-color: var(--danger-line);
-  background: var(--danger-bg);
-}
-.dangerBtn:hover:not(:disabled) {
-  background: var(--danger);
-  color: var(--danger-contrast);
-  border-color: var(--danger);
-}
 .busyInner {
   display: inline-flex;
   align-items: center;

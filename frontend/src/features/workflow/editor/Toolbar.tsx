@@ -77,7 +77,7 @@ export function Toolbar({
           <IconCheck size={14} />
           {validating ? '校验中…' : '校验'}
         </button>
-        <button className={`btn ${styles.primary}`} onClick={onSave} disabled={saving}>
+        <button className="btn btn-primary" onClick={onSave} disabled={saving}>
           <IconSave size={14} />
           {saving ? '提交中…' : '保存版本'}
         </button>
@@ -85,7 +85,7 @@ export function Toolbar({
           发布
         </button>
         <button
-          className={`btn ${definition?.enabled ? styles.primary : ''}`}
+          className={`btn ${definition?.enabled ? 'btn-primary' : ''}`}
           disabled={switching || !definition || definition.published_version === 0}
           title={
             definition?.enabled

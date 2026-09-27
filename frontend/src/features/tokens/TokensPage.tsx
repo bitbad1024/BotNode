@@ -280,7 +280,7 @@ export default function TokensPage() {
                           断开
                         </button>
                         <button
-                          className={`btn ${styles.danger}`}
+                          className="btn btn-danger-ghost"
                           disabled={busy}
                           onClick={() =>
                             setPending({ kind: 'kick', id: c.client_id, revoke: true })
@@ -342,7 +342,7 @@ export default function TokensPage() {
                           role="switch"
                           aria-checked={t.enabled}
                           aria-label={t.enabled ? '停用令牌' : '启用令牌'}
-                          className={`${styles.switch} ${t.enabled ? styles.switchOn : ''}`}
+                          className={`switch ${t.enabled ? 'switch-on' : ''}`}
                           disabled={busy}
                           onClick={() =>
                             void run(
@@ -351,7 +351,7 @@ export default function TokensPage() {
                             )
                           }
                         >
-                          <span className={styles.switchDot} />
+                          <span className="switch-knob" />
                         </button>
                         <span
                           className={t.enabled ? styles.switchOnLabel : styles.muted}
@@ -363,7 +363,7 @@ export default function TokensPage() {
                     <td>
                       <div className={styles.rowActions}>
                         <button
-                          className={`btn ${styles.danger}`}
+                          className="btn btn-danger-ghost"
                           disabled={busy}
                           onClick={() => setPending({ kind: 'revoke', id: t.id })}
                         >

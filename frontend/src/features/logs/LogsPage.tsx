@@ -351,7 +351,7 @@ export default function LogsPage() {
         </div>
 
         <div className={styles.filterActions}>
-          <button type="submit" className={`btn ${styles.primaryBtn}`} disabled={loading}>
+          <button type="submit" className="btn btn-primary" disabled={loading}>
             查询
           </button>
           <button
@@ -371,7 +371,7 @@ export default function LogsPage() {
       {/* 结果区 */}
       <section className={`card ${styles.listCard}`}>
         {loading ? (
-          <div className={styles.stateBox}>
+          <div className="state-box">
             <IconRefresh size={18} className={styles.spin} />
             正在检索日志…
           </div>
@@ -395,7 +395,7 @@ export default function LogsPage() {
             </div>
           </div>
         ) : entries.length === 0 ? (
-          <div className={styles.stateBox}>
+          <div className="state-box">
             <IconAlert size={18} className={styles.stateIcon} />
             没有符合条件的日志
           </div>
