@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, BoundLogger, get_logger
 from nacho.core.scheduler import TaskManager
 
 from .executor import NodeExecutionContext, SimpleWorkflowRunner
@@ -76,45 +76,37 @@ async def run_published_workflow(
     启动载入**不走这里** —— 那一步只登记触发、不执行图，见
     :func:`register_published_workflow`。``onebot`` 从这里注进节点上下文：``onebot``
     节点靠它发动作（挑连接的归属 ``ctx.owner_id`` 来自定义表）。
+
+    归属先读出来：这一趟的每条日志都挂在**这条流的主人**名下（与 ``ctx.owner_id`` 同一个
+    出处），日志页里按人筛得到、也追得到责 —— 记成公共的话，谁的流在跑都看不出来。
     """
+    # 归属（定义表的 owner_id）：onebot 节点按它挑「谁的」连接，日志按它认主人
+    definition = await store.get(workflow_id)
+    owner_id: str = definition.owner_id if definition is not None else ""
+    log: BoundLogger = _log().bind(workflow_id=workflow_id, owner_id=owner_id)
+
     record = await store.get_version(workflow_id, version)
     if record is None:
-        _log().warning(
-            "工作流版本不存在，跳过执行",
-            workflow_id=workflow_id,
-            version=version,
-        )
+        log.warning("工作流版本不存在，跳过执行", version=version)
         return
 
     graph = record.graph()
     # 到点回调：这个版本下次再到点，还是从这儿跑一遍（与本次同一个入口）
     trigger = make_trigger(workflow_id, version, store, scheduler, onebot=onebot)
-    # 归属（定义表的 owner_id）：onebot 节点按它挑「谁的」连接
-    definition = await store.get(workflow_id)
     # 执行那一趟（register_triggers 缺省 False）：开始节点不碰调度器，它自己排下一次
     ctx = NodeExecutionContext(
         scheduler=scheduler,
         run=trigger,
         workflow_id=workflow_id,
-        owner_id=definition.owner_id if definition is not None else "",
+        owner_id=owner_id,
         onebot=onebot,
     )
     runner = SimpleWorkflowRunner()
     try:
         await runner.run(graph, ctx)
-        _log().info(
-            "工作流执行完成",
-            workflow_id=workflow_id,
-            version=version,
-            node_count=len(graph.nodes),
-        )
+        log.info("工作流执行完成", version=version, node_count=len(graph.nodes))
     except Exception as exc:  # noqa: BLE001 — 执行引擎异常不能让发布接口挂掉
-        _log().error(
-            "工作流执行失败",
-            workflow_id=workflow_id,
-            version=version,
-            error=str(exc),
-        )
+        log.error("工作流执行失败", version=version, error=str(exc))
 
 
 async def register_published_workflow(
@@ -138,20 +130,22 @@ async def register_published_workflow(
 
     ``onebot``（OneBot 服务端，可选）要在这里就带上：交给调度器的到点回调是**这一趟构造
     的**（``make_trigger`` 闭包），到点执行那一趟没机会再补。
+
+    与执行那条路一个口径：归属先读出来，日志都挂在流的**主人**名下（``owner_id``），
+    节点上下文也带同一份（见 :meth:`NodeExecutionContext.owner_id`）。
     """
+    # 实例策略是**工作流级设置**（定义表里的列），与图无关：登记时读一次，由开始节点带给调度器
+    definition = await store.get(workflow_id)
+    owner_id: str = definition.owner_id if definition is not None else ""
+    log: BoundLogger = _log().bind(workflow_id=workflow_id, owner_id=owner_id)
+
     record = await store.get_version(workflow_id, version)
     if record is None:
-        _log().warning(
-            "工作流版本不存在，跳过登记",
-            workflow_id=workflow_id,
-            version=version,
-        )
+        log.warning("工作流版本不存在，跳过登记", version=version)
         return 0
 
     graph = record.graph()
     starts = set(start_ids(graph.nodes))
-    # 实例策略是**工作流级设置**（定义表里的列），与图无关：登记时读一次，由开始节点带给调度器
-    definition = await store.get(workflow_id)
     # 登记时给的到点回调是「跑整条流程」那个（与到点触发同一条路）；
     # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
@@ -160,7 +154,7 @@ async def register_published_workflow(
         workflow_id=workflow_id,
         register_triggers=True,
         multi_instance=definition.multi_instance if definition is not None else False,
-        owner_id=definition.owner_id if definition is not None else "",
+        owner_id=owner_id,
         onebot=onebot,
     )
     primed = 0
@@ -169,9 +163,8 @@ async def register_published_workflow(
             continue
         executor = get_executor(node.type)
         if executor is None:
-            _log().warning(
+            log.warning(
                 "开始节点没有执行器，跳过载入",
-                workflow_id=workflow_id,
                 version=version,
                 node_id=node.id,
                 node_type=node.type,
@@ -193,14 +186,16 @@ async def stop_published_workflow(
     与登记对称：任务名由 :func:`nacho.workflow.nodes.start.workflow_task_id` 定
     （``wf-<工作流 id>-<节点 id>``），照图里的开始节点算一遍 id 去摘即可 ——
     **不用把图跑一遍**（那是执行，不是停机）。
+
+    与登记对称，归属一样从定义表读：停用也是「谁的流被停了」，记成公共就没法按人查。
     """
+    definition = await store.get(workflow_id)
+    owner_id: str = definition.owner_id if definition is not None else ""
+    log: BoundLogger = _log().bind(workflow_id=workflow_id, owner_id=owner_id)
+
     record = await store.get_version(workflow_id, version)
     if record is None:
-        _log().warning(
-            "工作流版本不存在，跳过停用",
-            workflow_id=workflow_id,
-            version=version,
-        )
+        log.warning("工作流版本不存在，跳过停用", version=version)
         return 0
 
     removed = 0
@@ -208,12 +203,7 @@ async def stop_published_workflow(
         if scheduler.remove(workflow_task_id(workflow_id, node_id)):
             removed += 1
     if removed:
-        _log().info(
-            "已停止定时触发",
-            workflow_id=workflow_id,
-            version=version,
-            count=removed,
-        )
+        log.info("已停止定时触发", version=version, count=removed)
     return removed
 
 
@@ -283,6 +273,9 @@ async def load_published_workflows(
     关着跳过了多少、登记到几个开始节点）—— **一条都没登记也照记**，好把「载入跑过了，只是
     没得跑」和「载入压根没跑」分开。哪条工作流被登记，看开始节点那条（``已登记到调度器`` /
     ``工作流开始（消息触发…）``，都带 ``workflow_id``）。
+
+    归属：开头 / 结尾这两条是**跨所有工作流**的全局事件，归公共；单条工作流的事（载入失败的
+    error、开始节点那几条）挂在它自己的 ``owner_id`` 名下。
     """
     log: BaseLogger = _log()
     primed = 0  # 登记到的开始节点数
@@ -319,6 +312,7 @@ async def load_published_workflows(
                 log.error(
                     "启动载入已发布工作流失败",
                     workflow_id=definition.id,
+                    owner_id=definition.owner_id,  # 谁的流没载进来，当场认得出
                     version=definition.published_version,
                     error=str(exc),
                 )
