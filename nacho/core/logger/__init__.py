@@ -76,29 +76,38 @@
 **顺序很重要**：落回配置在实例创建（第一次 ``child`` / ``get_logger``）时定格，
 要挂出口请先挂载、再取实例。
 
-默认字段（``bind``）：一段执行打一次标记
-========================================
+绑定（``bind``）：出口 / 名字 / 级别 / 默认字段，一次给齐
+============================================================
 
-:meth:`~nacho.core.logger.base.BaseLogger.child` 换的是**出口与名字**（派生一个新实例），
-:meth:`~nacho.core.logger.base.BaseLogger.bind` 换的只有**每条日志默认带什么** —— 返回
-一个 :class:`~nacho.core.logger.base.BoundLogger` 视图：共享源实例的队列、出口与级别，
-也不进实例注册表::
+:meth:`~nacho.core.logger.base.BaseLogger.bind` 返回一个
+:class:`~nacho.core.logger.base.BoundLogger` 视图，四项随用随给 —— 给了就覆盖，
+没给就沿用来源那份：
 
-    log = get_logger("workflow").bind(workflow_id="w1", owner_id="u-admin")
-    log.info("开始")                      # 自动带上 workflow_id / owner_id
-    log.info("换归属", owner_id="u-2")    # 当次传的同名键压过默认的
+* ``targets``：**这条路上每条日志投给谁**。元素可以是
+  :class:`~nacho.core.logger.models.Target`（能挂过滤器与投放优先级），也可以直接是
+  处理机（等价于 ``Target(processor)``：全收、优先级 0）。目标写进
+  :attr:`~nacho.core.logger.models.LogRecord.targets` 跟着记录走，于是**分发不再需要
+  「名字 -> 实例」那张表**；里面新出现的处理机会被自动接纳，停机照样 flush、
+  ``search`` / ``stats`` 照样看得到；
+* ``name``：写进 ``record.logger_name`` 的**标签**（检索按它精确匹配），不再是身份；
+* ``level``：本视图的最低级别；
+* 其余关键字参数就是默认字段，当次传的同名键压过默认的::
+
+    log = core.bind(
+        name="nacho.api.access",
+        targets=[Target(file), Target(db, priority=-1)],   # 目标随记录走，db 先投
+        trace_id="t-1",
+    )
+    log.info("一条", owner_id=uid)      # extra 带 trace_id；owner_id 是一等字段
+    log.info("换个归属", owner_id="u-2")
 
 一趟工作流、一次请求打一次标记，后面每个调用点只管写自己那句话，日志自己认得出是谁的。
-``owner_id`` 是日志的一等字段（不塞 ``extra``，能按它精确检索），同样可以给它绑默认值。
+``owner_id`` 是日志的一等字段（不塞 ``extra``，能按它精确检索），同样可以绑默认值。
 
-两条约束决定了它能不能长期用得下去：
-
-* **只读**：再 ``bind`` 一层只产出新视图、原视图不变，所以一份视图可以被多个协程
-  同时拿着写，各自当次字段互不污染；
-* **不登记**：视图永远不会出现在 ``routes`` / ``stats`` 里，``bind`` 多少次也不会让
-  实例表变长。因此**请求级的值别拿它当实例用** —— ``user_id`` 这类每次都变的东西要么
-  当次传参（``log.info("...", user_id=uid)``，成本就是一个关键字参数），要么随请求
-  生命周期现绑现扔；真要给某个用户建一条固定的名字，那是 ``child`` 的事。
+**视图只读、且不登记**（详见 :class:`~nacho.core.logger.base.BoundLogger`）：再 ``bind``
+一层只产出新视图、原视图不变，所以一份视图能被多个协程同时拿着写；也正因为不登记，
+**请求级的值别拿它当实例用** —— ``user_id`` 这类每次都变的东西要么当次传参（成本就是
+一个关键字参数），要么随请求生命周期现绑现扔。
 
 运行期挂载与过滤器::
 
@@ -150,7 +159,7 @@ from .core import (
 from .filters import LevelFilter, LogFilter
 from .interfaces import LogStore
 from .manager import LogManager, configure, get_logger, manager
-from .models import LogLevel, LogRecord, LogSearchResult, normalize_timestamp
+from .models import LogLevel, LogRecord, LogSearchResult, Target, normalize_timestamp
 from .processors import (
     BaseLogProcessor,
     ConsoleLogProcessor,
@@ -182,6 +191,7 @@ __all__ = [
     "LogLevel",
     "LogRecord",
     "LogSearchResult",
+    "Target",
     "normalize_timestamp",
     # 日志处理机
     "BaseLogProcessor",

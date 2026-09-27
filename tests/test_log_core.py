@@ -28,6 +28,8 @@ from nacho.core.logger import (
     LogCore,
     LogFilter,
     LogRecord,
+    LogSearchResult,
+    Target,
     attach_mount,
     configure,
     current_default_core,
@@ -1140,3 +1142,97 @@ class TestBoundDefaults:
         assert len(core.routes) == instances_before
         assert len(core.processor_registry) == registry_before
         assert dict(view.defaults) == {"trace_id": "t1"}  # 原视图没被叠坏
+
+
+class LabelledProcessor(CollectingProcessor):
+    """把「谁收到了」按投递顺序记进一份共享列表（验收投放优先级）。"""
+
+    def __init__(self, label: str, sink: list[str]) -> None:
+        super().__init__(name=label, buffer_size=1, flush_interval=0)
+        self.label: str = label
+        self.sink: list[str] = sink
+
+    async def write(self, records: list[LogRecord]) -> None:
+        self.sink.extend([self.label] * len(records))
+
+
+class TestBoundTargets:
+    """``bind(targets=...)``：**目标随记录走**，不再经过名字表。
+
+    这是替代 child / attach 的那条路：一条日志投给谁在写入那一刻就定了，
+    名字退回来只当标签用。
+    """
+
+    async def test_bound_targets_override_name_based_routing(self) -> None:
+        """绑了目标就只投绑定的那些：核心那份收不到（哪怕名字还是核心那条）。"""
+        core_file = CollectingProcessor(name="core-file")
+        module_file = RecordingProcessor()
+        core = LogCore(console=False, processors=[core_file])
+        await core.start()
+        try:
+            core.info("走核心那份")
+            module = core.bind(name="nacho.module", targets=[module_file])
+            module.info("走模块那份")
+
+            assert await wait_until(lambda: core_file.received == ["走核心那份"]) is True
+            assert await wait_until(lambda: module_file.received == ["走模块那份"]) is True
+        finally:
+            await core.stop()
+
+        assert module_file.records[-1].logger_name == "nacho.module"  # 名字只是标签
+
+    async def test_target_filter_applies_per_target(self) -> None:
+        """过滤器跟着目标走：同一个出口 Filter 只在它那一份上生效。"""
+
+        class KeepFilter(LogFilter):
+            def match(self, record: LogRecord) -> bool:
+                return "keep" in record.message
+
+        kept = CollectingProcessor(name="kept")
+        everything = CollectingProcessor(name="everything")
+        core = LogCore(console=False)
+        await core.start()
+        try:
+            log = core.bind(targets=[Target(kept, KeepFilter()), everything])
+            log.info("keep-1")
+            log.info("drop-1")
+
+            assert await wait_until(lambda: len(everything.received) >= 2) is True
+        finally:
+            await core.stop()
+
+        assert kept.received == ["keep-1"]
+        assert everything.received == ["keep-1", "drop-1"]
+
+    async def test_priority_decides_delivery_order(self) -> None:
+        """投放顺序按目标的 ``priority``（小的先投），与写在列表里的先后无关。"""
+        sink: list[str] = []
+        late = LabelledProcessor("late", sink)
+        early = LabelledProcessor("early", sink)
+        core = LogCore(console=False)
+        await core.start()
+        try:
+            log = core.bind(targets=[Target(late, priority=10), Target(early, priority=-1)])
+            log.info("一条")
+
+            assert await wait_until(lambda: len(sink) >= 2) is True
+        finally:
+            await core.stop()
+
+        assert sink == ["early", "late"]
+
+    async def test_processor_bound_only_is_adopted_and_flushed(self) -> None:
+        """只出现在某个 bind 里的处理机：被接纳进清单，停机照样 flush 而不是丢。"""
+        outlet = CollectingProcessor(name="bound-only", buffer_size=100)
+        core = LogCore(console=False)
+        log = core.bind(targets=[outlet])
+
+        assert core.get_processor("bound-only") is outlet  # 已被接纳
+
+        await core.start()
+        try:
+            log.info("一条")  # 攒在缓冲区里（buffer_size=100，不会自动刷）
+        finally:
+            await core.stop()  # 停机 flush 所有已接纳的出口
+
+        assert outlet.received == ["一条"]

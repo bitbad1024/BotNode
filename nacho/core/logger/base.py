@@ -64,7 +64,7 @@ from types import MappingProxyType, TracebackType
 from typing import TypedDict, cast, override
 
 from .filters import DENY_ALL, LogFilter
-from .models import LogLevel, LogRecord, LogSearchResult, TimestampLike
+from .models import LogLevel, LogRecord, LogSearchResult, Target, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
 from .queue import AsyncLogQueue, OverflowPolicy
 
@@ -499,18 +499,32 @@ class BaseLogger:
             node.set_level(level)
         return node
 
-    def bind(self, **defaults: object) -> BoundLogger:
-        """派生一份**带默认字段**的视图：之后每条日志自动带上这几个键。
+    def bind(
+        self,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """派生一份**绑定过的视图**：默认字段、名字、出口、级别都可以换，视图本身不登记。
 
-        与 :meth:`child` 的分工：``child`` 换的是**名字与出口**（派生一个新实例），
-        ``bind`` 换的是**每条日志默认带什么**（一个轻视图，共享本实例的队列、出口与级别）。
-        一段执行用它一次打上上下文标记就够了，后面每个调用点只管写自己那句话 —— 详见
-        :class:`BoundLogger`。
+        四个维度随用随给，每一项都是「给了就覆盖、没给就沿用来源那份」：
 
-        :param defaults: 默认字段（键值对）。``owner_id`` 也是可绑的一等字段，其余进
-            ``extra``；当次调用传了同名键就按当次的。
+        :param name: 写进 ``record.logger_name`` 的名字（不给就用源实例的名字）。它是
+            **标签**，不是身份 —— 分发不再靠它查表（除了没绑目标的记录走老路径）；
+        :param targets: 这条路上每条日志投给哪些出口。元素可以是
+            :class:`~nacho.core.logger.models.Target`（能带过滤器与优先级），也可以直接
+            是处理机（等价于 ``Target(processor)``，全收、优先级 0）。给了的话，里面的
+            处理机会被**接纳进共享清单**，停机照样 flush、``search`` / ``stats`` 照样
+            看得到 —— 不给就沿用源实例那份（解析方式和现在一致）；
+        :param level: 本视图的最低级别（不给就用源实例的）；
+        :param defaults: 默认字段。``owner_id`` 也是可绑的一等字段，其余进 ``extra``；
+            当次调用传了同名键就按当次的。
+
+        详见 :class:`BoundLogger`。
         """
-        return BoundLogger(self, **defaults)
+        return BoundLogger(self, name=name, targets=targets, level=level, **defaults)
 
     @property
     def routes(self) -> dict[str, list[BaseLogProcessor]]:
@@ -644,54 +658,60 @@ class BaseLogger:
             return self._resolved_outputs(), self._filters
         return instance._resolved_outputs(), instance._filters
 
-    def _targets_for(self, record: LogRecord) -> list[BaseLogProcessor]:
-        """一条日志该投给哪些处理机：先看它所属实例解析后的配置，再按过滤器筛。
+    def adopt(self, *processors: BaseLogProcessor) -> None:
+        """把处理机接进共享清单（幂等：已经在里面就不动）。
 
-        不会沿名字向上回溯：子实例写日志时用的是它自己那份（自层覆盖，或自层没挂
-        出口时回落父级的落回配置），因此同一条日志在同一个处理机上永远只投一次。
+        ``stop`` / ``flush`` / ``search`` / ``stats`` 都只认这张清单 —— 只出现在某个
+        ``bind`` 的目标里却没被接纳进来的处理机，停机时不会 flush，日志会在缓冲区里丢。
         """
-        processors, filters = self._route_of(record.logger_name)
-        accepted: list[BaseLogProcessor] = []
+        registry: list[BaseLogProcessor] = self._shared.registry
         for processor in processors:
-            log_filter = filters.get(processor.name)
-            if log_filter is None or log_filter.match(record):
-                accepted.append(processor)
-        return accepted
+            if not any(existing is processor for existing in registry):
+                registry.append(processor)
 
     async def _dispatch(self, records: list[LogRecord]) -> None:
-        """一批日志扇出给各处理机：**按名字分组**，每组只解析一次目标。
+        """一批日志扇出给各处理机。
 
-        同一批日志常常来自同一个名字（一次业务调用里连着写的那几条），而目标
-        （``processors`` + ``filters``）只由名字决定 —— 所以先分组再解析，省掉
-        每条一次「重建目标列表」；逐条做的只剩过滤器判定（那确实要看记录内容）。
+        每条记录自己的 :attr:`~nacho.core.logger.models.LogRecord.targets` 优先 ——
+        那是 ``bind`` 时定好的目标快照；没有目标（``targets is None``）的记录退回
+        「按名字查实例表」（老路径），同名的在这一批里只解析一次。
 
-        之后再按处理机归并成批，一次喂给同一个处理机。
+        解析完再按处理机归并成批，一次喂给同一个处理机；投放顺序按目标的
+        ``priority``（小的先投）。
         """
-        grouped: dict[str, list[LogRecord]] = {}
-        for record in records:
-            bucket = grouped.get(record.logger_name)
-            if bucket is None:
-                grouped[record.logger_name] = [record]
-            else:
-                bucket.append(record)
-
+        # 同名记一次：老路径的目标只由名字决定，没必要每条重建
+        legacy: dict[str, tuple[Target, ...]] = {}
         batches: dict[int, tuple[BaseLogProcessor, list[LogRecord]]] = {}
-        for name, group in grouped.items():
-            processors, filters = self._route_of(name)
-            for record in group:
-                for processor in processors:
-                    if not processor.healthy:
-                        continue
-                    log_filter = filters.get(processor.name)
-                    if log_filter is not None and not log_filter.match(record):
-                        continue
-                    entry = batches.get(id(processor))
-                    if entry is None:
-                        batches[id(processor)] = (processor, [record])
-                    else:
-                        entry[1].append(record)
+        priorities: dict[int, int] = {}
+        for record in records:
+            targets = record.targets
+            if targets is None:
+                resolved = legacy.get(record.logger_name)
+                if resolved is None:
+                    processors, filters = self._route_of(record.logger_name)
+                    resolved = tuple(
+                        Target(processor, filters.get(processor.name))
+                        for processor in processors
+                    )
+                    legacy[record.logger_name] = resolved
+                targets = resolved
 
-        for processor, batch in batches.values():
+            for target in targets:
+                processor = target.processor
+                if not processor.healthy:
+                    continue
+                if target.log_filter is not None and not target.log_filter.match(record):
+                    continue
+                key: int = id(processor)
+                entry = batches.get(key)
+                if entry is None:
+                    batches[key] = (processor, [record])
+                    priorities[key] = target.priority
+                else:
+                    entry[1].append(record)
+
+        for key in sorted(batches, key=lambda item: priorities[item]):
+            processor, batch = batches[key]
             if not processor.running:
                 # 运行期动态挂载的输出通道：先启动它（打开文件 / 建表等）再喂日志，
                 # 否则它的 _on_start 永远不会被调用
@@ -741,6 +761,32 @@ class BaseLogger:
         if not self.is_enabled_for(parsed_level):
             return False
 
+        record = self.new_record(
+            parsed_level,
+            message,
+            owner_id=owner_id,
+            exc_info=exc_info,
+            extra=extra,
+            logger_name=self.name,
+        )
+        return self.write(record)
+
+    def new_record(
+        self,
+        level: LogLevel,
+        message: object,
+        *,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+        logger_name: str,
+        targets: "tuple[Target, ...] | None" = None,
+    ) -> LogRecord:
+        """把一条日志要装的东西装成 :class:`LogRecord`（级别判定在这一步之前做）。
+
+        :param logger_name: 记录归属的名字；``bind`` 出来的视图写自己的名字时用得上。
+        :param targets: 这条记录的目标；给了就在写入时定死，不必分发时再查名字表。
+        """
         exc_text: str | None = None
         if isinstance(exc_info, tuple):
             items = cast("tuple[object, ...]", exc_info)
@@ -762,15 +808,17 @@ class BaseLogger:
         elif exc_info:
             exc_text = traceback.format_exc()
 
-        record = LogRecord(
+        # 调用点传进来的 ``**extra`` 本身就是一个新鲜字典，直接交出去，不必再拷一份
+        payload: dict[str, object] = extra if isinstance(extra, dict) else dict(extra)
+        return LogRecord(
             message=str(message),
-            level=parsed_level,
-            logger_name=self.name,
-            extra=extra,
+            level=level,
+            logger_name=logger_name,
+            extra=payload,
             exc_text=exc_text,
             owner_id=owner_id,
+            targets=targets,
         )
-        return self.write(record)
 
     def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
         return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
@@ -924,11 +972,19 @@ class BaseLogger:
 
 
 class BoundLogger:
-    """**带默认字段**的日志视图：每条日志自动并上构造时定的那几个键。
+    """**绑定过的日志视图**：默认字段 / 名字 / 出口 / 级别，四项都能换，视图本身不登记。
 
-    由 :meth:`BaseLogger.bind` 得到。它**不是另一个通道**：与源实例共享同一个队列、
-    同一份出口与同一个级别，也不进实例注册表 —— ``routes`` / ``stats`` 里看不到它，
-    ``get_logger`` 也拿不到它（同名实例仍然只有一个）。多出来的只有「默认带什么」。
+    四项每一项都随用随给：给了就覆盖，没给就沿用来源那份::
+
+        log = core.bind(name="nacho.api.access", targets=[Target(file), Target(db, priority=-1)])
+        log.info("一条")   # 投给 file 与 db（db 先投），record.logger_name = nacho.api.access
+
+    目标随**记录**走（写进 :attr:`~nacho.core.logger.models.LogRecord.targets`），
+    所以这条路上不再需要「名字 -> 实例」那张表：谁写、给谁、什么顺序，在 ``bind``
+    那一刻就定了，分发只是照着做。
+
+    只有 targets 里的处理机会被 :meth:`BaseLogger.adopt` 接纳进共享清单，停机照样
+    flush、``search`` / ``stats`` 照样看得到 —— 换出口不再需要改实例那张表。
 
     适合给**一段执行**统一打上下文标记：一趟工作流带上 ``workflow_id`` / ``owner_id`` /
     ``user_id``，一次请求带上 ``trace_id``，这条路上之后每条日志自己就认得出是谁的，
@@ -959,28 +1015,76 @@ class BoundLogger:
     一句话分工：**``child`` 换的是出口与名字（名字即身份），``bind`` 换的只有默认字段。**
     """
 
-    __slots__: tuple[str, str] = ("_logger", "_defaults")
+    __slots__: tuple[str, ...] = ("_logger", "_defaults", "_name", "_targets", "_level")
 
-    def __init__(self, logger: BaseLogger, **defaults: object) -> None:
+    def __init__(
+        self,
+        logger: BaseLogger,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> None:
         self._logger: BaseLogger = logger
         #: 默认字段本身也是**只读视图**：视图之间可以纵向叠加、横向共享同一份字典，
         #: 谁都改不到别人的那一层 —— 多个协程共用一份（一趟工作流里大家拿同一个
         #: ``ctx.logger``）才安全。
         self._defaults: Mapping[str, object] = MappingProxyType(dict(defaults))
+        #: 名字只是一条**标签**（写进 ``record.logger_name`` 给人 / 给检索看），不是身份：
+        #: 为 ``None`` 时沿用源实例的名字。
+        self._name: str | None = name
+        #: 目标快照：``None`` = 不指定，沿用源实例那份（分发时按名字解析）
+        self._targets: tuple[Target, ...] | None = None
+        if targets is not None:
+            normalized: list[Target] = [
+                item if isinstance(item, Target) else Target(item) for item in targets
+            ]
+            normalized.sort(key=lambda target: target.priority)
+            self._targets = tuple(normalized)
+            # 只在这里出现的处理机也要能被停机 flush、被检索、被统计
+            logger.adopt(*(target.processor for target in self._targets))
+        self._level: LogLevel | None = None if level is None else LogLevel.parse(level)
 
     @property
     def name(self) -> str:
-        """底下的实例名（与源实例同名：视图不换名字）。"""
-        return self._logger.name
+        """写进记录的名字：自己绑了就用绑的，否则沿用源实例的名字。"""
+        return self._name if self._name is not None else self._logger.name
+
+    @property
+    def level(self) -> LogLevel:
+        """本视图的生效级别（没单独绑就是源实例那份）。"""
+        return self._level if self._level is not None else self._logger.effective_level()
+
+    @property
+    def targets(self) -> "tuple[Target, ...] | None":
+        """本视图指定的目标快照；``None`` = 没指定，由分发按名字解析。"""
+        return self._targets
 
     @property
     def defaults(self) -> Mapping[str, object]:
         """这份视图的默认字段（只读：改它不影响视图，要改就再 ``bind`` 一层）。"""
-        return MappingProxyType(self._defaults)
+        return self._defaults
 
-    def bind(self, **defaults: object) -> BoundLogger:
-        """在既有默认字段上**再叠一层**（同名按新的），返回一份新视图（本视图不变）。"""
-        return BoundLogger(self._logger, **{**self._defaults, **defaults})
+    def bind(
+        self,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """在既有绑定上**再叠一层**（同名默认字段按新的），返回一份新视图（本视图不变）。
+
+        名字 / 目标 / 级别同样随给随覆盖：给了就换，没给就沿用**本视图**那一份。
+        """
+        return BoundLogger(
+            self._logger,
+            name=name if name is not None else self._name,
+            targets=targets if targets is not None else self._targets,
+            level=level if level is not None else self._level,
+            **{**self._defaults, **defaults},
+        )
 
     def _merge(
         self, owner_id: str, extra: Mapping[str, object]
@@ -992,15 +1096,20 @@ class BoundLogger:
 
     # ------------------------------------------------------------------ 写入
     def is_enabled_for(self, level: LogLevel | str) -> bool:
-        """本条日志是否达到**源实例**的生效级别。"""
-        return self._logger.is_enabled_for(level)
+        """本条日志是否达到本视图的生效级别（没单独绑就看源实例）。"""
+        return LogLevel.parse(level) >= self.level
 
     def write(self, record: LogRecord) -> bool:
-        """直接写一条记录（走的还是**源实例**的队列与出口）：默认字段并进 ``extra``。"""
+        """直接写一条记录：默认字段并进 ``extra``，名字与目标按本视图那份盖上。"""
+        patched: LogRecord = record
+        if self._name is not None:
+            patched = replace(patched, logger_name=self.name)
+        if self._targets is not None:
+            patched = replace(patched, targets=self._targets)
         if not self._defaults:
-            return self._logger.write(record)
-        owner_id, extra = self._merge(record.owner_id, record.extra)
-        return self._logger.write(replace(record, extra=extra, owner_id=owner_id))
+            return self._logger.write(patched)
+        owner_id, extra = self._merge(patched.owner_id, patched.extra)
+        return self._logger.write(replace(patched, extra=extra, owner_id=owner_id))
 
     def log(
         self,
@@ -1012,9 +1121,20 @@ class BoundLogger:
         **extra: object,
     ) -> bool:
         """写一条日志：``extra`` = 默认字段 + 当次字段（当次同名键优先）。"""
+        parsed_level = LogLevel.parse(level)
+        if not self.is_enabled_for(parsed_level):
+            return False
         merged_owner, merged_extra = self._merge(owner_id, extra)
-        return self._logger.log(
-            level, message, owner_id=merged_owner, exc_info=exc_info, **merged_extra
+        return             self._logger.write(
+            self._logger.new_record(
+                parsed_level,
+                message,
+                owner_id=merged_owner,
+                exc_info=exc_info,
+                extra=merged_extra,
+                logger_name=self.name,
+                targets=self._targets,
+            )
         )
 
     def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
