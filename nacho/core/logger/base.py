@@ -228,10 +228,50 @@ class BaseLogger:
         self._running: bool = False
         #: 目标快照缓存（``None`` = 还没算过）：挂载 / 摘除 / 静音会把它置空，下次重算
         self._cache_targets: tuple[Target, ...] | None = None
+        #: **显式发布的具名路由**：只有 :meth:`publish` / :meth:`route` 过才在里面
+        self._routes: dict[str, BoundLogger] = {}
         self._shared.instances[name] = self
         self._sync_registry()
 
-    # ------------------------------------------------------------------ 目标
+    # ------------------------------------------------------------------ 具名路由
+    def publish(self, view: BoundLogger) -> BoundLogger:
+        """把一份视图**发布**成这个名字的路由：之后 :func:`get_logger` 取到的就是它。
+
+        取代派生实例树的那张表：**不发布就没有**，不再有「派生出来就自动有身份」这种
+        隐式规则。典型用法是某一路要换个目标 / 堵个通道（``api.access`` 不进审计库），
+        改完再发布回去，这条路上所有人都拿到改过的那份。
+        """
+        self._routes[view.name] = view
+        return view
+
+    def route(
+        self,
+        name: str,
+        *,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """取（必要时先建并发布）一条**具名路由**：一个名字 = 一份绑定好的视图。
+
+        名字相对本实例（``"api.robot"`` -> ``"nacho.api.robot"``，写全名也认）；已经
+        发布过就直接返回那份，不会覆盖。没给 ``targets`` 就沿用本实例的默认目标 ——
+        所以「某个模块只要和别人一样」是不用发布任何东西的::
+
+            access = core.route("api.access", trace_id="t-1")
+            robot = core.route("api.robot", targets=[Target(file_outlet, priority=-1)])
+        """
+        full: str = self.qualify(name)
+        existing: BoundLogger | None = self._routes.get(full)
+        if existing is not None:
+            return existing
+        return self.publish(self.bind(name=full, targets=targets, level=level, **defaults))
+
+    @property
+    def named_routes(self) -> dict[str, BoundLogger]:
+        """已发布的具名路由（名字 -> 视图）快照副本。"""
+        return dict(self._routes)
+
     def current_targets(self) -> tuple[Target, ...]:
         """**本实例现在要把日志投给谁**（目标 + 过滤器，按优先级排好）。
 
@@ -1112,6 +1152,28 @@ class BoundLogger:
             targets=targets if targets is not None else self._targets,
             level=level if level is not None else self._level,
             **{**self._defaults, **defaults},
+        )
+
+    def mute(self, channel: str) -> BoundLogger:
+        """给某个出口挂「全拒」：本视图的日志不再投给它（返回新视图，本视图不变）。
+
+        典型用途：访问日志一次请求一条，只配给人翻文件 —— 逐条流水进了库会把「谁在
+        什么时候干了什么」的审计时间线淹掉，于是把落库那条路在这份视图上堵住。
+        """
+        current: tuple[Target, ...] = (
+            self._targets if self._targets is not None else self._logger.current_targets()
+        )
+        return BoundLogger(
+            self._logger,
+            name=self._name,
+            level=self._level,
+            targets=[
+                replace(target, log_filter=DENY_ALL)
+                if target.processor.name == channel
+                else target
+                for target in current
+            ],
+            **dict(self._defaults),
         )
 
     def _merge(

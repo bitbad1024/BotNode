@@ -1196,6 +1196,27 @@ class TestBoundTargets:
         finally:
             await core.stop()
 
+    async def test_target_route_and_mute(self) -> None:
+        """名字就是一份发布出来的路由：堵掉某个出口后，这条路上的日志不再进它。"""
+        db = CollectingProcessor(name="database")
+        file = CollectingProcessor(name="file")
+        core = LogCore(console=False)
+        access = core.route("api.access", targets=[Target(db, priority=-1), Target(file)])
+        quiet = access.mute("database")
+
+        assert access.name == "nacho.api.access"
+        assert core.named_routes == {"nacho.api.access": access}  # 发布过就登记上
+        assert [target.processor for target in quiet.targets or ()] == [db, file]
+
+        await core.start()
+        try:
+            quiet.info("一条访问流水")
+            assert await wait_until(lambda: file.received == ["一条访问流水"]) is True
+        finally:
+            await core.stop()
+
+        assert db.received == []  # 被堵的那一路一条都没收
+
     async def test_bound_targets_override_name_based_routing(self) -> None:
         """绑了目标就只投绑定的那些：核心那份收不到（哪怕名字还是核心那条）。"""
         core_file = CollectingProcessor(name="core-file")
