@@ -19,6 +19,8 @@ venv/
 
 #日志（仅忽略仓库根的运行日志，勿误伤 frontend 下的 logs 页面目录）
 /logs/
+#示例跑出来的日志片（examples/*.py 都往自己目录下的 logs 落一份，跑一遍就冒出来）
+/examples/logs/
 
 #运行期数据（默认头像目录 [api] avatar_dir = data/avatars 落这儿）
 /data/

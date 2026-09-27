@@ -47,7 +47,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import (
-    BASE_DIR,
     CONFIG_PATH,
     TEMPLATE_PATH,
     ConfigError,
