@@ -2,6 +2,7 @@
 
 一条日志就是 :class:`LogData` 的**结构化字段**原样给出（级别、模块、所有者、附加字段……），
 不在这里拼成人看的字符串：怎么显示归前端，时间也只给 Unix 时间戳。
+检索接口一次给**一页**（:class:`LogPage`）：本页条目 + 命中总数，前端据此算总页数、做页码跳转。
 """
 
 from __future__ import annotations
@@ -32,3 +33,14 @@ class LogData(BaseModel):
     extra: dict[str, object] = Field(default_factory=dict, description="附加字段")
     #: 异常栈文本；没有异常就是 ``null``
     exc_text: str | None = Field(default=None, description="异常栈文本")
+
+
+class LogPage(BaseModel):
+    """日志检索的**一页**：本页条目 + 命中总数（前端据此算总页数、做页码跳转）。"""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    #: 本页的日志（按时间倒序）
+    items: list[LogData] = Field(description="本页日志条目")
+    #: 命中条件的**总条数**（不受本页 ``limit`` / ``offset`` 限制）
+    total: int = Field(description="命中总条数")
