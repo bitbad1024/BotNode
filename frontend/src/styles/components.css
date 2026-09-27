@@ -251,6 +251,8 @@
 }
 .toast {
   pointer-events: auto;
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -292,4 +294,56 @@
 }
 .toast-close:hover {
   color: var(--text-1);
+}
+
+/* 自动消失进度条：从满到空走 duration，悬停与计时一起暂停 */
+.toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: left center;
+  animation: toast-progress linear forwards;
+}
+.toast-success .toast-progress {
+  background: var(--success);
+}
+.toast-error .toast-progress {
+  background: var(--danger);
+}
+.toast-info .toast-progress {
+  background: var(--accent);
+}
+.toast:hover .toast-progress {
+  animation-play-state: paused;
+}
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* 退场：先播完再卸载（时长与 Toast.tsx 的 LEAVE_MS 对齐） */
+.toast-leaving {
+  animation: toast-out 0.2s var(--ease-out) forwards;
+}
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast-leaving {
+    animation: none;
+  }
+  .toast-progress {
+    animation: none;
+    transform: scaleX(1);
+  }
 }
