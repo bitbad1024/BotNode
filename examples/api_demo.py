@@ -10,9 +10,9 @@
 
 按顺序演示这几件事：
 
-0. **日志接入点**：``configure`` 建核心 -> ``attach_api_logging(logs/api.log)`` 把接口层
-   日志单独落一个文件（不混进核心的 ``nacho.log``）；业务日志用 ``api``，访问日志用
-   它的子名字 ``api.access``；
+0. **日志出口**：``configure`` 建核心时挂**一份**文件出口（按天分片，片名
+   ``api-demo-<日期>.log``）—— 接口层的日志照进这一份，靠记录里的 ``logger_name``
+   （业务用 ``nacho.api``、访问用 ``nacho.api.access``）区分来源，不再各落一个文件；
 1. **装配**：``create_app(ApiOptions.from_mapping(settings.api.model_dump()))`` —— 接口层
    不读配置文件，选项由配置系统的 ``[api]`` 一节转成普通映射喂进来；不传用户存储就用
    内存演示账号（admin / robot / guest）；
@@ -23,7 +23,7 @@
 4. **令牌怎么用**：``GET <prefix>/auth/me`` 带 ``Authorization: Bearer <token>``；
    过期 / 被改过的令牌分别回 ``TOKEN_EXPIRED`` / ``TOKEN_INVALID``；
 5. **trace_id 串起来**：请求头带 ``X-Trace-Id`` 就沿用，响应头、响应体、日志里是同一个号；
-6. **看日志落了什么**：flush 之后读 ``logs/api.log``（每行一个 JSON）；
+6. **看日志落了什么**：flush 之后读 ``logs/api-demo-<日期>.log``（每行一个 JSON）；
 7. **起真服务**：uvicorn 命令（这里不真的起，起了就阻塞住）。
 
 演示账号（见 ``nacho.api.services.user.demo.DEMO_USERS``）：
@@ -46,16 +46,18 @@ from fastapi import FastAPI  # noqa: E402
 
 from config import Settings  # noqa: E402
 from nacho.api import (  # noqa: E402
+    API_LOGGER_NAME,
     ApiOptions,
     ApiResponse,
     LoginData,
-    attach_api_logging,
+    api_logger,
     create_app,
 )
-from nacho.core.logger import configure, manager  # noqa: E402
+from nacho.core.logger import LocalFileLogProcessor, configure, manager  # noqa: E402
 
-#: 接口层日志单独落在这里
-LOG_PATH: Path = Path(__file__).resolve().parent / "logs" / "api.log"
+#: 日志片的目录与前缀（片名 = ``<前缀>-<日期>[.<序号>].log``）
+LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
+LOG_PREFIX: str = "api-demo"
 #: 演示账号
 ADMIN: dict[str, str] = {"account": "admin", "password": "nacho-admin"}
 
@@ -99,11 +101,21 @@ async def main() -> None:
     options: ApiOptions = demo_options()
     prefix: str = options.prefix
 
-    # 0) 日志接入点：先建核心、再挂接口层出口（挂载要在取实例之前）
-    core = configure(settings.app.name, level="DEBUG", console=True)
+    # 0) 日志：建核心时挂**一份**文件出口（按天分片）—— 接口层的日志照进这一份，
+    #    靠记录里的 logger_name（nacho.api / nacho.api.access）区分来源，不再各落一个文件
+    outlet = LocalFileLogProcessor(
+        LOG_DIR, prefix=LOG_PREFIX, buffer_size=1, flush_interval=0.2
+    )
+    core = configure(
+        settings.app.name, level="DEBUG", console=True, processors=[outlet]
+    )
     await core.start()
-    attach_api_logging(LOG_PATH)
-    print(f"[0] 日志接入：接口层日志落 {LOG_PATH}")
+    # 本模块底部那份 ``app = create_app(...)``（给 uvicorn 用的）是 import 时就执行的，那时
+    # 已经取过 ``nacho.api`` 实例 —— 落回配置在那一刻定格，核心上后挂的出口补不进去，这就是
+    # 「要挂出口，先挂载、再取实例」。生产里没这个疙瘩（入口建核心在先、业务模块 import 在后），
+    # 这里为了让示例的「接口层日志也进这一份」立得住，顺手也挂到那个实例上。
+    api_logger(API_LOGGER_NAME).attach(outlet, replace=True)
+    print(f"[0] 日志接入：片落 {LOG_DIR}（{LOG_PREFIX}-<日期>.log）")
 
     # 1) 装配：不传 user_store 就兜底挂一块内存 sqlite 并种演示账号；令牌有效期来自 [api].token_ttl
     app = create_app(options)
@@ -177,11 +189,18 @@ async def main() -> None:
         print(f"      请求头 X-Trace-Id=demo-trace-1 -> 响应头 {traced.headers['X-Trace-Id']}"
               f" / 响应体 trace_id={traced.json()['trace_id']}")
 
-    # 6) 看日志：写日志只是入队，等一轮分发再 flush，落盘的才全
+    # 6) 看日志：写日志只是入队，等一轮分发再 flush，落盘的才全。
+    #    按天分片，所以「这一份日志」可能不止一个文件 —— 数的是当天所有片。
     await asyncio.sleep(0.2)
     await core.flush()
-    lines: list[str] = [line for line in LOG_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
-    print(f"[6] {LOG_PATH.name} 共 {len(lines)} 行，最后 3 行：")
+    shards: list[Path] = sorted(LOG_DIR.glob(f"{LOG_PREFIX}-*.log"))
+    lines: list[str] = [
+        line
+        for shard in shards
+        for line in shard.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    print(f"[6] {LOG_PREFIX}-<日期>.log 共 {len(lines)} 行（{len(shards)} 片），最后 3 行：")
     for line in lines[-3:]:
         print(f"      {line}")
 
@@ -195,7 +214,7 @@ async def main() -> None:
 
 #: ``uvicorn examples.api_demo:app`` 要用：模块级的应用实例（选项取 config.toml 的 [api]）。
 #: 注意日志：这样直接起服务时日志核心没被 ``start``，只进队列不落盘；要落盘就照
-#: :func:`main` 里那三步来（configure -> start -> attach_api_logging）。
+#: :func:`main` 里那几步来（configure 时带上文件出口 -> start）。
 app = create_app(demo_options())
 
 

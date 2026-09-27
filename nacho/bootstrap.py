@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from contextlib import suppress
-from pathlib import Path
 
 import uvicorn
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -27,7 +26,6 @@ from .api import (
     ApiOptions,
     SqlSessionStore,
     SqlUserStore,
-    attach_api_logging,
     create_app,
 )
 from .core.cache import CacheOptions, cache
@@ -40,7 +38,6 @@ from .onebot import (
     OneBotOptions,
     OneBotServer,
     SqlTokenRegistry,
-    attach_onebot_logging,
     onebot_logger,
 )
 from .workflow import SqlWorkflowStore
@@ -112,7 +109,6 @@ async def on_event(conn: OneBotConnection, event: OneBotEvent) -> None:
 async def run(
     *,
     engine: AsyncEngine,
-    logs_dir: Path,
     api: Mapping[str, object],
     api_host: str,
     api_port: int,
@@ -122,7 +118,6 @@ async def run(
     """把业务挂起来（不阻塞）：建表 -> 起接口层 -> 起 OneBot -> 起调度器 -> 载入已发布工作流。
 
     :param engine: 入口建好的共用引擎（与日志库出口默认是同一个）；
-    :param logs_dir: 日志文件目录（接口层 / OneBot 各落一份）；
     :param api: ``[api]`` 那块配置，交给 ``ApiOptions.from_mapping``；
     :param api_host / api_port: 接口层监听地址 —— 这两个归入口管（``ApiOptions`` 里没有，它
         只管前缀与令牌有效期）；
@@ -140,15 +135,15 @@ async def run(
     tokens, users, sessions, workflows = await _prepare_stores(engine, log)
 
     # OneBot 反向 WS：先建好对象，下面的接口层要用它（<prefix>/onebot/* 那组管理接口）
-    attach_onebot_logging(logs_dir / "onebot.log")
+    # 日志不再各落一份文件：入口那份文件出口是**整进程共用**的（按天分片），
+    # 接口层 / OneBot 的日志照样进它，靠记录里的 logger_name 区分来源。
     _onebot_server = OneBotServer(
         OneBotOptions.from_mapping(onebot),
         handler=on_event,
         tokens=tokens,  # 令牌 -> 账号；一个端口接多个客户端，靠它认归属
     )
 
-    # 接口层：挂日志 -> 建应用（注入同一个 db 上的三份存储 + OneBot）-> 起 uvicorn
-    attach_api_logging(logs_dir / "api.log")
+    # 接口层：建应用（注入同一个 db 上的三份存储 + OneBot）-> 起 uvicorn
     options = ApiOptions.from_mapping(api)
     _api_server = _NoSignalServer(
         uvicorn.Config(

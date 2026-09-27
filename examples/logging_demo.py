@@ -11,11 +11,15 @@
    ``await processor.start()``；
 3. **模块解耦**：子模块给一个字符串名字 + 自己的输出设备（``logger.child("robot")``），
    各模块的文件互不混杂；**子实例自己挂了出口就只投那份**（``robot`` 只进
-   ``robot.log``，不再进核心的 ``nacho.log``），没挂自层出口的名字才整份走派生
+   ``robot-<日期>.log``，不再进核心的 ``nacho-<日期>.log``），没挂自层出口的名字才整份走派生
    那一刻从核心复制的落回配置，详见 ``examples/child_config_demo.py``；
 4. **落回配置不回溯**：子实例创建之后，父实例再挂 / 再摘都不影响它的落回配置；
    反过来，没单独挂出口的名字也不是「没出口」，而是走从核心复制来的那份落回配置。
    （示例同时演示「单个处理机崩溃不影响业务与其它处理机」的隔离效果。）
+
+文件出口现在按**天**分片：一个出口给一个「目录 + 前缀」，片名是 ``<前缀>-<日期>[.<序号>].log``，
+跨天换片、同一天写满一个时间跨度（默认一小时）加序号再开一片。所以下面数行数时数的是
+「某个前缀的全部片」。
 """
 
 import asyncio
@@ -50,18 +54,18 @@ class BrokenLogProcessor(BaseLogProcessor):
         return LogSearchResult()
 
 
-def count_lines(path: Path) -> int:
-    """数一数文件里有多少行（文件不存在算 0 行）。"""
-    if not path.exists():
-        return 0
-    return len([line for line in path.read_text(encoding="utf-8").splitlines() if line])
+def count_lines(directory: Path, prefix: str) -> int:
+    """数一数某个前缀的**全部片**里有多少非空行（按天分片，一个前缀可能好几片）。"""
+    total = 0
+    for path in sorted(directory.glob(f"{prefix}-*.log")):
+        total += len([line for line in path.read_text(encoding="utf-8").splitlines() if line])
+    return total
 
 
 async def main() -> None:
     log_dir: Path = Path(__file__).resolve().parent / "logs"
-    all_log: Path = log_dir / "nacho.log"
-    robot_log: Path = log_dir / "robot.log"
-    vision_log: Path = log_dir / "vision.log"
+    # 每个出口一个「目录 + 前缀」；片名 = <前缀>-<日期>[.<序号>].log
+    all_prefix, robot_prefix, vision_prefix = "nacho", "robot", "vision"
 
     # ---- 阶段 1：最小化启动，只有控制台，立即可用 -------------------------
     logger: LogCore = LogCore(name="nacho")
@@ -73,17 +77,21 @@ async def main() -> None:
     # "sqlite+aiosqlite:///logs/nacho-log.db"（表由处理机启动时建好）
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     logger.attach(DatabaseLogProcessor(SqlLogStore(engine), buffer_size=5, flush_interval=0.2))
-    logger.attach(LocalFileLogProcessor(all_log, buffer_size=5, flush_interval=0.2))
+    logger.attach(
+        LocalFileLogProcessor(log_dir, prefix=all_prefix, buffer_size=5, flush_interval=0.2)
+    )
     # 故意挂一个会崩溃的出口：连续 2 批写入失败后自动停用，业务与其它出口不受影响
     logger.attach(BrokenLogProcessor(buffer_size=5, flush_interval=0.2, max_failures=2))
 
     # ---- 阶段 3：子模块设置名字 + 设置输出设备 ---------------------------
-    # robot 派生时把核心的解析结果复制成落回配置（控制台 + 数据库 + nacho.log + broken）；
-    # robot.attach 挂上自层文件后进入「自层覆盖」：只投 robot.log（外加控制台），
-    # 数据库 / nacho.log 等核心出口对 robot 就失效了
+    # robot 派生时把核心的解析结果复制成落回配置（控制台 + 数据库 + nacho 的片 + broken）；
+    # robot.attach 挂上自层文件后进入「自层覆盖」：只投 robot 的片（外加控制台），
+    # 数据库 / nacho 的片等核心出口对 robot 就失效了
     robot = logger.child("nacho.robot")
     robot.attach(
-        LocalFileLogProcessor(robot_log, name="local-robot", buffer_size=5, flush_interval=0.2)
+        LocalFileLogProcessor(
+            log_dir, prefix=robot_prefix, name="local-robot", buffer_size=5, flush_interval=0.2
+        )
     )
     # 运行期挂载的通道由分发器补启动，这里不需要手动 start
     logger.info(message="子模块 nacho.robot 已挂载自己的日志文件")
@@ -100,13 +108,15 @@ async def main() -> None:
     # 父模块也能按名字挂载；``attach_mount(name, processor, core=...)`` 是等价的便捷函数
     attach_mount(
         "nacho.vision",
-        LocalFileLogProcessor(vision_log, name="local-vision", buffer_size=5, flush_interval=0.2),
+        LocalFileLogProcessor(
+            log_dir, prefix=vision_prefix, name="local-vision", buffer_size=5, flush_interval=0.2
+        ),
         core=logger,
     )
     logger.child("nacho.vision").info(message="视觉模块开始工作")
 
     # ---- 阶段 4：没单独挂出口的名字，走的是从核心复制来的那份落回配置 ----------
-    # arm 没挂自层出口，整份回落核心（控制台 + 数据库 + nacho.log + broken）；
+    # arm 没挂自层出口，整份回落核心（控制台 + 数据库 + nacho 的片 + broken）；
     # 想让它有专属文件就 arm.attach(...)
     logger.child("nacho.arm").warning(message="arm 没有专属文件，走核心复制来的落回配置")
 
@@ -128,10 +138,13 @@ async def main() -> None:
     await logger.stop()
     await engine.dispose()  # 日志已冲刷落库，可以关连接了
 
-    print("\n=== 模块解耦效果 ===")
-    print(f"全量文件 {all_log.name}: {count_lines(all_log)} 行（核心自己 + 没挂自有出口的模块，如 arm）")
-    print(f"模块文件 {robot_log.name}: {count_lines(robot_log)} 行（只有 nacho.robot）")
-    print(f"模块文件 {vision_log.name}: {count_lines(vision_log)} 行（只有 nacho.vision）")
+    print("\n=== 模块解耦效果（数的是各前缀当天的片） ===")
+    print(
+        f"核心那份 {all_prefix}-<日期>.log: {count_lines(log_dir, all_prefix)} 行"
+        "（核心自己 + 没挂自有出口的模块，如 arm）"
+    )
+    print(f"模块那份 {robot_prefix}-<日期>.log: {count_lines(log_dir, robot_prefix)} 行（只有 nacho.robot）")
+    print(f"模块那份 {vision_prefix}-<日期>.log: {count_lines(log_dir, vision_prefix)} 行（只有 nacho.vision）")
     routes = {name: [p.name for p in ps] for name, ps in logger.routes.items()}
     print(f"各名字实例实际会投的出口: {routes}")
 

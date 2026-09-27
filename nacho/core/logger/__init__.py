@@ -26,7 +26,7 @@
     await logger.start()
     logger.info("机器人已启动", robot_id="r-001")
 
-    logger.attach(LocalFileLogProcessor("logs/nacho.log"))   # 运行期挂载
+    logger.attach(LocalFileLogProcessor("logs", prefix="nacho"))   # 运行期挂载（按天分片）
     await logger.stop()                     # 停机自动冲刷余量
 
 子日志实例：一个名字 + 一份落回配置 + 自己的出口
@@ -38,22 +38,25 @@
 ``child("robot.arm")`` 等价于 ``child("robot").child("arm")``，于是 ``arm`` 的落回配置
 是 ``robot`` 那一份::
 
-    core = LogCore("nacho")                               # 核心 = [console]
-    core.attach(LocalFileLogProcessor("logs/nacho.log"))  # 核心的全量文件出口
+    core = LogCore("nacho")                                     # 核心 = [console]
+    core.attach(LocalFileLogProcessor("logs", prefix="nacho"))  # 核心的全量文件出口
 
-    core.attach(LocalFileLogProcessor("logs/robot.log"), name="nacho.robot")
-    core.attach(LocalFileLogProcessor("logs/arm.log"), name="nacho.robot.arm")
+    core.attach(LocalFileLogProcessor("logs", prefix="robot"), name="nacho.robot")
+    core.attach(LocalFileLogProcessor("logs", prefix="arm"), name="nacho.robot.arm")
 
-    core.child("robot").info("就绪")           # -> console + robot.log（自层覆盖，不进 nacho.log）
-    core.child("robot.arm").info("过载")        # -> console + arm.log（不进 robot.log / nacho.log）
-    core.child("vision").info("没挂自己的出口")  # 自层为空 -> 回落核心：console + nacho.log
+    core.child("robot").info("就绪")           # -> console + robot 的片（自层覆盖，不进核心那份）
+    core.child("robot.arm").info("过载")        # -> console + arm 的片（不进 robot / 核心那份）
+    core.child("vision").info("没挂自己的出口")  # 自层为空 -> 回落核心：console + 核心那份
+
+   「片」= 该前缀当天的分片文件（``<前缀>-<日期>[.<序号>].log``，见
+   :class:`~nacho.core.logger.processors.LocalFileLogProcessor`）。
 
 派生关系长成这样（左列是**落回配置**，右列是该名字**实际会投的**）::
 
-    nacho              自层=[console, nacho.log]   落回=[]                    实际=[console, nacho.log]
-     ├─ nacho.robot     自层=[robot.log]            落回=[console, nacho.log]  实际=[console, robot.log]
-     │   └─ …arm        自层=[arm.log]              落回=[console, robot.log]  实际=[console, arm.log]
-     └─ nacho.vision    自层=[]                     落回=[console, nacho.log]  实际=[console, nacho.log]
+    nacho              自层=[console, 核心片]   落回=[]                  实际=[console, 核心片]
+     ├─ nacho.robot     自层=[robot 片]         落回=[console, 核心片]    实际=[console, robot 片]
+     │   └─ …arm        自层=[arm 片]           落回=[console, robot 片]  实际=[console, arm 片]
+     └─ nacho.vision    自层=[]                 落回=[console, 核心片]    实际=[console, 核心片]
 
 配置规则：
 
@@ -78,7 +81,7 @@
     from nacho.core.logger import LevelFilter
 
     core.attach(
-        LocalFileLogProcessor("logs/robot.log"),
+        LocalFileLogProcessor("logs", prefix="robot"),
         name="nacho.robot",
         log_filter=LevelFilter("WARNING"),
     )
@@ -89,7 +92,7 @@
     from nacho.core.logger import attach_mount, configure, get_logger
 
     configure(level="INFO")                  # 建立（或复用）进程默认核心（名 nacho）
-    attach_mount("api.robot", LocalFileLogProcessor("logs/api.log"))   # 名字相对核心
+    attach_mount("api.robot", LocalFileLogProcessor("logs", prefix="api"))   # 名字相对核心
     get_logger("api.robot").info("收到请求")   # 与核心共享同一个队列
 
 内省与排查（随时可查，只读，不会替谁把实例建出来）::

@@ -153,8 +153,12 @@ def _load(
 ) -> _ModelT:
     """校验一节配置：没写的项按字段默认值补，值写错就翻成 :class:`ConfigError`。
 
-    ``where`` 给出一项的完整出处（如 ``logging.file.path``），只在报错时用。
+    ``where`` 给出一项的完整出处（如 ``logging.file.dir``），只在报错时用。
+    旧版键（:attr:`_Region.legacy_keys`）先查一遍：静默忽略会变成「配了没生效」，比报错难查。
     """
+    for key, replacement in model.legacy_keys.items():
+        if key in section:
+            raise ConfigError(f"{where(key)} 已不再使用：改用 {replacement}")
     try:
         return model.model_validate(section)
     except ValidationError as exc:
@@ -200,6 +204,8 @@ class _Region(BaseModel):
     """一块配置区域的公共底：冻结（配置读出来就不该被改），缺项按字段默认值补。"""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    #: 已废弃的键 -> 现在的替代项；写到配置里直接报错（见 :func:`_load`），不静默忽略
+    legacy_keys: ClassVar[dict[str, str]] = {}
 
 
 # --------------------------------------------------------------------------- 区域：[app]
@@ -231,14 +237,36 @@ class DatabaseSettings(_Region):
 
 # ----------------------------------------------------------------------- 区域：[logging]
 class FileLogSettings(_Region):
-    """``[logging.file]``：本地文件出口。"""
+    """``[logging.file]``：本地文件出口 —— **一个目录、按天分片**。
+
+    片名是 ``<前缀>-<YYYY-MM-DD>[.<序号>].log``（``nacho-2026-09-28.log``）：跨天换日期片，
+    同一天里写满 ``rotate_minutes``（或顶到 ``max_bytes``）就加序号再开一片。模块的区分靠
+    记录里的 ``logger_name`` 字段，不靠文件 —— 所以整进程只有这一份文件出口。
+
+    旧版的 ``path`` / ``backup_count`` 由 ``dir`` / ``keep_days`` 取代，写在配置里会**报错**
+    （见 :func:`_load`、:attr:`legacy_keys`）：静默忽略的代价是「配了没生效」—— 老的
+    ``logs/nacho.log`` 不再被读、也不会被清理，页面上只会看到「本机文件」一片空白。
+    """
+
+    #: 旧键 -> 替代项：``path`` 那时是单个文件，现在是目录；``backup_count`` 是「留几份历史」，
+    #: 现在按天数留
+    legacy_keys: ClassVar[dict[str, str]] = {"path": "dir", "backup_count": "keep_days"}
 
     enabled: bool = True  # false 就只有控制台
-    path: ConfigPath = BASE_DIR / "logs" / "nacho.log"
+    dir: ConfigPath = BASE_DIR / "logs"  # 放片的目录
+    prefix: str = ""  # 片名前缀；留空 = 用 [app].name
+    rotate_minutes: float = Field(
+        default=60.0, ge=0, description="不小于 0 的分钟数（0 = 只按天分片）"
+    )
+    max_bytes: int = Field(
+        default=20 * 1024 * 1024, ge=0, description="不小于 0 的整数（单片上限兜底，0 = 不限）"
+    )
+    keep_days: int = Field(default=14, ge=0, description="不小于 0 的天数（0 = 不清理）")
+    search_days: int = Field(
+        default=2, ge=0, description="不小于 0 的天数（检索默认往回找几天，0 = 不限）"
+    )
     buffer_size: int = Field(default=200, ge=1, description="不小于 1 的整数")
     flush_interval: float = Field(default=2.0, gt=0, description="大于 0 的秒数")
-    max_bytes: int = Field(default=20 * 1024 * 1024, ge=0, description="不小于 0 的整数")
-    backup_count: int = Field(default=3, ge=0, description="不小于 0 的整数")
 
 
 class DatabaseLogSettings(_Region):

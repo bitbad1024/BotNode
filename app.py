@@ -47,7 +47,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import (
-    BASE_DIR,
     CONFIG_PATH,
     TEMPLATE_PATH,
     ConfigError,
@@ -86,16 +85,24 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     url, db_target = _engine_url(settings.database)  # 顺带把 sqlite 的目录建出来
     engine: AsyncEngine = create_async_engine(url)
 
+    # 片名前缀：配置留空就跟进程名，于是片名与进程名对得上（nacho-2026-09-28.log）
+    file_prefix: str = file_log.prefix or app.name
     processors: list[BaseLogProcessor] = []
     if file_log.enabled:
+        # 整进程**一份**文件出口，按天分片（不再「一个模块一个文件」，见 local.py 的模块文档）
         processors.append(
             LocalFileLogProcessor(
-                file_log.path,
+                file_log.dir,
+                prefix=file_prefix,
+                rotate_minutes=file_log.rotate_minutes,
+                max_bytes=file_log.max_bytes if file_log.max_bytes > 0 else None,
+                keep_days=file_log.keep_days,
+                # 检索没给时间范围时往回找几天（页面上默认不带 start/end）：翻页与自动刷新
+                # 都要各查一遍，没有这个下限就是每次都把保留期内的片全读一遍
+                search_days=file_log.search_days,
                 name="file",
                 buffer_size=file_log.buffer_size,
                 flush_interval=file_log.flush_interval,
-                max_bytes=file_log.max_bytes if file_log.max_bytes > 0 else None,
-                backup_count=file_log.backup_count,
             )
         )
     log_target: str | None = None
@@ -130,7 +137,9 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     core.info(
         "日志出口已就绪",
         console=log.console,
-        file=str(file_log.path) if file_log.enabled else None,
+        # 文件那份的落点是「目录 + 片名前缀」：具体写到哪一片看当天（<前缀>-<日期>.log）
+        file_dir=str(file_log.dir) if file_log.enabled else None,
+        file_prefix=file_prefix if file_log.enabled else None,
         database=log_target,
     )
     core.info("数据库引擎就绪", driver=settings.database.driver, target=db_target)  # 口令不进日志
@@ -198,7 +207,6 @@ async def _main(argv: Sequence[str] | None = None) -> None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
         await run(
             engine=db,
-            logs_dir=BASE_DIR / "logs",
             api=settings.api.model_dump(),
             api_host=settings.api.host,
             api_port=settings.api.port,

@@ -19,9 +19,8 @@
 
 用法::
 
-    from nacho.onebot import OneBotOptions, OneBotServer, attach_onebot_logging
+    from nacho.onebot import OneBotOptions, OneBotServer
 
-    attach_onebot_logging(Path("logs/onebot.log"))
     server = OneBotServer(OneBotOptions(host="0.0.0.0", port=6700), handler=on_event)
     await server.start()
     await server.serve_forever()

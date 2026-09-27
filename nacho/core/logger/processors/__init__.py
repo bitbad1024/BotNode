@@ -3,7 +3,7 @@
 每种处理机负责一种落地方案，由日志系统统一调度、隔离与统计：
 
 * :class:`ConsoleLogProcessor`：控制台（最小化启动的默认出口）；
-* :class:`LocalFileLogProcessor`：本地文件（JSON Lines + 按大小滚动）；
+* :class:`LocalFileLogProcessor`：本地文件（JSON Lines，**按天分片**、片内按时间 / 大小换片）；
 * :class:`DatabaseLogProcessor`：数据库（依赖
   :class:`~nacho.core.logger.interfaces.LogStore` 协议，落地实现在 ``nacho.db``）。
 

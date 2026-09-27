@@ -17,11 +17,7 @@
 
 用起来::
 
-    from pathlib import Path
-
-    from nacho.onebot import OneBotOptions, OneBotServer, attach_onebot_logging
-
-    attach_onebot_logging(Path("logs/onebot.log"))         # 先挂日志，再建服务
+    from nacho.onebot import OneBotOptions, OneBotServer
 
     async def on_event(conn, event):
         await conn.call("send_msg", message_type="private", user_id=event.user_id, message="hi")
@@ -35,7 +31,7 @@ OneBot 实现那边把「反向 WS（Reverse WebSocket）」地址配成 ``ws://
 """
 from __future__ import annotations
 
-from .logging import ONEBOT_LOGGER_NAME, attach_onebot_logging, onebot_logger
+from .logging import ONEBOT_LOGGER_NAME, onebot_logger
 from .models import (
     ActionResponse,
     MessageEvent,
@@ -94,6 +90,5 @@ __all__ = [
     "parse_action_response",
     # 日志接入点
     "ONEBOT_LOGGER_NAME",
-    "attach_onebot_logging",
     "onebot_logger",
 ]

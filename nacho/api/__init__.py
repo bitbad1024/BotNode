@@ -26,12 +26,12 @@
 
 最小用法（登录功能开箱可用，默认走内存演示账号）::
 
-    from pathlib import Path
+    from nacho.api import ApiOptions, create_app
 
-    from nacho.api import ApiOptions, attach_api_logging, create_app
-
-    attach_api_logging(Path("logs/api.log"))     # 先挂日志、再建应用
     app = create_app(ApiOptions.from_mapping({"prefix": "/api", "token_ttl": 3600}))
+
+日志不用在这儿接：整进程**一份**文件出口（按天分片）由入口建核心时挂好，
+接口层的日志照进那一份（名字 ``nacho.api`` / ``nacho.api.access``），见 :mod:`nacho.api.logging`。
 
     # uvicorn 起服务：uvicorn nacho_api:app --port 18080
     #   POST /api/auth/login   {"account": "admin", "password": "nacho-admin"}
@@ -71,7 +71,6 @@ from .logging import (
     API_LOGGER_NAME,
     TRACE_ID_HEADER,
     api_logger,
-    attach_api_logging,
     keep_access_off_audit,
 )
 from .api import auth_router, log_router, onebot_router, profile_router
@@ -220,7 +219,6 @@ __all__ = [
     "profile_router",
     # 日志接入点
     "api_logger",
-    "attach_api_logging",
     "keep_access_off_audit",
     "RequestLogMiddleware",
     "API_LOGGER_NAME",

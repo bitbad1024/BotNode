@@ -42,11 +42,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from nacho.core.logger import LocalFileLogProcessor, LogCore  # noqa: E402
 
 
-def count_lines(path: Path) -> int:
-    """数一数文件里有多少非空行（文件不存在算 0 行）。"""
-    if not path.exists():
-        return 0
-    return len([line for line in path.read_text(encoding="utf-8").splitlines() if line])
+def count_lines(directory: Path, prefix: str) -> int:
+    """数一数某个前缀的**全部片**里有多少非空行（片名 ``<前缀>-<日期>[.<序号>].log``）。"""
+    total = 0
+    for path in sorted(directory.glob(f"{prefix}-*.log")):
+        total += len([line for line in path.read_text(encoding="utf-8").splitlines() if line])
+    return total
 
 
 def enable_line_buffering() -> None:
@@ -88,16 +89,17 @@ async def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     def file_output(key: str, name: str) -> LocalFileLogProcessor:
-        """一路文件出口：``buffer_size=1`` 逐条直写，方便中途数行数。"""
+        """一路文件出口（一个前缀一堆按天分片的片）：``buffer_size=1`` 逐条直写，方便数行数。"""
         return LocalFileLogProcessor(
-            log_dir / f"child_{key}.log", name=name, buffer_size=1, flush_interval=0.05
+            log_dir, prefix=f"child_{key}", name=name, buffer_size=1, flush_interval=0.05
         )
 
     def lines(key: str) -> int:
-        return count_lines(log_dir / f"child_{key}.log")
+        return count_lines(log_dir, f"child_{key}")
 
     for key in ("all", "b", "b2", "c", "late"):
-        (log_dir / f"child_{key}.log").unlink(missing_ok=True)
+        for path in log_dir.glob(f"child_{key}-*.log"):
+            path.unlink(missing_ok=True)
 
     core = LogCore(name="a")  # 核心自层 = [console]
     core.attach(file_output("all", "a-file"))  # 核心自层 = [console, a-file]
@@ -147,12 +149,12 @@ async def main() -> None:
         render(core)
         print("  z 的落回配置里没有 z-late：要挂出口，先挂到父实例、再取子实例。")
 
-        print("\n=== 6. 落盘结果：谁进了哪个文件，数一数就对得上 ===")
-        print(f"  child_all.log  （核心全量文件，a / d 进）: {lines('all')} 行")
-        print(f"  child_b.log    （a.b 自层挂的，只收 b / c(未覆盖前) / e / z）: {lines('b')} 行")
-        print(f"  child_b2.log   （b 后来才挂，c 收不到；e / z 收到）: {lines('b2')} 行")
-        print(f"  child_c.log    （a.b.c 自层挂的，覆盖后只收 c）: {lines('c')} 行")
-        print(f"  child_late.log （z 派生之后才挂的，z 收不到）: {lines('late')} 行")
+        print("\n=== 6. 落盘结果：谁进了哪个文件（数的是该前缀当天的片），数一数就对得上 ===")
+        print(f"  child_all-<日期>.log  （核心全量文件，a / d 进）: {lines('all')} 行")
+        print(f"  child_b-<日期>.log    （a.b 自层挂的，只收 b / c(未覆盖前) / e / z）: {lines('b')} 行")
+        print(f"  child_b2-<日期>.log   （b 后来才挂，c 收不到；e / z 收到）: {lines('b2')} 行")
+        print(f"  child_c-<日期>.log    （a.b.c 自层挂的，覆盖后只收 c）: {lines('c')} 行")
+        print(f"  child_late-<日期>.log （z 派生之后才挂的，z 收不到）: {lines('late')} 行")
 
         print("\n=== 内省接口（只读，不会替谁把实例建出来） ===")
         print(f"  a.b.c 实际会投: {[p.name for p in core.effective_outputs('a.b.c')]}")

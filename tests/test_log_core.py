@@ -48,6 +48,13 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> boo
     return predicate()
 
 
+def shards_text(outlet: LocalFileLogProcessor) -> str:
+    """把某个文件出口**所有片**读成一段文本（按天分片，一份日志可能不止一个片文件）。"""
+    return "".join(
+        path.read_text(encoding="utf-8") for path in outlet.shards() if path.exists()
+    )
+
+
 class CollectingProcessor(BaseLogProcessor):
     """把收到的日志原样记下来，便于断言「谁收到了什么」。"""
 
@@ -553,39 +560,31 @@ class TestModuleConfigCopy:
             await core_b.stop()
 
     async def test_each_module_gets_its_own_file(self, tmp_path: Path) -> None:
-        """端到端：一个模块一个文件，两个文件互不混杂。"""
+        """端到端：两个模块各挂一份出口（各写自己前缀的片），两边互不混杂。"""
         core = LogCore(name="nacho", console=False, dispatch_timeout=0.01)
-        path_a = tmp_path / "module_a.log"
-        path_b = tmp_path / "module_b.log"
-        attach_mount(
-            "module_a",
-            LocalFileLogProcessor(path_a, name="local-a", buffer_size=1, flush_interval=0),
-            core=core,
+        outlet_a = LocalFileLogProcessor(
+            tmp_path, prefix="module_a", name="local-a", buffer_size=1, flush_interval=0
         )
-        attach_mount(
-            "module_b",
-            LocalFileLogProcessor(path_b, name="local-b", buffer_size=1, flush_interval=0),
-            core=core,
+        outlet_b = LocalFileLogProcessor(
+            tmp_path, prefix="module_b", name="local-b", buffer_size=1, flush_interval=0
         )
+        attach_mount("module_a", outlet_a, core=core)
+        attach_mount("module_b", outlet_b, core=core)
         await core.start()
         try:
             core.child("module_a").info("只进 a")
             core.child("module_b").info("只进 b")
 
             def both_written() -> bool:
-                if not (path_a.exists() and path_b.exists()):
-                    return False
-                return (
-                    "只进 a" in path_a.read_text(encoding="utf-8")
-                    and "只进 b" in path_b.read_text(encoding="utf-8")
-                )
+                # 按天分片：一个出口写的是自己前缀下的片（通常就一片，可能有 .1）
+                return "只进 a" in shards_text(outlet_a) and "只进 b" in shards_text(outlet_b)
 
             assert await wait_until(both_written) is True
         finally:
             await core.stop()
 
-        text_a = path_a.read_text(encoding="utf-8")
-        text_b = path_b.read_text(encoding="utf-8")
+        text_a = shards_text(outlet_a)
+        text_b = shards_text(outlet_b)
         assert "只进 a" in text_a
         assert "只进 b" not in text_a
         assert "只进 b" in text_b
@@ -939,11 +938,11 @@ class TestManagerFacade:
         assert core.get_processor("collecting") is processor
 
     def test_configure_replaces_same_name_channel(self, tmp_path: Path) -> None:
-        """换输出路径：同名通道被替换，这是「一个模块换文件」的关键路径。"""
-        first = LocalFileLogProcessor(tmp_path / "old.log")
+        """换落点：同名通道被替换（换输出目录 / 换前缀就是这条路）。"""
+        first = LocalFileLogProcessor(tmp_path, prefix="old")
         core = configure("nacho", console=False, processors=[first])
 
-        second = LocalFileLogProcessor(tmp_path / "new.log")
+        second = LocalFileLogProcessor(tmp_path, prefix="new")
         configure("nacho", processors=[second])
 
         assert core.processors == [second]
