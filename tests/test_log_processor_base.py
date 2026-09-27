@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 import pytest
 
-from nacho.core.logger.models import LogLevel, LogRecord, TimestampLike
+from nacho.core.logger.models import LogLevel, LogRecord, LogSearchResult, TimestampLike
 from nacho.core.logger.processors.base import BaseLogProcessor
 #: ``_LogBuffer`` 是模块内部的辅助类，其容量保证与溢出取舍只能在此直接验证，
 #: 因此有意越过私有可见性检查。
@@ -93,9 +93,9 @@ class RecordingProcessor(BaseLogProcessor):
         logger_name: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
+    ) -> LogSearchResult:
         # 基类不会调用 search，测试替身保持平凡实现即可
-        return []
+        return LogSearchResult()
 
     async def _on_start(self) -> None:
         self.start_calls += 1

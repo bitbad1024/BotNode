@@ -9,11 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import TextIO, cast, override
 
-from ..models import LogLevel, LogRecord, TimestampLike
+from ..models import LogLevel, LogRecord, LogSearchResult, TimestampLike
 from ..queue import OverflowPolicy
 from .base import BaseLogProcessor, ProcessorStats
 
@@ -127,7 +127,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
         owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
+    ) -> LogSearchResult:
         return await asyncio.to_thread(
             self._search_sync,
             query,
@@ -140,7 +140,7 @@ class LocalFileLogProcessor(BaseLogProcessor):
             offset,
         )
 
-    def _search_sync(
+    def _iter_matching_sync(
         self,
         query: str | None,
         level: "LogLevel | str | None",
@@ -148,10 +148,8 @@ class LocalFileLogProcessor(BaseLogProcessor):
         end: TimestampLike,
         logger_name: str | None,
         owner_id: str | None,
-        limit: int,
-        offset: int,
-    ) -> list[LogRecord]:
-        results: list[LogRecord] = []
+    ) -> Iterator[LogRecord]:
+        """逐行扫描日志文件，产出满足条件的记录（检索就靠这一处解析）。"""
         for file_path in self._log_files():
             if not file_path.exists():
                 continue
@@ -179,11 +177,26 @@ class LocalFileLogProcessor(BaseLogProcessor):
                         logger_name=logger_name,
                         owner_id=owner_id,
                     ):
-                        results.append(record)
+                        yield record
 
+    def _search_sync(
+        self,
+        query: str | None,
+        level: "LogLevel | str | None",
+        start: TimestampLike,
+        end: TimestampLike,
+        logger_name: str | None,
+        owner_id: str | None,
+        limit: int,
+        offset: int,
+    ) -> LogSearchResult:
+        matched = list(
+            self._iter_matching_sync(query, level, start, end, logger_name, owner_id)
+        )
         # 文件为追加写入（旧 -> 新），检索结果按时间倒序返回
-        results.sort(key=lambda item: item.timestamp, reverse=True)
-        return results[offset : offset + limit]
+        matched.sort(key=lambda item: item.timestamp, reverse=True)
+        # 命中的总数就是 len(matched)：一次扫描既给这一页，也给总数（不必再扫一遍去数）
+        return LogSearchResult(records=matched[offset : offset + limit], total=len(matched))
 
     def _log_files(self) -> list[Path]:
         """返回当前文件与所有备份文件，供检索使用。"""

@@ -38,6 +38,7 @@ from nacho.api import (  # noqa: E402
     ErrorCode,
     InvalidCredentialsError,
     LogData,
+    LogPage,
     LoginData,
     LoginRequest,
     RegisterRequest,
@@ -59,6 +60,7 @@ from nacho.core.logger import (  # noqa: E402
     DatabaseLogProcessor,
     LogCore,
     LogRecord,
+    LogSearchResult,
     configure,
     get_logger,
     manager,
@@ -792,12 +794,20 @@ async def memory_log_processor() -> DatabaseLogProcessor:
 
 
 async def search_logs(
-    client: httpx.AsyncClient, headers: dict[str, str], **params: str
+    client: httpx.AsyncClient, headers: dict[str, str], **params: str | int
 ) -> list[LogData]:
-    """调一次 ``GET /api/logs`` 并返回 ``data`` 里的日志（断言都看它）。"""
+    """调一次 ``GET /api/logs`` 并返回 ``data.items`` 里的日志（断言都看它）。"""
+    page = await search_log_page(client, headers, **params)
+    return page.items
+
+
+async def search_log_page(
+    client: httpx.AsyncClient, headers: dict[str, str], **params: str | int
+) -> LogPage:
+    """调一次 ``GET /api/logs`` 并返回整页（``items`` + ``total``，翻页断言看它）。"""
     response = await client.get("/api/logs", headers=headers, params=params)
     assert response.status_code == 200, response.text
-    return ApiResponse[list[LogData]].model_validate(response.json()).data
+    return ApiResponse[LogPage].model_validate(response.json()).data
 
 
 async def token_of(client: httpx.AsyncClient, account: dict[str, str]) -> str:
@@ -820,8 +830,8 @@ class RecordingProcessor(BaseLogProcessor):
         self.received.extend(records)
 
     @override
-    async def search(self, **kwargs: object) -> list[LogRecord]:
-        return list(self.received)
+    async def search(self, **kwargs: object) -> LogSearchResult:
+        return LogSearchResult(records=list(self.received), total=len(self.received))
 
 
 class TestLogSearch:
@@ -856,6 +866,29 @@ class TestLogSearch:
             public = await search_logs(client, headers, owner_id="")
             assert "框架自己的活" in [row.message for row in public]
             assert all(row.owner_id == "" for row in public)
+
+    async def test_reports_total_for_paging(self, core: LogCore) -> None:
+        """响应带命中总数：`limit` / `offset` 只决定本页 items，total 始终是命中总数。"""
+        core.attach(await memory_log_processor())
+        log = get_logger(API_LOGGER_NAME)
+        for index in range(5):
+            log.info(f"第 {index} 条", owner_id="u-pager")
+        await drain(core)
+
+        async with client_for(app_with()) as client:
+            headers = {"Authorization": f"Bearer {await token_of(client, ADMIN)}"}
+
+            first = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=0)
+            assert first.total == 5  # 总数不受本页大小限制
+            assert len(first.items) == 2
+
+            second = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=2)
+            assert second.total == 5
+            assert len(second.items) == 2
+
+            last = await search_log_page(client, headers, owner_id="u-pager", limit=2, offset=4)
+            assert last.total == 5
+            assert len(last.items) == 1  # 最后一页不满
 
     async def test_default_queries_only_the_database_outlet(self, core: LogCore) -> None:
         """不写 ``processors`` 时只查落库那份（SQL）；显式指定才查别的出口。"""

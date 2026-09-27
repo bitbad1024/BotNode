@@ -16,6 +16,9 @@
     limit / offset                   分页（按时间倒序：先排序，再翻页）
     processors                       只看某些出口（逗号分隔，**仅管理员**）；不写就只查落库那份
 
+响应给**一页**：``{ items, total }``——``items`` 是本页日志，``total`` 是条件命中的总条数
+（翻页要它算总页数），前端据此做页码跳转。
+
 **默认只查落库那份**（``database`` 出口）：查历史日志以库（SQL）为准 —— 控制台不留存，
 文件那份是给人在本机翻的。库出口没开（``[logging.database] enabled = false``）时回 **503
 并说清楚**，不然只会静默返回空，比报错难查得多；要查别的出口（如 ``file``）显式写
@@ -39,7 +42,7 @@ from ...common.models import ApiResponse, ErrorResponse
 from ..auth.dependencies import CurrentUserDep
 from ..onebot.dependencies import ensure_can_touch, is_admin
 from .dependencies import LoggerDep
-from .responses import LogData
+from .responses import LogData, LogPage
 
 router = APIRouter(prefix="/logs", tags=["运行日志"])
 
@@ -123,7 +126,7 @@ def _processor_names(processors: str | None) -> list[str] | None:
 
 @router.get(
     "",
-    response_model=ApiResponse[list[LogData]],
+    response_model=ApiResponse[LogPage],
     summary="检索运行日志",
     responses={
         status.HTTP_401_UNAUTHORIZED: {
@@ -161,7 +164,7 @@ async def search_logs(
     processors: Annotated[
         str | None, Query(description="只看某些出口（逗号分隔，仅管理员）；默认只查落库那份")
     ] = None,
-) -> ApiResponse[list[LogData]]:
+) -> ApiResponse[LogPage]:
     """检索日志：条件原样交给日志系统的 ``search``（默认那份就是一条 SQL）。
 
     **默认只查落库那份**（``database`` 出口）：控制台不留存、文件那份是给人在本机翻的，
@@ -206,7 +209,8 @@ async def search_logs(
             )
         names = [DEFAULT_PROCESSOR]
 
-    records = await logger.search(
+    # 一页与总数一起回来：同一套条件，不必再问一次「有多少条」
+    result = await logger.search(
         query=query,
         level=chosen_level,
         start=chosen_start,
@@ -217,5 +221,7 @@ async def search_logs(
         offset=offset,
         processors=names,
     )
-    data: list[LogData] = [_log_of(record) for record in records if _is_log(record)]
-    return ApiResponse[list[LogData]](data=data, trace_id=trace_id)
+    data: list[LogData] = [_log_of(record) for record in result.records if _is_log(record)]
+    return ApiResponse[LogPage](
+        data=LogPage(items=data, total=result.total), trace_id=trace_id
+    )

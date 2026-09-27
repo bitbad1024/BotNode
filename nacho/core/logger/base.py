@@ -64,7 +64,7 @@ from types import MappingProxyType, TracebackType
 from typing import TypedDict, cast, override
 
 from .filters import DENY_ALL, LogFilter
-from .models import LogLevel, LogRecord, TimestampLike
+from .models import LogLevel, LogRecord, LogSearchResult, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
 from .queue import AsyncLogQueue, OverflowPolicy
 
@@ -796,11 +796,17 @@ class BaseLogger:
         limit: int = 100,
         offset: int = 0,
         processors: Sequence[str] | None = None,
-    ) -> list[LogRecord]:
-        """检索方法：聚合所有（或指定）处理机的检索结果，按时间倒序返回。"""
+    ) -> LogSearchResult:
+        """检索方法：聚合所有（或指定）处理机的检索结果，按时间倒序返回，并带上总数。
+
+        ``records`` 是翻页后的这一页（跨出口按 ``record_id`` 去重）；
+        ``total`` 是各出口同一条件下的命中数**相加、不去重** —— 默认只查单个出口（如落库
+        那份）时即为精确总数，多出口时同一条日志落了两份就会数两次（与去重后的条目口径
+        不完全一致，这是刻意的：多出口本来就没人保证是同一批数据）。
+        """
         targets = self._select_processors(processors)
         if not targets:
-            return []
+            return LogSearchResult()
 
         results = await asyncio.gather(
             *(
@@ -811,6 +817,7 @@ class BaseLogger:
                     end=end,
                     logger_name=logger_name,
                     owner_id=owner_id,
+                    # 各出口多要 offset + limit 条：合并去重后才好在本地切这一页
                     limit=limit + offset,
                     offset=0,
                 )
@@ -820,11 +827,13 @@ class BaseLogger:
         )
 
         merged: list[LogRecord] = []
+        total = 0
         for result in results:
             if isinstance(result, BaseException):
                 _fallback.exception("检索处理机失败", exc_info=result)
                 continue
-            merged.extend(result)
+            merged.extend(result.records)
+            total += result.total
 
         merged.sort(key=lambda item: item.timestamp, reverse=True)
 
@@ -836,7 +845,7 @@ class BaseLogger:
                 continue
             seen.add(record.record_id)
             deduped.append(record)
-        return deduped[offset : offset + limit]
+        return LogSearchResult(records=deduped[offset : offset + limit], total=total)
 
     def _select_processors(
         self, names: Sequence[str] | None = None

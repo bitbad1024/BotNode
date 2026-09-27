@@ -83,7 +83,7 @@ from .api.auth.responses import (
     RevokeSessionData,
     SessionData,
 )
-from .api.log import LogData
+from .api.log import LogData, LogPage
 from .api.onebot import (
     ClientData,
     IssuedTokenData,
@@ -150,6 +150,7 @@ __all__ = [
     "RevokeData",
     # 运行日志接口
     "LogData",
+    "LogPage",
     # 响应壳
     "ApiResponse",
     "ErrorResponse",

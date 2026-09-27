@@ -36,7 +36,7 @@ from contextlib import suppress
 from logging import Logger
 from typing import TypedDict, final, override
 
-from ..models import LogLevel, LogRecord, TimestampLike
+from ..models import LogLevel, LogRecord, LogSearchResult, TimestampLike
 from ..queue import OverflowPolicy
 
 #: 处理机内部异常的统一兜底出口，避免异常处理本身再触发日志递归。
@@ -208,8 +208,11 @@ class BaseLogProcessor(abc.ABC):
         owner_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[LogRecord]:
-        """检索方法：按条件查询该处理机中已落地的日志。
+    ) -> LogSearchResult:
+        """检索方法：按条件查询该处理机中已落地的日志，并给出命中总数（翻页用）。
+
+        ``limit`` / ``offset`` 只裁 ``records``；``total`` 是这批条件一共命中多少条，
+        与翻到第几页无关。不留存历史的出口（如控制台）把 ``total`` 给 0 就行。
 
         ``owner_id`` 精确匹配所有者：``None`` 不限（默认），空串 = 只要公共的。
         """

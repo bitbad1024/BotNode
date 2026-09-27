@@ -5,8 +5,9 @@
  * - 筛选（级别 / 模块 / 关键字 / 时间范围）点「查询」才生效，避免边打边请求；
  * - 管理员额外能选归属（全部 / 仅公共 / 指定 owner_id）与日志来源（落库 / 本机文件）；
  *   普通用户后端强制只返回自己名下的，UI 上直接不露出这两个条件；
- * - 响应没有 total，靠「返回条数 == pageSize」判断是否还有下一页，用「加载更多」翻页；
- * - 可选 10 秒自动刷新：只刷第一页（新日志本来就出现在最前），替换而非拼接。
+ * - 响应带 total，底部走通用分页条（`common/Pagination`）：页码 + 首尾 / 上下页 + 跳页，
+ *   每页条数 20/50/100/200；筛选条件 / 每页条数一变就回到第 1 页，数据变少时页码自动收口；
+ * - 可选 10 秒自动刷新：静默重拉当前页（新日志本来就出现在最前），不闪骨架屏。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { searchLogs, LOG_LEVELS, type LogEntry } from './logsApi'
@@ -14,10 +15,13 @@ import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
 import { IconRefresh, IconChevronDown, IconAlert, IconClock } from '../../common/icons'
 import { ListSkeleton } from '../../common/Skeleton'
+import Pagination, { totalPagesOf } from '../../common/Pagination'
 import styles from './LogsPage.module.css'
 
-/** 每页条数；后端上限 500，这里取 50，靠「加载更多」翻。 */
-const PAGE_SIZE = 50
+/** 每页条数可选项；后端单次上限 500，这里给几档常用值。 */
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200] as const
+/** 默认每页条数。 */
+const DEFAULT_PAGE_SIZE = 50
 /** 自动刷新间隔（毫秒）。 */
 const AUTO_REFRESH_MS = 10_000
 
@@ -75,27 +79,28 @@ export default function LogsPage() {
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS)
 
   const [entries, setEntries] = useState<LogEntry[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<{ title: string; detail?: string; traceId?: string } | null>(
     null,
   )
-  const [hasMore, setHasMore] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
 
-  // 防并发：自动刷新与手动翻页同时在飞时互相让一让
-  const inflightRef = useRef(false)
+  // 请求序号：每次拉取自增，只有「最新一次」的结果会被采用（旧响应丢弃，不盖新页面）
+  const requestSeq = useRef(0)
 
   const patchDraft = (patch: Partial<Filters>) =>
     setDraft((prev) => ({ ...prev, ...patch }))
 
-  /** 把已生效筛选翻译成后端参数（offset 单独传）。 */
+  /** 把已生效筛选与页码翻译成后端参数（offset 由页码与每页条数算出来）。 */
   const buildParams = useCallback(
-    (filters: Filters, offset: number) => {
+    (filters: Filters, targetPage: number, size: number) => {
       const params: Record<string, string | number> = {
-        limit: PAGE_SIZE,
-        offset,
+        limit: size,
+        offset: (targetPage - 1) * size,
       }
       if (filters.level) params.level = filters.level
       const q = filters.query.trim()
@@ -119,24 +124,23 @@ export default function LogsPage() {
     [isAdmin],
   )
 
-  /** 拉日志。append=true 为翻页（拼到尾部），否则替换第一页。 */
+  /** 拉某一页日志。silent=true 用于自动刷新：不闪骨架屏，失败也不清空已有列表。 */
   const fetchLogs = useCallback(
-    async (filters: Filters, append: boolean) => {
-      if (inflightRef.current) return
-      inflightRef.current = true
-      if (append) setLoadingMore(true)
-      else setLoading(true)
+    async (filters: Filters, targetPage: number, size: number, silent = false) => {
+      const seq = requestSeq.current + 1
+      requestSeq.current = seq
+      if (!silent) setLoading(true)
       try {
-        const offset = append ? entriesRef.current.length : 0
-        const res = await searchLogs(buildParams(filters, offset))
-        const rows = res.data
-        setEntries((prev) => (append ? [...prev, ...rows] : rows))
-        setHasMore(rows.length === PAGE_SIZE)
+        const res = await searchLogs(buildParams(filters, targetPage, size))
+        if (seq !== requestSeq.current) return // 已有更新的请求在飞，这次结果作废
+        setEntries(res.data.items)
+        setTotal(res.data.total)
         setError(null)
       } catch (err) {
-        if (!append) {
+        if (seq !== requestSeq.current) return
+        if (!silent) {
           setEntries([])
-          setHasMore(false)
+          setTotal(0)
           if (err instanceof ApiRequestError) {
             if (err.status === 503) {
               setError({
@@ -151,48 +155,53 @@ export default function LogsPage() {
             setError({ title: err instanceof Error ? err.message : '日志加载失败' })
           }
         }
-        // 翻页失败不清空已有列表，只提示
-        if (append && err instanceof ApiRequestError) {
-          setHasMore(false)
-        }
       } finally {
-        inflightRef.current = false
-        setLoading(false)
-        setLoadingMore(false)
+        if (seq === requestSeq.current) setLoading(false)
       }
     },
     [buildParams],
   )
 
-  // entries 的 ref 给异步回调读最新长度，避免闭包过期
-  const entriesRef = useRef<LogEntry[]>([])
-  entriesRef.current = entries
-
-  // 首次加载 + 已生效查询变化（其实只在提交时 setApplied，首屏一次）
+  // 首次加载 + 已生效查询 / 页码 / 每页条数任一变化就重拉：翻页与改条数都走这里
   useEffect(() => {
-    void fetchLogs(applied, false)
+    void fetchLogs(applied, page, pageSize)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applied])
+  }, [applied, page, pageSize])
 
-  // 自动刷新：固定间隔重拉第一页（替换），仅在非手动加载时
+  // 自动刷新：固定间隔静默重拉当前页（不闪骨架屏）
   useEffect(() => {
     if (!autoRefresh) return
     const timer = window.setInterval(() => {
-      void fetchLogs(applied, false)
+      void fetchLogs(applied, page, pageSize, true)
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [autoRefresh, applied, fetchLogs])
+  }, [autoRefresh, applied, page, pageSize, fetchLogs])
 
   function submitSearch(event: React.FormEvent) {
     event.preventDefault()
     setExpandedId(null)
+    setPage(1) // 条件变了就从第 1 页看起
     setApplied({ ...draft })
   }
 
   function resetFilters() {
     setDraft(EMPTY_FILTERS)
-    setApplied(EMPTY_FILTERS)
     setExpandedId(null)
+    setPage(1)
+    setApplied({ ...EMPTY_FILTERS })
+  }
+
+  /** 跳到某页：清掉展开态，页码一变 effect 就会去拉那一页。 */
+  function goToPage(target: number) {
+    setExpandedId(null)
+    setPage(target)
+  }
+
+  /** 改每页条数：回到第 1 页（否则 offset 会落到不存在的位置）。 */
+  function changePageSize(size: number) {
+    setExpandedId(null)
+    setPage(1)
+    setPageSize(size)
   }
 
   const activeFilterCount = useMemo(() => {
@@ -208,6 +217,13 @@ export default function LogsPage() {
     }
     return n
   }, [draft, isAdmin])
+
+  const totalPages = totalPagesOf(total, pageSize)
+
+  // 数据变少（比如自动刷新时旧日志被清理）会让当前页越界：收口到最后一页，别停在空白页
+  useEffect(() => {
+    setPage((current) => (current > totalPages ? totalPages : current))
+  }, [totalPages])
 
   return (
     <div className={styles.page}>
@@ -234,10 +250,10 @@ export default function LogsPage() {
           <button
             type="button"
             className="btn"
-            onClick={() => void fetchLogs(applied, false)}
+            onClick={() => void fetchLogs(applied, page, pageSize)}
             disabled={loading}
           >
-            <IconRefresh size={15} />
+            <IconRefresh size={15} className={loading ? styles.spin : undefined} />
             刷新
           </button>
         </div>
@@ -385,7 +401,7 @@ export default function LogsPage() {
               <button
                 type="button"
                 className={`btn ${styles.retryBtn}`}
-                onClick={() => void fetchLogs(applied, false)}
+                onClick={() => void fetchLogs(applied, page, pageSize)}
               >
                 <IconRefresh size={14} />
                 重试
@@ -464,21 +480,16 @@ export default function LogsPage() {
               })}
             </ul>
 
-            <div className={styles.pager}>
-              {hasMore ? (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void fetchLogs(applied, true)}
-                  disabled={loadingMore}
-                >
-                  <IconRefresh size={14} className={loadingMore ? styles.spin : undefined} />
-                  {loadingMore ? '正在加载…' : '加载更多'}
-                </button>
-              ) : (
-                <span className={styles.pagerEnd}>— 已经到底了 —</span>
-              )}
-            </div>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onChange={goToPage}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              onPageSizeChange={changePageSize}
+              disabled={loading}
+              className={styles.pager}
+            />
           </>
         )}
       </section>

@@ -214,24 +214,27 @@ class TestMinimalStartup:
         await logger.start()
         try:
             logger.info("检索不到")
-            assert await logger.search() == []
+            found = await logger.search()
+            assert (found.records, found.total) == ([], 0)
         finally:
             await logger.stop()
 
     async def test_console_search_returns_unsupported_hint(self) -> None:
-        """控制台不留存日志：检索返回一条提示记录，而不是静默空列表。"""
+        """控制台不留存日志：检索返回一条提示记录，而不是静默空列表；总数是 0。"""
         logger = LogCore(dispatch_timeout=0.01)
         await logger.start()
         try:
             logger.info("检索不到")
-            results = await logger.search()
+            found = await logger.search()
         finally:
             await logger.stop()
 
-        assert len(results) == 1
-        assert results[0].level is LogLevel.WARNING
-        assert results[0].logger_name == "console"
-        assert results[0].extra["search_supported"] is False
+        assert len(found.records) == 1
+        assert found.total == 0  # 控制台确实没东西可数
+        hint = found.records[0]
+        assert hint.level is LogLevel.WARNING
+        assert hint.logger_name == "console"
+        assert hint.extra["search_supported"] is False
 
 
 class TestDynamicAttach:

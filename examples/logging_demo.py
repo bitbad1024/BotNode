@@ -32,6 +32,7 @@ from nacho.core.logger import (  # noqa: E402
     LocalFileLogProcessor,
     LogCore,
     LogRecord,
+    LogSearchResult,
     attach_mount,
 )
 from nacho.db import SqlLogStore  # noqa: E402
@@ -45,8 +46,8 @@ class BrokenLogProcessor(BaseLogProcessor):
     async def write(self, records: list[LogRecord]) -> None:
         raise RuntimeError("模拟处理机崩溃")
 
-    async def search(self, **kwargs: object) -> list[LogRecord]:
-        return []
+    async def search(self, **kwargs: object) -> LogSearchResult:
+        return LogSearchResult()
 
 
 def count_lines(path: Path) -> int:
@@ -113,11 +114,15 @@ async def main() -> None:
     await asyncio.sleep(0.3)
 
     print("\n=== 检索 ERROR 及以上（聚合本地 + 数据库 + 控制台） ===")
-    for record in await logger.search(level="ERROR", limit=5):
+    errors = await logger.search(level="ERROR", limit=5)
+    print(f"命中 {errors.total} 条，本页 {len(errors.records)} 条：")
+    for record in errors.records:
         print(f"[{record.datetime_text}] {record.level.name:<8} {record.message} {record.extra}")
 
     print("\n=== 只检索数据库处理机中「机器人执行」相关日志 ===")
-    for record in await logger.search(query="机器人执行", limit=3, processors=["database"]):
+    robot_logs = await logger.search(query="机器人执行", limit=3, processors=["database"])
+    print(f"命中 {robot_logs.total} 条，本页 {len(robot_logs.records)} 条：")
+    for record in robot_logs.records:
         print(f"[{record.datetime_text}] {record.level.name:<8} {record.message}")
 
     await logger.stop()
