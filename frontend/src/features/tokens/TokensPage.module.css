@@ -174,6 +174,33 @@
   color: var(--success);
 }
 
+/* 在线状态灯：令牌列表里「在线 / 离线」这一行（悬浮可见连着它的连接详情） */
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.dotOn {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+.dotOff {
+  background: var(--text-3);
+}
+.onlineLabel {
+  font-weight: 500;
+  color: var(--success);
+}
+
 
 .skeletonPad {
   padding: 0 18px;

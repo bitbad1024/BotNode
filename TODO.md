@@ -14,5 +14,5 @@
 
 - [x] **P1-1** 后端：`TokenData` 模型加 `online` / `clients` 字段（`responses.py`）
 - [x] **P1-2** 后端：`list_tokens` 聚合在线状态（`router.py`；`protocols.py` 无需改，`roster(id=)` 本就在协议里）
-- [ ] **P1-3** 前端：令牌列表加在线状态列（状态灯 + 在线连接信息，悬浮看详情）
+- [x] **P1-3** 前端：令牌列表加在线状态列（状态灯 + 在线连接信息，悬浮看详情）
 - [ ] **P1-4** 测试验证 + 收尾（`test_onebot.py` 补在线聚合断言；全量 612 passed / 1 skipped）

@@ -51,6 +51,14 @@ function formatTime(unixSeconds: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** 在线状态灯的悬浮说明：把连着它的每条连接（机器人号 / 对端 / 连上时间）列出来。 */
+function onlineTitle(t: OneBotToken): string {
+  if (!t.online || t.clients.length === 0) return '当前没有客户端连着这条令牌'
+  return t.clients
+    .map((c) => `机器人 ${c.self_id ?? '—'} · ${c.remote} · ${formatTime(c.connected_at)}`)
+    .join('\n')
+}
+
 function describe(err: unknown): string {
   if (err instanceof ApiRequestError) {
     // 503 = 主程序没把 OneBot 服务传给 create_app；说清楚比甩一个状态码有用
@@ -368,6 +376,20 @@ export default function TokensPage() {
                     </td>
                     <td className={styles.muted}>{formatTime(t.created_at)}</td>
                     <td>
+                      <div
+                        className={styles.statusRow}
+                        title={onlineTitle(t)}
+                      >
+                        <span
+                          className={`${styles.dot} ${t.online ? styles.dotOn : styles.dotOff}`}
+                        />
+                        <span className={t.online ? styles.onlineLabel : styles.muted}>
+                          {t.online ? '在线' : '离线'}
+                        </span>
+                        {t.online && t.clients.length > 1 && (
+                          <span className={styles.muted}>{t.clients.length} 条</span>
+                        )}
+                      </div>
                       <div className={styles.switchRow}>
                         <button
                           type="button"
