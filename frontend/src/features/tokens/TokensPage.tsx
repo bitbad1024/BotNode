@@ -12,14 +12,11 @@
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
-  fetchClients,
   fetchTokens,
   issueToken,
-  kickClient,
   revokeToken,
   setTokenEnabled,
   type IssuedToken,
-  type OneBotClient,
   type OneBotToken,
 } from './tokensApi'
 import { ApiRequestError } from '../../lib/http'
@@ -32,17 +29,14 @@ import {
   IconAlert,
   IconCopy,
   IconKey,
-  IconMonitor,
   IconPlus,
   IconRefresh,
   IconTrash,
 } from '../../common/icons'
 import styles from './TokensPage.module.css'
 
-/** 待确认的破坏性操作（吊销令牌 / 断开客户端）。 */
-type Pending =
-  | { kind: 'revoke'; id: string }
-  | { kind: 'kick'; id: string; revoke: boolean }
+/** 待确认的破坏性操作（吊销令牌）。 */
+type Pending = { kind: 'revoke'; id: string }
 
 function formatTime(unixSeconds: number): string {
   if (!unixSeconds) return '—'
@@ -73,7 +67,6 @@ function describe(err: unknown): string {
 export default function TokensPage() {
   const { pushToast } = useToast()
 
-  const [clients, setClients] = useState<OneBotClient[]>([])
   const [tokens, setTokens] = useState<OneBotToken[]>([])
   const [loading, setLoading] = useState(true)
   const [failure, setFailure] = useState('')
@@ -92,9 +85,8 @@ export default function TokensPage() {
     setLoading(true)
     setFailure('')
     try {
-      const [c, t] = await Promise.all([fetchClients(), fetchTokens()])
-      setClients(c.data)
-      setTokens(t.data)
+      const { data } = await fetchTokens()
+      setTokens(data)
     } catch (err) {
       setFailure(describe(err))
     } finally {
@@ -128,23 +120,14 @@ export default function TokensPage() {
     }
   }
 
-  /** 确认弹窗里点「确认」：按 pending 的种类跑对应的动作。 */
+  /** 确认弹窗里点「确认」：吊销令牌。 */
   function confirmPending() {
     if (!pending) return
-    if (pending.kind === 'revoke') {
-      void run(() => revokeToken(pending.id), '令牌已吊销')
-      return
-    }
-    void run(
-      () => kickClient(pending.id, pending.revoke),
-      pending.revoke ? '已断开并吊销令牌' : '已断开连接',
-    )
+    void run(() => revokeToken(pending.id), '令牌已吊销')
   }
 
-  /** 弹窗正文里点名的对象：吊销看令牌、断开看客户端（找不到就退回「这条连接」）。 */
-  const revokeTarget = pending?.kind === 'revoke' ? tokens.find((t) => t.id === pending.id) : null
-  const kickTarget =
-    pending?.kind === 'kick' ? clients.find((c) => c.client_id === pending.id) : null
+  /** 弹窗正文里点名的对象：吊销的那张令牌（找不到就退回「这个令牌」）。 */
+  const revokeTarget = tokens.find((t) => t.id === pending?.id) ?? null
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -266,79 +249,6 @@ export default function TokensPage() {
               地址上，它连进来就归到这个账号下。
             </div>
           </div>
-        )}
-      </section>
-
-      {/* 在线客户端 */}
-      <section className={`card ${styles.panel}`}>
-        <div className={styles.panelHead}>
-          <h3 className={styles.panelTitle}>在线客户端</h3>
-        </div>
-        {loading ? (
-          <div className={styles.skeletonPad}>
-            <ListSkeleton rows={4} />
-          </div>
-        ) : clients.length === 0 ? (
-          <EmptyState
-            icon={IconMonitor}
-            title="当前没有客户端连着"
-            hint="签发令牌后，让 OneBot 实现用反向 WS 连上来，就会出现在这里。"
-            action={
-              <button className="btn" onClick={focusIssueForm}>
-                <IconKey size={15} />
-                去签发令牌
-              </button>
-            }
-          />
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>归属</th>
-                <th>机器人号</th>
-                <th>对端地址</th>
-                <th>连上时间</th>
-                <th style={{ textAlign: 'right' }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map((c) => {
-                return (
-                  <tr key={c.client_id}>
-                    <td>
-                      <span className="chip">{c.nickname || c.id || '匿名'}</span>
-                    </td>
-                    <td className={styles.mono}>{c.self_id ?? '—'}</td>
-                    <td className={`${styles.mono} ${styles.muted}`}>{c.remote}</td>
-                    <td className={styles.muted}>{formatTime(c.connected_at)}</td>
-                    <td>
-                      <div className={styles.rowActions}>
-                        <button
-                          className="btn"
-                          disabled={busy}
-                          onClick={() =>
-                            setPending({ kind: 'kick', id: c.client_id, revoke: false })
-                          }
-                        >
-                          断开
-                        </button>
-                        <button
-                          className="btn btn-danger-ghost"
-                          disabled={busy}
-                          onClick={() =>
-                            setPending({ kind: 'kick', id: c.client_id, revoke: true })
-                          }
-                        >
-                          <IconTrash size={14} />
-                          断开并吊销
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
         )}
       </section>
 
@@ -474,36 +384,18 @@ export default function TokensPage() {
         )}
       </section>
 
-      {/* 破坏性操作统一走确认弹窗：吊销 / 断开（并吊销） */}
+      {/* 破坏性操作统一走确认弹窗：吊销 */}
       {pending && (
         <ConfirmDialog
-          title={
-            pending.kind === 'revoke'
-              ? '吊销这个令牌？'
-              : pending.revoke
-                ? '断开并吊销令牌？'
-                : '断开这条连接？'
-          }
+          title="吊销这个令牌？"
           body={
-            pending.kind === 'revoke' ? (
-              <>
-                吊销 <b>{revokeTarget?.nickname || revokeTarget?.account || '这个令牌'}</b>
-                ：用它连着的客户端会立刻断开，记录被删除、不可恢复（停用可以再启用，吊销不行）。
-              </>
-            ) : pending.revoke ? (
-              <>
-                断开 <b>{kickTarget?.nickname || kickTarget?.id || '这条连接'}</b>
-                ，并把它的令牌一并吊销（不可恢复）。客户端多半会自动重连，但令牌已失效会被拒。
-              </>
-            ) : (
-              <>
-                只断开 <b>{kickTarget?.nickname || kickTarget?.id || '这条连接'}</b>
-                ，不动令牌 —— OneBot 实现通常会自动重连，过几秒它可能又出现在列表里。
-              </>
-            )
+            <>
+              吊销 <b>{revokeTarget?.nickname || revokeTarget?.account || '这个令牌'}</b>
+              ：用它连着的客户端会立刻断开，记录被删除、不可恢复（停用可以再启用，吊销不行）。
+            </>
           }
-          confirmText={pending.kind === 'revoke' ? '吊销' : pending.revoke ? '断开并吊销' : '断开'}
-          danger={pending.kind === 'revoke' || pending.revoke}
+          confirmText="吊销"
+          danger
           busy={busy}
           onCancel={() => setPending(null)}
           onConfirm={() => void confirmPending()}
