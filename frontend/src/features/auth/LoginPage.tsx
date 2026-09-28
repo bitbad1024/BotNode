@@ -6,7 +6,7 @@ import { ApiRequestError } from '../../lib/http'
 import { useAuth } from './authStore'
 import { useToast } from '../../common/Toast'
 import { ThemeToggle } from '../../common/theme'
-import { IconUser, IconLock, IconEye, IconEyeOff, IconAlert, IconCheck } from '../../common/icons'
+import { IconUser, IconLock, IconEye, IconEyeOff, IconAlert, IconCheck, IconLogo } from '../../common/icons'
 import {
   SHOW_DEMO_ACCOUNTS,
   DEMO_ACCOUNTS,
@@ -107,7 +107,9 @@ export default function LoginPage() {
 
       <div className={`${styles.card} rise`}>
         <div className={styles.brand}>
-          <span className={styles.logo} aria-hidden="true" />
+          <span className={styles.logo} aria-hidden="true">
+            <IconLogo size={18} />
+          </span>
           <span className={styles.brandName}>nacho</span>
           <span className={styles.brandTag}>控制台</span>
         </div>

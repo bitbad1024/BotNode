@@ -33,11 +33,15 @@
   height: 30px;
   flex-shrink: 0;
   border-radius: 8px;
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: var(--logo-bg);
+  border: 1px solid var(--logo-border);
+  color: var(--logo-fg);
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.logo svg {
+  display: block;
 }
 
 .brand-name {

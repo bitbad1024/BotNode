@@ -33,6 +33,11 @@
   --accent-soft: rgba(79, 70, 229, 0.1);
   --accent-border: rgba(79, 70, 229, 0.26);
 
+  /* 品牌标识（logo 方块）：亮色白底黑图标，靠边框与白背景区分 */
+  --logo-bg: #ffffff;
+  --logo-fg: #101014;
+  --logo-border: rgba(16, 16, 20, 0.18);
+
   /* 侧栏选中态 */
   --nav-active-bg: var(--accent-soft);
   --nav-active-text: var(--accent);
@@ -101,6 +106,11 @@
   --accent-contrast: #0c0c14;
   --accent-soft: rgba(139, 141, 255, 0.15);
   --accent-border: rgba(139, 141, 255, 0.32);
+
+  /* 品牌标识（logo 方块）：暗色黑底白图标 */
+  --logo-bg: #000000;
+  --logo-fg: #f4f4f6;
+  --logo-border: rgba(255, 255, 255, 0.24);
 
   --nav-active-bg: var(--accent-soft);
   --nav-active-text: var(--accent);

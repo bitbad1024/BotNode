@@ -301,3 +301,11 @@ export const IconCamera = (p: IconProps) => (
     <path d="M18.5 10.5h.01" />
   </svg>
 )
+
+/** 品牌图标（feather terminal 线条）：单色 currentColor，颜色随外层主题令牌变化 */
+export const IconLogo = (p: IconProps) => (
+  <svg {...base(p)}>
+    <polyline points="4 17 10 11 4 5" />
+    <line x1="12" y1="19" x2="20" y2="19" />
+  </svg>
+)
