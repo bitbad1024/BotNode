@@ -150,6 +150,31 @@ async def test_group_notice_translated() -> None:
         assert event.text == ""
 
 
+async def test_recall_notice_carries_message_id() -> None:
+    """撤回通知：message_id 是额外字段，规范化事件也要带上（下游不用下探 raw）。"""
+    async with served_adapter() as (_gateway, adapter, inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await ws.send(
+                json.dumps(
+                    {
+                        "post_type": "notice",
+                        "notice_type": "friend_recall",
+                        "time": 1_700_000_003,
+                        "self_id": 10001,
+                        "user_id": 20002,
+                        "message_id": 123456,
+                    }
+                )
+            )
+            assert await wait_until(lambda: len(inbox) == 1)
+        event = inbox[0]
+        assert event.kind == "notice"
+        assert event.chat == "other"  # 私聊撤回没有 group_id
+        assert event.message_id == "123456"  # 额外字段也翻上来了
+        assert event.user_id == "20002"
+
+
 # ---------------------------------------------------------------------- 能力转述
 async def test_send_via_gateway_roundtrip() -> None:
     """Gateway 路由发送：适配器挑连接、客户端收到动作、回执翻成 ActionResult。"""

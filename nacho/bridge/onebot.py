@@ -65,6 +65,9 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
     if isinstance(event, NoticeEvent):
         # 通知：群通知带 group_id 算群事件，其余算不出会话指向
         has_group = event.group_id is not None
+        # 撤回类通知（friend_recall / group_msg_recall）带 message_id：NoticeEvent 没声明
+        # 这字段，但 extra="allow" 的额外字段可属性访问——取到就带上，下游不用下探 raw
+        recall_id = getattr(event, "message_id", None)
         return PlatformEvent(
             platform=PLATFORM,
             owner_id=conn.id,
@@ -73,6 +76,7 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             chat="group" if has_group else "other",
             chat_id=str(event.group_id) if has_group else "",
             user_id=str(event.user_id) if event.user_id is not None else "",
+            message_id=str(recall_id) if recall_id is not None else "",
             time=float(event.time),
             raw=event,
         )
