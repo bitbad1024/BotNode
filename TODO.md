@@ -38,7 +38,7 @@
 - [x] **P2-3** `bridge/gateway.py`：`Gateway` 总线——`register(adapter)` / `subscribe(handler)` /
   按平台路由的发送入口（找不到平台抛错，口径同 onebot 节点的「环境问题当场抛」）；
   事件分发异常口径沿用 onebot（handler 抛异常只记日志，不淹总线）；单测用 FakeAdapter
-- [ ] **P2-4** `bridge/onebot.py`：`OneBotAdapter` 包 `OneBotServer`——handler 里把
+- [x] **P2-4** `bridge/onebot.py`：`OneBotAdapter` 包 `OneBotServer`——handler 里把
   `OneBotEvent` 翻译成 `PlatformEvent` 投给 Gateway（心跳过滤沿用 `_emit` 的口径）；
   roster / kick / revoke_by_id / set_token_enabled / connections / conn.call 透传；
   测试复用 `test_onebot.py` 的真 WS 基建，断言翻译结果与透传行为

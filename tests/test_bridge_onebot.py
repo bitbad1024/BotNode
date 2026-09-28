@@ -1,0 +1,240 @@
+"""OneBot 适配器的测试：事件翻译、能力转述、兼容面透传（跑真 WS，不 mock）。
+
+套路与 ``test_onebot.py`` 同源：127.0.0.1 空闲端口 + ``websockets`` 客户端；令牌注册表
+不配（匿名模式）——翻译与路由不依赖归属语义，留一条空归属的连接就够。需要
+``websockets``（``pip install "nacho[onebot]"``），没装就整文件跳过。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import socket
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import cast
+
+import pytest
+
+pytest.importorskip("websockets", reason="OneBot 接入层要装 websockets：pip install \"nacho[onebot]\"")
+
+from websockets.asyncio.client import connect
+
+from nacho.bridge import Gateway
+from nacho.bridge.models import PlatformEvent
+from nacho.bridge.onebot import OneBotAdapter
+from nacho.onebot import OneBotOptions
+
+#: 一条私聊消息事件（同 test_onebot.py 的形状）
+PRIVATE_MESSAGE: dict[str, object] = {
+    "post_type": "message",
+    "message_type": "private",
+    "time": 1_700_000_000,
+    "self_id": 10001,
+    "user_id": 20002,
+    "raw_message": "你好",
+    "message": "你好",
+    "sender": {"nickname": "对方"},
+}
+
+#: 一条心跳（不该出现在总线上）
+HEARTBEAT: dict[str, object] = {
+    "post_type": "meta_event",
+    "meta_event_type": "heartbeat",
+    "time": 1_700_000_001,
+    "self_id": 10001,
+    "interval": 5,
+}
+
+
+def free_port() -> int:
+    """挑一个当前空闲的端口（让内核分配，测完即释放）。"""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return cast("tuple[str, int]", sock.getsockname())[1]
+
+
+def ws_url(port: int) -> str:
+    """反向 WS 地址（匿名模式：不带令牌）。"""
+    return f"ws://127.0.0.1:{port}/"
+
+
+async def wait_until(predicate, timeout: float = 3.0) -> bool:
+    """轮询等一个条件成立（服务端那条腿是异步跑的，得给它一点时间）。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.02)
+    return predicate()
+
+
+@asynccontextmanager
+async def served_adapter() -> AsyncGenerator[tuple[Gateway, OneBotAdapter, list[PlatformEvent]], None]:
+    """起一套「Gateway + OneBot 适配器 + 收件订阅」，收件箱供断言；退出时停干净。"""
+    gateway = Gateway()
+    inbox: list[PlatformEvent] = []
+
+    async def collect(event: PlatformEvent) -> None:
+        inbox.append(event)
+
+    gateway.subscribe(collect)
+    adapter = OneBotAdapter(
+        OneBotOptions(host="127.0.0.1", port=free_port()), publish=gateway.publish
+    )
+    gateway.register(adapter)
+    await gateway.start()
+    try:
+        yield gateway, adapter, inbox
+    finally:
+        await gateway.stop()
+
+
+# ---------------------------------------------------------------------- 事件翻译
+async def test_message_event_translated() -> None:
+    """私聊消息 -> 规范化事件：身份转字符串、会话指向归一、raw 兜底整条原始事件。"""
+    async with served_adapter() as (_gateway, adapter, inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await ws.send(json.dumps(PRIVATE_MESSAGE))
+            assert await wait_until(lambda: len(inbox) == 1)
+
+        event = inbox[0]
+        assert event.platform == "onebot"
+        assert event.owner_id == ""  # 匿名模式：归属空串
+        assert event.self_id == "10001"  # 数字转字符串
+        assert event.kind == "message"
+        assert event.chat == "private"
+        assert event.chat_id == "20002"  # 私聊的会话指向就是对方
+        assert event.user_id == "20002"
+        assert event.text == "你好"
+        assert event.time == 1_700_000_000.0
+        # raw 兜底：整条原始事件（消息段数组 / sender 这些翻译不了的字段从这里拿）
+        assert event.raw is not None
+        assert event.raw.sender == {"nickname": "对方"}  # type: ignore[attr-defined]
+
+
+async def test_heartbeat_not_published() -> None:
+    """心跳到不了总线（服务端 _emit 已滤；适配器不重复滤也不放进来）。"""
+    async with served_adapter() as (_gateway, adapter, inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await ws.send(json.dumps(HEARTBEAT))
+            await asyncio.sleep(0.2)  # 给它足够的时间「不发」
+        assert inbox == []
+
+
+async def test_group_notice_translated() -> None:
+    """群通知：带 group_id 算群事件，chat_id 取群号。"""
+    async with served_adapter() as (_gateway, adapter, inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await ws.send(
+                json.dumps(
+                    {
+                        "post_type": "notice",
+                        "notice_type": "group_increase",
+                        "time": 1_700_000_002,
+                        "self_id": 10001,
+                        "user_id": 20002,
+                        "group_id": 70001,
+                    }
+                )
+            )
+            assert await wait_until(lambda: len(inbox) == 1)
+        event = inbox[0]
+        assert event.kind == "notice"
+        assert event.chat == "group"
+        assert event.chat_id == "70001"
+        assert event.user_id == "20002"
+        assert event.text == ""
+
+
+# ---------------------------------------------------------------------- 能力转述
+async def test_send_via_gateway_roundtrip() -> None:
+    """Gateway 路由发送：适配器挑连接、客户端收到动作、回执翻成 ActionResult。"""
+    async with served_adapter() as (gateway, adapter, _inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await wait_until(lambda: len(adapter.connections) == 1)
+            # 客户端那头：收到动作就按 echo 答一条成功回执
+            answered = asyncio.get_running_loop().create_future()
+
+            async def answer() -> None:
+                raw = await ws.recv()
+                payload = json.loads(raw)
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "data": {"message_id": 7},
+                            "echo": payload["echo"],
+                        }
+                    )
+                )
+                answered.set_result(None)
+
+            worker = asyncio.create_task(answer())
+            result = await gateway.send(
+                "onebot", "", "send_private_msg", user_id=20002, message="hi"
+            )
+            await asyncio.wait_for(answered, 3.0)
+            await asyncio.wait_for(worker, 3.0)
+
+        assert result.ok is True
+        assert result.data == {"message_id": 7}
+
+
+async def test_send_without_online_connection_raises() -> None:
+    """环境问题当场抛：归属下没有在线连接（口径同 onebot 节点）。"""
+    async with served_adapter() as (gateway, _adapter, _inbox):
+        with pytest.raises(ConnectionError, match="没有归属"):
+            await gateway.send("onebot", "u-nobody", "send_private_msg", user_id=1, message="hi")
+
+
+async def test_clients_snapshot() -> None:
+    """在线列表转述：roster 的 int 口径翻成 BotClient 的字符串口径。"""
+    async with served_adapter() as (_gateway, adapter, _inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await wait_until(lambda: len(adapter.connections) == 1)
+            # 还没发事件：self_id 没学到，是空串
+            assert adapter.clients()[0].self_id == ""
+            await ws.send(json.dumps(PRIVATE_MESSAGE))
+            assert await wait_until(lambda: adapter.clients()[0].self_id == "10001")
+
+            client = adapter.clients()[0]
+            assert client.owner_id == ""  # 匿名
+            assert client.remote.startswith("127.0.0.1:")
+            assert client.connected_at > 0
+
+
+# ---------------------------------------------------------------------- 兼容面
+async def test_compat_surface_passthrough() -> None:
+    """兼容面：tokens / connections / roster 透传给被包的服务端（下游零改动的验收线）。"""
+    async with served_adapter() as (_gateway, adapter, _inbox):
+        assert adapter.tokens is None  # 匿名模式：没配注册表
+        port = adapter.server.options.port
+        async with connect(ws_url(port)):
+            await wait_until(lambda: len(adapter.connections) == 1)
+            # roster 是**平台口径**（self_id 仍 int | None），与 BotClient 的字符串口径分开
+            assert len(adapter.roster()) == 1
+            assert adapter.roster()[0].self_id is None
+            assert adapter.roster()[0] == adapter.server.roster()[0]  # 透传：同一份快照语义
+            assert await adapter.kick("不存在的连接") is False  # 透传：没这条连接
+        assert await wait_until(lambda: adapter.connections == ())
+
+
+async def test_gateway_lifecycle_controls_server() -> None:
+    """生命周期经总线：gateway.stop() 后端口关掉、连接清空。"""
+    async with served_adapter() as (_gateway, adapter, _inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)):
+            await wait_until(lambda: len(adapter.connections) == 1)
+        # served_adapter 退出时会 gateway.stop()；这里复起一次验证 start/stop 幂等循环
+        await adapter.start()
+        async with connect(ws_url(port)):
+            assert await wait_until(lambda: len(adapter.connections) == 1)
+        await adapter.stop()
+        assert adapter.connections == ()
