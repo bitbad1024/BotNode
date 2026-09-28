@@ -458,6 +458,9 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
             records = ApiResponse[list[TokenData]].model_validate(tokens.json()).data
             assert [item.id for item in records] == ["u-admin"]
             assert "token" not in TokenData.model_fields
+            # 刚签发、还没连接：派生态 online 是 False（不落库，接口层实时聚合）
+            assert records[0].online is False
+            assert records[0].clients == []
 
             # 4. 拿这个令牌连进来，在线列表里能看到它属于 u-admin
             async with connect(ws_url(port_of(server), issued_data.token)) as ws:
@@ -476,6 +479,16 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
                 assert rows[0].nickname == "管理员"  # 归属昵称：和令牌列表一个口径
                 assert rows[0].account == "机器人一号"  # 令牌里带的机器人账号
                 assert rows[0].self_id == 10001
+
+                # 4.5 令牌列表把在线状态融合进来：online=True，且带连着它的连接详情
+                tokens_live = await client.get("/api/onebot/tokens", headers=headers)
+                assert tokens_live.status_code == 200, tokens_live.text
+                live = ApiResponse[list[TokenData]].model_validate(tokens_live.json()).data
+                assert live[0].online is True
+                assert len(live[0].clients) == 1
+                assert live[0].clients[0].id == "u-admin"
+                assert live[0].clients[0].self_id == 10001
+                assert live[0].clients[0].remote  # 对端地址也带上了
 
                 # 5. 踢下线（不吊销）
                 kicked = await client.delete(
