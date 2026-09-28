@@ -274,3 +274,49 @@
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
+
+/* 卡片可点开：点卡片展开当前连接详情（QQ 号 / 对端 / 在线时长，前端实时算） */
+.card {
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.card:hover {
+  border-color: var(--accent-border);
+}
+.cardOpen {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.cardDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: 13px;
+}
+.cardDetail > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.cardDetail dt {
+  flex: none;
+  width: 68px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.cardDetail dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.cardEmpty {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13px;
+}

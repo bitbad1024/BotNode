@@ -51,6 +51,16 @@ function formatTime(unixSeconds: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** 在线时长的展示格式：x 小时 y 分 z 秒（不足一小时就只到分）。前端实时算，不走接口。 */
+function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return h > 0 ? `${h} 小时 ${pad(m)} 分 ${pad(sec)} 秒` : `${m} 分 ${pad(sec)} 秒`
+}
+
 function describe(err: unknown): string {
   if (err instanceof ApiRequestError) {
     // 503 = 主程序没把 OneBot 服务传给 create_app；说清楚比甩一个状态码有用
@@ -74,6 +84,9 @@ export default function TokensPage() {
   const [remark, setRemark] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [issued, setIssued] = useState<IssuedToken | null>(null)
+  // 点开的令牌卡片（看它的连接详情）；展开时每秒拨一次时钟算在线时长
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [now, setNow] = useState(() => Date.now())
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -92,6 +105,13 @@ export default function TokensPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // 有展开的卡片时每秒刷新一次时钟：在线时长是前端实时算的
+  useEffect(() => {
+    if (!expandedId) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [expandedId])
 
   /** 破坏性操作统一走这里：跑完刷新列表，失败弹提示。 */
   async function run(action: () => Promise<unknown>, okMessage: string) {
@@ -347,7 +367,11 @@ export default function TokensPage() {
           <div className={styles.cardGrid}>
             {tokens.map((t) => {
               return (
-                <div key={t.id} className={styles.card}>
+                <div
+                  key={t.id}
+                  className={`${styles.card} ${expandedId === t.id ? styles.cardOpen : ''}`}
+                  onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
+                >
                   <div className={styles.cardTop}>
                     <span className="chip">{t.nickname || t.id}</span>
                     <div className={styles.statusRow}>
@@ -389,12 +413,13 @@ export default function TokensPage() {
                         aria-label={t.enabled ? '停用令牌' : '启用令牌'}
                         className={`switch ${t.enabled ? 'switch-on' : ''}`}
                         disabled={busy}
-                        onClick={() =>
+                        onClick={(e) => {
+                          e.stopPropagation() // 拨开关不展开卡片
                           void run(
                             () => setTokenEnabled(t.id, !t.enabled),
                             t.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
                           )
-                        }
+                        }}
                       >
                         <span className="switch-knob" />
                       </button>
@@ -405,12 +430,43 @@ export default function TokensPage() {
                     <button
                       className="btn btn-danger-ghost"
                       disabled={busy}
-                      onClick={() => setPending({ kind: 'revoke', id: t.id })}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setPending({ kind: 'revoke', id: t.id })
+                      }}
                     >
                       <IconTrash size={14} />
                       吊销
                     </button>
                   </div>
+                  {expandedId === t.id && (
+                    <div className={styles.cardDetail}>
+                      {t.online && t.clients[0] ? (
+                        <dl>
+                          <div>
+                            <dt>QQ 号</dt>
+                            <dd>{t.clients[0].self_id ?? '—'}</dd>
+                          </div>
+                          <div>
+                            <dt>对端地址</dt>
+                            <dd>{t.clients[0].remote}</dd>
+                          </div>
+                          <div>
+                            <dt>连接时间</dt>
+                            <dd>{formatTime(t.clients[0].connected_at)}</dd>
+                          </div>
+                          <div>
+                            <dt>在线时长</dt>
+                            <dd>
+                              {formatDuration(now / 1000 - t.clients[0].connected_at)}
+                            </dd>
+                          </div>
+                        </dl>
+                      ) : (
+                        <p className={styles.cardEmpty}>当前没有客户端连着这张令牌</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}
