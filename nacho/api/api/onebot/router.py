@@ -84,8 +84,18 @@ async def _nickname_of(users: UserStore, owner_id: str) -> str:
     return (await _nicknames_of(users, [owner_id])).get(owner_id, "")
 
 
-def _token_of(record: TokenLike, nickname: str) -> TokenData:
-    """把一条令牌记录装成响应模型（**不含明文**，库里存的本来也只有摘要）。"""
+def _token_of(
+    record: TokenLike,
+    nickname: str,
+    *,
+    online: bool = False,
+    clients: tuple[ClientLike, ...] = (),
+) -> TokenData:
+    """把一条令牌记录装成响应模型（**不含明文**，库里存的本来也只有摘要）。
+
+    ``online`` / ``clients`` 是**派生态**：此刻正用这条令牌连着的在线客户端，
+    不落库，由调用方从服务端在线列表聚合好传进来；没传就按离线处理。
+    """
     return TokenData(
         id=record.id,
         account=record.account,
@@ -93,6 +103,8 @@ def _token_of(record: TokenLike, nickname: str) -> TokenData:
         remark=record.remark,
         created_at=record.created_at,
         nickname=nickname,
+        online=online,
+        clients=[_client_of(item, nickname) for item in clients],
     )
 
 
@@ -106,7 +118,9 @@ async def _fetch_token(server: OneBotLike, users: UserStore, token_id: str) -> T
     record = await registry.get_by_id(token_id)
     if record is None:
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
-    return _token_of(record, await _nickname_of(users, record.id))
+    nickname = await _nickname_of(users, record.id)
+    clients = server.roster(id=record.id)
+    return _token_of(record, nickname, online=bool(clients), clients=clients)
 
 
 async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id: str) -> TokenLike:
@@ -239,7 +253,13 @@ async def list_tokens(
     records = await registry.list_records(owner_id=None if is_admin(user) else user.user.id)
     # 昵称一次查齐（别一条一次查询）：查不到的 id 回落空串
     names = await _nicknames_of(users, [record.id for record in records])
-    data = [_token_of(record, names.get(record.id, "")) for record in records]
+    # 在线状态是派生态：每条令牌聚合一下服务端在线列表（走 _by_owner 的 hash 索引，
+    # 只查自己那格，不扫全集），把它连着的客户端也一并带在响应里
+    data: list[TokenData] = []
+    for record in records:
+        nickname = names.get(record.id, "")
+        clients = server.roster(id=record.id)
+        data.append(_token_of(record, nickname, online=bool(clients), clients=clients))
     return ApiResponse[list[TokenData]](data=data, trace_id=trace_id)
 
 
