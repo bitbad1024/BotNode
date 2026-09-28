@@ -94,16 +94,19 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             time=float(event.time),
             raw=event,
         )
-    # MetaEvent：生命周期一类，没有会话指向；文本留空
-    assert isinstance(event, MetaEvent)  # 四类穷举完，剩下的只能是元事件
-    return PlatformEvent(
-        platform=PLATFORM,
-        owner_id=conn.id,
-        self_id=self_id,
-        kind="meta",
-        time=float(event.time),
-        raw=event,
-    )
+    if isinstance(event, MetaEvent):
+        # 生命周期一类，没有会话指向；文本留空
+        return PlatformEvent(
+            platform=PLATFORM,
+            owner_id=conn.id,
+            self_id=self_id,
+            kind="meta",
+            time=float(event.time),
+            raw=event,
+        )
+    # 四类穷举完还到不了这里：OneBotEvent 联合扩了新类别而翻译没跟上——宁可当场炸，
+    # 也别静默归成 meta（python -O 下 assert 会被整条剥掉，靠不住）
+    raise TypeError(f"未认识的 OneBot 事件类型：{type(event).__name__}")
 
 
 def _client(entry: ClientEntry) -> BotClient:

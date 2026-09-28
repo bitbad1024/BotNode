@@ -263,3 +263,25 @@ async def test_gateway_lifecycle_controls_server() -> None:
             assert await wait_until(lambda: len(adapter.connections) == 1)
         await adapter.stop()
         assert adapter.connections == ()
+
+
+# ---------------------------------------------------------------------- 翻译兜底
+class _UnknownEvent:
+    """不属于四类已知事件的形状：模拟 OneBotEvent 联合将来扩出的新类别。"""
+
+    self_id = 10001
+    time = 0
+
+
+class _StubConn:
+    """_translate 只读 conn.id，够用即可。"""
+
+    id = "u-admin"
+
+
+def test_translate_unknown_event_type_raises() -> None:
+    """翻译穷举不了的事件类型：当场 TypeError，绝不静默归成 meta（-O 下 assert 会被剥）。"""
+    from nacho.bridge.onebot import _translate
+
+    with pytest.raises(TypeError, match="未认识"):
+        _translate(_StubConn(), _UnknownEvent())  # type: ignore[arg-type]
