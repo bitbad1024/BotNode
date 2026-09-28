@@ -1,5 +1,5 @@
 /**
- * 令牌管理：签发 / 吊销 OneBot 访问令牌，并查看在线客户端。
+ * 机器人：签发 / 吊销 OneBot 访问令牌，一卡一个机器人，点「详细」看连接信息。
  *
  * 令牌决定「连进来的机器人属于谁」——归属就是当前登录用户，**不用填**；页面上要紧的两件事：
  *
@@ -161,7 +161,7 @@ export default function TokensPage() {
     <div className="rise">
       <header className={styles.head}>
         <div>
-          <h2 className={styles.title}>令牌管理</h2>
+          <h2 className={styles.title}>机器人</h2>
           <p className={styles.desc}>
             令牌决定「连进来的机器人属于谁」——归属就是当前登录用户，不用填。明文只在签发时
             显示一次，之后查不回来。停用只是不许再连（可随时启用回来）；吊销则是删掉记录、

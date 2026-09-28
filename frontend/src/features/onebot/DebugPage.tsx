@@ -128,9 +128,9 @@ export default function DebugPage() {
           模拟 OneBot 实现连框架的反向 WS：左边选报文模板发事件，右边看框架下发的动作并回应。
           连接和记录在切页面后保留；令牌在
           <Link to="/tokens" className={styles.link}>
-            令牌管理
+            机器人
           </Link>
-          签发（明文只显示一次）。
+          里签发（明文只显示一次）。
         </p>
       </header>
 

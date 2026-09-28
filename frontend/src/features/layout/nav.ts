@@ -5,6 +5,7 @@ import {
   IconDevices,
   IconKey,
   IconLogs,
+  IconRobot,
   IconTerminal,
   IconBolt,
   IconSettings,
@@ -24,7 +25,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { path: '/', label: '工作台', icon: IconDashboard, end: true },
   { path: '/sessions', label: '登录设备', icon: IconDevices },
-  { path: '/tokens', label: '令牌管理', icon: IconKey },
+  { path: '/tokens', label: '机器人', icon: IconRobot },
   { path: '/workflows', label: '工作流', icon: IconBolt },
   { path: '/logs', label: '运行日志', icon: IconLogs },
   { path: '/debug', label: 'WS 调试', icon: IconTerminal },
