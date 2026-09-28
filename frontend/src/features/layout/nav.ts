@@ -1,14 +1,13 @@
 /** 侧边栏导航配置（单一数据源，侧栏 / 顶栏标题 / 路由都从这里取）。 */
 import type { ComponentType, SVGProps } from 'react'
 import {
+  IconBolt,
   IconDashboard,
   IconDevices,
-  IconKey,
   IconLogs,
   IconRobot,
-  IconTerminal,
-  IconBolt,
   IconSettings,
+  IconTerminal,
 } from '../../common/icons'
 
 export interface NavItem {

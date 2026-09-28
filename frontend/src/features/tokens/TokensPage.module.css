@@ -230,50 +230,93 @@
   border-top: 1px solid var(--border);
 }
 
-/* 卡片可点开：点卡片展开当前连接详情（QQ 号 / 对端 / 在线时长，前端实时算） */
-.card {
-  cursor: pointer;
-  transition:
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
+/* 卡片操作区：右下角的「详细 / 吊销」一组 */
+.cardButtons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
-.card:hover {
-  border-color: var(--accent-border);
+
+/* 机器人详情弹窗 */
+.detailTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
 }
-.cardOpen {
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.cardDetail {
+.detail {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+.statusCard {
+  display: flex;
+  align-items: center;
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  background: var(--surface);
+  background: var(--surface-2);
   font-size: 13px;
 }
-.cardDetail > div {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.cardDetail dt {
-  flex: none;
-  width: 68px;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.cardDetail dd {
-  margin: 0;
+.statusDur {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--text-2);
   font-family: var(--font-mono);
   font-size: 12px;
 }
-.cardEmpty {
+.detailList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin: 0;
+}
+.detailList > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.detailList dt {
+  flex: none;
+  width: 74px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.detailList dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.detailSection {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.detailOffline {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
   color: var(--text-3);
   font-size: 13px;
+  text-align: center;
+}
+.detailSwitch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 /* 添加机器人：与机器人卡片同尺寸的占位卡，虚线边框，点开弹签发表单 */

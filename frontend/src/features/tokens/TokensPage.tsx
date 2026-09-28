@@ -27,10 +27,13 @@ import { CardGridSkeleton } from '../../common/Skeleton'
 import { Modal } from '../../common/Modal'
 import {
   IconAlert,
+  IconClock,
   IconCopy,
+  IconEye,
   IconKey,
   IconPlus,
   IconRefresh,
+  IconRobot,
   IconTrash,
 } from '../../common/icons'
 import styles from './TokensPage.module.css'
@@ -79,8 +82,8 @@ export default function TokensPage() {
   const [issued, setIssued] = useState<IssuedToken | null>(null)
   // 「添加机器人」弹窗是否打开（签发表单从顶部面板移到了弹窗里）
   const [issueOpen, setIssueOpen] = useState(false)
-  // 点开的令牌卡片（看它的连接详情）；展开时每秒拨一次时钟算在线时长
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // 正在看详情的机器人（点卡片上的「详细」打开）；打开时每秒拨一次时钟算在线时长
+  const [detailId, setDetailId] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
   const load = useCallback(async () => {
@@ -100,12 +103,12 @@ export default function TokensPage() {
     void load()
   }, [load])
 
-  // 有展开的卡片时每秒刷新一次时钟：在线时长是前端实时算的
+  // 详情弹窗打开时每秒刷新一次时钟：在线时长是前端实时算的
   useEffect(() => {
-    if (!expandedId) return
+    if (!detailId) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [expandedId])
+  }, [detailId])
 
   /** 破坏性操作统一走这里：跑完刷新列表，失败弹提示。 */
   async function run(action: () => Promise<unknown>, okMessage: string) {
@@ -130,6 +133,9 @@ export default function TokensPage() {
 
   /** 弹窗正文里点名的对象：吊销的那张令牌（找不到就退回「这个令牌」）。 */
   const revokeTarget = tokens.find((t) => t.id === pending?.id) ?? null
+
+  /** 正在看详情的机器人（吊销后从列表消失，弹窗随之关闭）。 */
+  const detailToken = tokens.find((t) => t.id === detailId) ?? null
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -206,11 +212,7 @@ export default function TokensPage() {
             </button>
             {tokens.map((t) => {
               return (
-                <div
-                  key={t.id}
-                  className={`${styles.card} ${expandedId === t.id ? styles.cardOpen : ''}`}
-                  onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
-                >
+                <div key={t.id} className={styles.card}>
                   <div className={styles.cardTop}>
                     <span className="chip">{t.nickname || t.id}</span>
                     <div className={styles.statusRow}>
@@ -252,13 +254,12 @@ export default function TokensPage() {
                         aria-label={t.enabled ? '停用令牌' : '启用令牌'}
                         className={`switch ${t.enabled ? 'switch-on' : ''}`}
                         disabled={busy}
-                        onClick={(e) => {
-                          e.stopPropagation() // 拨开关不展开卡片
+                        onClick={() =>
                           void run(
                             () => setTokenEnabled(t.id, !t.enabled),
                             t.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
                           )
-                        }}
+                        }
                       >
                         <span className="switch-knob" />
                       </button>
@@ -266,46 +267,21 @@ export default function TokensPage() {
                         {t.enabled ? '启用' : '停用'}
                       </span>
                     </div>
-                    <button
-                      className="btn btn-danger-ghost"
-                      disabled={busy}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setPending({ kind: 'revoke', id: t.id })
-                      }}
-                    >
-                      <IconTrash size={14} />
-                      吊销
-                    </button>
-                  </div>
-                  {expandedId === t.id && (
-                    <div className={styles.cardDetail}>
-                      {t.online && t.clients[0] ? (
-                        <dl>
-                          <div>
-                            <dt>QQ 号</dt>
-                            <dd>{t.clients[0].self_id ?? '—'}</dd>
-                          </div>
-                          <div>
-                            <dt>对端地址</dt>
-                            <dd>{t.clients[0].remote}</dd>
-                          </div>
-                          <div>
-                            <dt>连接时间</dt>
-                            <dd>{formatTime(t.clients[0].connected_at)}</dd>
-                          </div>
-                          <div>
-                            <dt>在线时长</dt>
-                            <dd>
-                              {formatDuration(now / 1000 - t.clients[0].connected_at)}
-                            </dd>
-                          </div>
-                        </dl>
-                      ) : (
-                        <p className={styles.cardEmpty}>当前没有客户端连着这张令牌</p>
-                      )}
+                    <div className={styles.cardButtons}>
+                      <button className="btn" disabled={busy} onClick={() => setDetailId(t.id)}>
+                        <IconEye size={14} />
+                        详细
+                      </button>
+                      <button
+                        className="btn btn-danger-ghost"
+                        disabled={busy}
+                        onClick={() => setPending({ kind: 'revoke', id: t.id })}
+                      >
+                        <IconTrash size={14} />
+                        吊销
+                      </button>
                     </div>
-                  )}
+                  </div>
                 </div>
               )
             })}
@@ -380,6 +356,112 @@ export default function TokensPage() {
               </div>
             </div>
           )}
+        </Modal>
+      )}
+
+      {/* 机器人详情：点卡片上的「详细」弹出，连接信息与令牌信息一起看 */}
+      {detailId && detailToken && (
+        <Modal
+          title={
+            <span className={styles.detailTitle}>
+              <IconRobot size={18} />
+              {detailToken.nickname || detailToken.id}
+            </span>
+          }
+          onClose={() => setDetailId(null)}
+          footer={
+            <button
+              className="btn btn-danger-ghost"
+              disabled={busy}
+              onClick={() => {
+                setDetailId(null) // 先关详情再弹吊销确认，避免两个弹窗叠一起
+                setPending({ kind: 'revoke', id: detailToken.id })
+              }}
+            >
+              <IconTrash size={14} />
+              吊销
+            </button>
+          }
+        >
+          <div className={styles.detail}>
+            <div
+              className={`${styles.statusCard} ${detailToken.online ? styles.statusCardOn : ''}`}
+            >
+              <span
+                className={`${styles.dot} ${detailToken.online ? styles.dotOn : styles.dotOff}`}
+              />
+              <span className={detailToken.online ? styles.onlineLabel : styles.muted}>
+                {detailToken.online ? '在线' : '离线'}
+              </span>
+              {detailToken.online && detailToken.clients[0] && (
+                <span className={styles.statusDur}>
+                  <IconClock size={13} />
+                  {formatDuration(now / 1000 - detailToken.clients[0].connected_at)}
+                </span>
+              )}
+            </div>
+
+            {detailToken.online && detailToken.clients[0] ? (
+              <dl className={styles.detailList}>
+                <div>
+                  <dt>QQ 号</dt>
+                  <dd>{detailToken.clients[0].self_id ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt>对端地址</dt>
+                  <dd className={styles.mono}>{detailToken.clients[0].remote}</dd>
+                </div>
+                <div>
+                  <dt>连接时间</dt>
+                  <dd>{formatTime(detailToken.clients[0].connected_at)}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className={styles.detailOffline}>当前没有客户端连着这个机器人</p>
+            )}
+
+            <div className={styles.detailSection}>令牌信息</div>
+            <dl className={styles.detailList}>
+              <div>
+                <dt>机器人账号</dt>
+                <dd className={detailToken.account ? undefined : styles.muted}>
+                  {detailToken.account || '—'}
+                </dd>
+              </div>
+              <div>
+                <dt>备注</dt>
+                <dd className={detailToken.remark ? undefined : styles.muted}>
+                  {detailToken.remark || '—'}
+                </dd>
+              </div>
+              <div>
+                <dt>签发时间</dt>
+                <dd>{formatTime(detailToken.created_at)}</dd>
+              </div>
+            </dl>
+
+            <div className={styles.detailSwitch}>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={detailToken.enabled}
+                aria-label={detailToken.enabled ? '停用令牌' : '启用令牌'}
+                className={`switch ${detailToken.enabled ? 'switch-on' : ''}`}
+                disabled={busy}
+                onClick={() =>
+                  void run(
+                    () => setTokenEnabled(detailToken.id, !detailToken.enabled),
+                    detailToken.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
+                  )
+                }
+              >
+                <span className="switch-knob" />
+              </button>
+              <span className={detailToken.enabled ? styles.switchOnLabel : styles.muted}>
+                {detailToken.enabled ? '启用' : '停用'}
+              </span>
+            </div>
+          </div>
         </Modal>
       )}
 
