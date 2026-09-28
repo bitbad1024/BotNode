@@ -51,14 +51,6 @@ function formatTime(unixSeconds: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** 在线状态灯的悬浮说明：把连着它的每条连接（机器人号 / 对端 / 连上时间）列出来。 */
-function onlineTitle(t: OneBotToken): string {
-  if (!t.online || t.clients.length === 0) return '当前没有客户端连着这条令牌'
-  return t.clients
-    .map((c) => `机器人 ${c.self_id ?? '—'} · ${c.remote} · ${formatTime(c.connected_at)}`)
-    .join('\n')
-}
-
 function describe(err: unknown): string {
   if (err instanceof ApiRequestError) {
     // 503 = 主程序没把 OneBot 服务传给 create_app；说清楚比甩一个状态码有用
@@ -352,85 +344,77 @@ export default function TokensPage() {
             }
           />
         ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>归属</th>
-                <th>机器人账号</th>
-                <th>备注</th>
-                <th>签发时间</th>
-                <th>状态</th>
-                <th style={{ textAlign: 'right' }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tokens.map((t) => {
-                return (
-                  <tr key={t.id}>
-                    <td>
-                      <span className="chip">{t.nickname || t.id}</span>
-                    </td>
-                    <td className={styles.muted}>{t.account || '—'}</td>
-                    <td className={t.remark ? undefined : styles.muted}>
-                      {t.remark || '—'}
-                    </td>
-                    <td className={styles.muted}>{formatTime(t.created_at)}</td>
-                    <td>
-                      <div
-                        className={styles.statusRow}
-                        title={onlineTitle(t)}
+          <div className={styles.cardGrid}>
+            {tokens.map((t) => {
+              return (
+                <div key={t.id} className={styles.card}>
+                  <div className={styles.cardTop}>
+                    <span className="chip">{t.nickname || t.id}</span>
+                    <div className={styles.statusRow}>
+                      <span
+                        className={`${styles.dot} ${t.online ? styles.dotOn : styles.dotOff}`}
+                      />
+                      <span className={t.online ? styles.onlineLabel : styles.muted}>
+                        {t.online ? '在线' : '离线'}
+                      </span>
+                      {t.online && t.clients.length > 1 && (
+                        <span className={styles.muted}>{t.clients.length} 条</span>
+                      )}
+                    </div>
+                  </div>
+                  <dl className={styles.cardBody}>
+                    <div className={styles.cardField}>
+                      <dt>机器人账号</dt>
+                      <dd className={t.account ? undefined : styles.muted}>
+                        {t.account || '—'}
+                      </dd>
+                    </div>
+                    <div className={styles.cardField}>
+                      <dt>备注</dt>
+                      <dd className={t.remark ? undefined : styles.muted}>
+                        {t.remark || '—'}
+                      </dd>
+                    </div>
+                    <div className={styles.cardField}>
+                      <dt>签发时间</dt>
+                      <dd className={styles.muted}>{formatTime(t.created_at)}</dd>
+                    </div>
+                  </dl>
+                  <div className={styles.cardFoot}>
+                    <div className={styles.switchRow}>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={t.enabled}
+                        aria-label={t.enabled ? '停用令牌' : '启用令牌'}
+                        className={`switch ${t.enabled ? 'switch-on' : ''}`}
+                        disabled={busy}
+                        onClick={() =>
+                          void run(
+                            () => setTokenEnabled(t.id, !t.enabled),
+                            t.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
+                          )
+                        }
                       >
-                        <span
-                          className={`${styles.dot} ${t.online ? styles.dotOn : styles.dotOff}`}
-                        />
-                        <span className={t.online ? styles.onlineLabel : styles.muted}>
-                          {t.online ? '在线' : '离线'}
-                        </span>
-                        {t.online && t.clients.length > 1 && (
-                          <span className={styles.muted}>{t.clients.length} 条</span>
-                        )}
-                      </div>
-                      <div className={styles.switchRow}>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={t.enabled}
-                          aria-label={t.enabled ? '停用令牌' : '启用令牌'}
-                          className={`switch ${t.enabled ? 'switch-on' : ''}`}
-                          disabled={busy}
-                          onClick={() =>
-                            void run(
-                              () => setTokenEnabled(t.id, !t.enabled),
-                              t.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
-                            )
-                          }
-                        >
-                          <span className="switch-knob" />
-                        </button>
-                        <span
-                          className={t.enabled ? styles.switchOnLabel : styles.muted}
-                        >
-                          {t.enabled ? '启用' : '停用'}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.rowActions}>
-                        <button
-                          className="btn btn-danger-ghost"
-                          disabled={busy}
-                          onClick={() => setPending({ kind: 'revoke', id: t.id })}
-                        >
-                          <IconTrash size={14} />
-                          吊销
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                        <span className="switch-knob" />
+                      </button>
+                      <span className={t.enabled ? styles.switchOnLabel : styles.muted}>
+                        {t.enabled ? '启用' : '停用'}
+                      </span>
+                    </div>
+                    <button
+                      className="btn btn-danger-ghost"
+                      disabled={busy}
+                      onClick={() => setPending({ kind: 'revoke', id: t.id })}
+                    >
+                      <IconTrash size={14} />
+                      吊销
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         )}
       </section>
 

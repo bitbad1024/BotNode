@@ -217,3 +217,60 @@
   color: var(--danger);
   font-size: 13px;
 }
+
+/* 令牌卡片网格：一卡一个令牌（机器人），开关管这一个机器人 */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  padding: 16px 18px;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  /* 卡片面用 --surface（与全局 .card、「添加机器人」占位卡一致）：
+     --surface-2 是控件/内陷填充色，拿它当卡片底会让卡片读起来像禁用块，
+     且亮色下陷、暗色上浮，两套主题的层级方向相反。 */
+  background: var(--surface);
+}
+.cardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+.cardField {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.cardField dt {
+  flex: none;
+  width: 68px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.cardField dd {
+  margin: 0;
+  word-break: break-all;
+}
+.cardFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
