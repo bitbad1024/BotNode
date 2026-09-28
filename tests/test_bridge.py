@@ -10,6 +10,7 @@ import dataclasses
 import pytest
 
 from nacho.bridge.models import ActionResult, BotClient, PlatformEvent
+from nacho.bridge.protocols import BotAdapter
 
 
 # --------------------------------------------------------------------- 模型口径
@@ -74,3 +75,33 @@ def test_action_result_ok_and_failure() -> None:
     failed = ActionResult(ok=False, message="retcode=1200", raw={"retcode": 1200})
     assert failed.ok is False and failed.message == "retcode=1200"
     assert failed.raw == {"retcode": 1200}
+
+
+# ---------------------------------------------------------------------- 协议形状
+class _DuckAdapter:
+    """鸭子适配器：不继承任何东西，按 BotAdapter 的形状长。"""
+
+    platform = "duck"
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    def clients(self, *, owner_id: str | None = None) -> tuple[BotClient, ...]:
+        return ()
+
+    async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
+        raise ConnectionError("没有连接")
+
+
+def test_duck_adapter_satisfies_protocol() -> None:
+    """结构化满足：没继承协议、按形状长就能被认成 BotAdapter。"""
+    adapter = _DuckAdapter()
+    assert isinstance(adapter, BotAdapter)
+
+
+def test_plain_object_not_an_adapter() -> None:
+    """反面：缺方法的对象不是适配器（runtime_checkable 的意义）。"""
+    assert not isinstance(object(), BotAdapter)

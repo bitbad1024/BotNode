@@ -15,10 +15,13 @@
 from __future__ import annotations
 
 from .models import ActionResult, BotClient, PlatformEvent
+from .protocols import BotAdapter
 
 __all__ = [
     # 规范化模型
     "PlatformEvent",
     "BotClient",
     "ActionResult",
+    # 协议
+    "BotAdapter",
 ]
