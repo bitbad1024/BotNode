@@ -192,9 +192,16 @@ async def serve_forever() -> None:
     """主协程停在这：bridge 总线起监听并一直跑；端口被占等当场抛 ``OSError``（怎么退由入口定）。"""
     if _gateway is None:
         raise RuntimeError("还没装配：先跑 run()")
-    await _gateway.start()  # 起所有适配器的监听（现在就一个：OneBot 反向 WS）
-    assert _onebot_adapter is not None
-    await _onebot_adapter.serve_forever()
+    await _gateway.start()  # 起所有适配器的监听
+    # 等所有暴露 serve_forever 的适配器（现在就 OneBot 一个；P4 的 Kook 若也是长连接
+    # 服务，主协程的退出条件必须把它算上——只等一个的话，另一个的服务没人守）
+    waiters = [
+        adapter.serve_forever()
+        for adapter in (_gateway.adapter(name) for name in _gateway.platforms)
+        if adapter is not None and hasattr(adapter, "serve_forever")
+    ]
+    if waiters:
+        await asyncio.gather(*waiters)
 
 
 # --------------------------------------------------------------------------- 收尾
