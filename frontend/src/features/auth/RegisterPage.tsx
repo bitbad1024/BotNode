@@ -12,6 +12,7 @@ import {
   IconEyeOff,
   IconAlert,
   IconEdit,
+  IconLogo,
 } from '../../common/icons'
 import { backendUrl } from '../../config/env'
 import {
@@ -100,7 +101,9 @@ export default function RegisterPage() {
 
       <div className={`${styles.card} rise`}>
         <div className={styles.brand}>
-          <span className={styles.logo} aria-hidden="true" />
+          <span className={styles.logo} aria-hidden="true">
+            <IconLogo size={18} />
+          </span>
           <span className={styles.brandName}>nacho</span>
           <span className={styles.brandTag}>控制台</span>
         </div>

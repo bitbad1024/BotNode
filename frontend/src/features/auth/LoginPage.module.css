@@ -89,17 +89,16 @@
   width: 34px;
   height: 34px;
   border-radius: 9px;
-  background: var(--lp-brand);
+  background: var(--logo-bg);
+  border: 1px solid var(--logo-border);
   position: relative;
   flex-shrink: 0;
-  box-shadow: 0 6px 16px -6px var(--lp-brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.logo::after {
-  content: '';
-  position: absolute;
-  inset: 8px;
-  border: 2px solid var(--lp-brand-ink);
-  border-radius: 3px;
+.logo svg {
+  display: block;
 }
 .brand-name {
   font-size: 19px;

@@ -5,7 +5,7 @@
 import { NavLink } from 'react-router-dom'
 import { NAV_ITEMS } from './nav'
 import { useLayout } from './layoutStore'
-import { IconBolt } from '../../common/icons'
+import { IconLogo } from '../../common/icons'
 import styles from './Sidebar.module.css'
 
 export default function Sidebar() {
@@ -20,7 +20,7 @@ export default function Sidebar() {
       {/* 品牌 */}
       <div className={styles.brand}>
         <span className={styles.logo} aria-hidden="true">
-          <IconBolt size={17} />
+          <IconLogo size={17} />
         </span>
         <span className={styles.brandName}>nacho</span>
       </div>
