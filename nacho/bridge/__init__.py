@@ -6,7 +6,7 @@
 * ``models.py``     规范化数据形状：PlatformEvent（事件）/ BotClient（在线一行）/ ActionResult（动作回执）
 * ``protocols.py``  BotAdapter 协议：一个平台适配器长什么样
 * ``gateway.py``    Gateway 总线：注册适配器、订阅事件、按平台路由发送
-* ``onebot.py``     第一个适配器：把 nacho.onebot.OneBotServer 包进来
+* ``onebot.py``     第一个适配器：把 nacho.onebot.OneBotServer 包进来（P2-4）
 
 依赖方向：本包只依赖 ``nacho.core``（logger），**不** import ``nacho.onebot`` /
 ``nacho.api`` / ``nacho.workflow`` —— 平台的类型只在适配器实现里出现，协议这边一律
@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from .gateway import EventSubscriber, Gateway
 from .models import ActionResult, BotClient, PlatformEvent
 from .protocols import BotAdapter
 
@@ -24,4 +25,7 @@ __all__ = [
     "ActionResult",
     # 协议
     "BotAdapter",
+    # 总线
+    "Gateway",
+    "EventSubscriber",
 ]

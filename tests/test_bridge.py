@@ -9,6 +9,7 @@ import dataclasses
 
 import pytest
 
+from nacho.bridge import Gateway
 from nacho.bridge.models import ActionResult, BotClient, PlatformEvent
 from nacho.bridge.protocols import BotAdapter
 
@@ -105,3 +106,130 @@ def test_duck_adapter_satisfies_protocol() -> None:
 def test_plain_object_not_an_adapter() -> None:
     """反面：缺方法的对象不是适配器（runtime_checkable 的意义）。"""
     assert not isinstance(object(), BotAdapter)
+
+
+# ------------------------------------------------------------------------ 总线
+class _FakeAdapter:
+    """记账适配器：记下生命周期与发送请求，供断言。"""
+
+    def __init__(self, platform: str, *, online: tuple[BotClient, ...] = ()) -> None:
+        self.platform = platform
+        self._online = online
+        self.calls: list[tuple[str, str, dict[str, object]]] = []  # (owner, action, params)
+        self.started = 0
+        self.stopped = 0
+
+    async def start(self) -> None:
+        self.started += 1
+
+    async def stop(self) -> None:
+        self.stopped += 1
+
+    def clients(self, *, owner_id: str | None = None) -> tuple[BotClient, ...]:
+        if owner_id is None:
+            return self._online
+        return tuple(c for c in self._online if c.owner_id == owner_id)
+
+    async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
+        self.calls.append((owner_id, action, params))
+        return ActionResult(ok=True, data={"echo_of": action})
+
+
+async def test_gateway_publish_reaches_subscribers_in_order() -> None:
+    """事件从 publish 口进来，订阅者按订阅顺序依次收到同一条。"""
+    gateway = Gateway()
+    got_first: list[PlatformEvent] = []
+    got_second: list[PlatformEvent] = []
+
+    async def first(event: PlatformEvent) -> None:
+        got_first.append(event)
+
+    async def second(event: PlatformEvent) -> None:
+        got_second.append(event)
+
+    gateway.subscribe(first)
+    gateway.subscribe(second)
+
+    event = PlatformEvent(platform="onebot", owner_id="u-admin", kind="message", text="hi")
+    await gateway.publish(event)
+
+    assert got_first == [event] and got_second == [event]
+
+
+async def test_gateway_subscriber_exception_does_not_sink_the_bus() -> None:
+    """异常口径：一个订阅者抛异常，后面的照常收到，publish 也不向上抛。"""
+    gateway = Gateway()
+    got: list[PlatformEvent] = []
+
+    async def bad(_event: PlatformEvent) -> None:
+        raise RuntimeError("业务炸了")
+
+    async def good(event: PlatformEvent) -> None:
+        got.append(event)
+
+    gateway.subscribe(bad)
+    gateway.subscribe(good)
+    await gateway.publish(PlatformEvent(platform="onebot", owner_id="u-admin"))
+    assert got  # 第二个订阅者不受牵连
+
+
+async def test_gateway_register_rejects_duplicate_platform() -> None:
+    """平台标识是路由键：重复注册当场 ValueError。"""
+    gateway = Gateway()
+    gateway.register(_FakeAdapter("onebot"))
+    with pytest.raises(ValueError, match="onebot"):
+        gateway.register(_FakeAdapter("onebot"))
+    assert gateway.platforms == ("onebot",)
+
+
+async def test_gateway_send_routes_by_platform() -> None:
+    """发送路由：按平台找到适配器，参数原样转述，回执透传。"""
+    gateway = Gateway()
+    onebot = _FakeAdapter("onebot")
+    kook = _FakeAdapter("kook")
+    gateway.register(onebot)
+    gateway.register(kook)
+
+    result = await gateway.send("kook", "u-admin", "send_msg", message="hi", user_id="42")
+
+    assert result.ok is True and result.data == {"echo_of": "send_msg"}
+    assert kook.calls == [("u-admin", "send_msg", {"message": "hi", "user_id": "42"})]
+    assert onebot.calls == []  # 路由只去 kook
+
+
+async def test_gateway_send_unknown_platform_raises() -> None:
+    """环境问题当场抛：没注册的平台 ConnectionError，消息里带已注册列表。"""
+    gateway = Gateway()
+    gateway.register(_FakeAdapter("onebot"))
+    with pytest.raises(ConnectionError, match="onebot"):
+        await gateway.send("kook", "u-admin", "send_msg")
+
+
+async def test_gateway_lifecycle_order() -> None:
+    """生命周期：start 按注册顺序、stop 按逆序，一个不落。"""
+    gateway = Gateway()
+    first = _FakeAdapter("onebot")
+    second = _FakeAdapter("kook")
+    gateway.register(first)
+    gateway.register(second)
+
+    await gateway.start()
+    assert (first.started, second.started) == (1, 1)
+
+    await gateway.stop()
+    assert (first.stopped, second.stopped) == (1, 1)
+
+
+async def test_gateway_publish_without_subscribers_is_quiet() -> None:
+    """没订阅者：不抛、只是丢弃（debug 日志的事，行为上安静）。"""
+    gateway = Gateway()
+    await gateway.publish(PlatformEvent(platform="onebot", owner_id="u-admin"))
+
+
+async def test_gateway_adapter_lookup() -> None:
+    """按平台取适配器：注册了拿得到，没注册是 None。"""
+    gateway = Gateway()
+    adapter = _FakeAdapter("onebot")
+    gateway.register(adapter)
+    assert gateway.adapter("onebot") is adapter
+    assert gateway.adapter("kook") is None
