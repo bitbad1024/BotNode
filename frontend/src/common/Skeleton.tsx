@@ -49,3 +49,41 @@ export function ListSkeleton({ rows = 6 }: { rows?: number }) {
     </div>
   )
 }
+
+/**
+ * 卡片网格型骨架：和卡片网格同列数，逐项复刻实际卡片的版式
+ * （标签 + 状态点 / 三行「字段名 + 值」/ 底部开关 + 操作按钮），
+ * 内边距、间距、行高、按钮高度都按真实卡片对齐，加载完切换不跳高。
+ */
+export function CardGridSkeleton({ count = 5 }: { count?: number }) {
+  return (
+    <div className="skeleton-cards" aria-hidden="true">
+      {Array.from({ length: count }).map((_, i) => (
+        <div className="skeleton-card" key={i}>
+          <div className="skeleton-card-top">
+            <Skeleton width={96} height={24} radius={999} />
+            <div className="skeleton-card-status">
+              <span className="skeleton skeleton-card-dot" />
+              <Skeleton width={36} height={12} />
+            </div>
+          </div>
+          <div className="skeleton-card-fields">
+            {[0, 1, 2].map((j) => (
+              <div className="skeleton-card-field" key={j}>
+                <span className="skeleton skeleton-card-dt" />
+                <Skeleton width={`${26 + ((i * 17 + j * 29) % 38)}%`} height={21} />
+              </div>
+            ))}
+          </div>
+          <div className="skeleton-card-foot">
+            <span className="skeleton skeleton-card-switch" />
+            <div className="skeleton-card-btns">
+              <span className="skeleton skeleton-card-btn" />
+              <span className="skeleton skeleton-card-btn" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}

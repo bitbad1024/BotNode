@@ -30,6 +30,10 @@ export interface OneBotToken {
   created_at: number
   /** 归属那个 id 在用户表里的昵称（查不到就是空串） */
   nickname: string
+  /** 派生态：此刻有没有正用它连着的在线客户端（不落库，接口层实时聚合） */
+  online: boolean
+  /** 派生态：正用它连着的在线客户端快照（一个令牌可能同时挂着多条连接） */
+  clients: OneBotClient[]
 }
 
 export interface IssuedToken {

@@ -45,6 +45,14 @@ class TokenData(BaseModel):
     created_at: float = 0.0
     #: 归属那个 ``id`` 在用户表里的昵称（查不到就空串；本层不解释 id 的语义）
     nickname: str = Field(default="", description="归属的昵称（按 id 去用户表查）")
+    #: **派生态**：此刻有没有正用它连着的在线客户端。不落库、不持久，
+    #: 是接口层在组装响应时从服务端在线列表聚合出来的实时快照。
+    online: bool = Field(default=False, description="此刻有没有用它连着的在线客户端")
+    #: **派生态**：正用它连着的在线客户端快照（``online`` 为真时的详情）。
+    #: 一个令牌可能同时挂着多条连接（同一归属多开），这里逐条列出来。
+    clients: list[ClientData] = Field(
+        default_factory=list, description="正用它连着的在线客户端（快照）"
+    )
 
 
 class IssuedTokenData(BaseModel):

@@ -38,15 +38,11 @@
   font-size: 15px;
 }
 
-/* 签发表单 */
+/* 签发表单（在「添加机器人」弹窗里，纵向排布） */
 .form {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 15px 18px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
 }
 .field {
   display: flex;
@@ -58,7 +54,7 @@
   color: var(--text-2);
 }
 .input {
-  width: 220px;
+  width: 100%;
   padding: 9px 12px;
   border-radius: var(--r-md);
   border: 1px solid var(--border-strong);
@@ -82,7 +78,7 @@
 
 /* 刚签发的明文令牌：只出现一次，所以要显眼 */
 .issued {
-  margin: 16px 18px;
+  margin: 14px 0 0;
   padding: 14px 16px;
   border-radius: var(--r-md);
   border: 1px solid var(--accent-border);
@@ -119,48 +115,10 @@
   color: var(--danger);
 }
 
-/* 表格 */
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-.table th {
-  text-align: left;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-3);
-  padding: 10px 18px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-.table td {
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  vertical-align: middle;
-}
-.table tr:last-child td {
-  border-bottom: none;
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
 .muted {
   color: var(--text-3);
 }
-.account {
-  font-weight: 600;
-}
 
-.rowActions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
 /* 启用 / 停用开关：外框与圆点走公共类 .switch / .switch-knob，
    这里只保留行内布局与状态标签 */
 .switchRow {
@@ -174,10 +132,34 @@
   color: var(--success);
 }
 
-
-.skeletonPad {
-  padding: 0 18px;
+/* 在线状态灯：令牌列表里「在线 / 离线」这一行（悬浮可见连着它的连接详情） */
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  white-space: nowrap;
 }
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.dotOn {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+.dotOff {
+  background: var(--text-3);
+}
+.onlineLabel {
+  font-weight: 500;
+  color: var(--success);
+}
+
+
 .failure {
   display: flex;
   align-items: center;
@@ -189,4 +171,224 @@
   background: var(--danger-bg);
   color: var(--danger);
   font-size: 13px;
+}
+
+/* 令牌卡片网格：一卡一个令牌（机器人），开关管这一个机器人 */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  padding: 16px 18px;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  /* 卡片面用 --surface（与全局 .card、「添加机器人」占位卡一致）：
+     --surface-2 是控件/内陷填充色，拿它当卡片底会让卡片读起来像禁用块，
+     且亮色下陷、暗色上浮，两套主题的层级方向相反。 */
+  background: var(--surface);
+}
+.cardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+.cardField {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.cardField dt {
+  flex: none;
+  width: 68px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.cardField dd {
+  margin: 0;
+  word-break: break-all;
+}
+.cardFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* 卡片操作区：右下角的「详细 / 吊销」一组 */
+.cardButtons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 机器人详情弹窗 */
+.detailTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+}
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.statusCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.statusDur {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.detailList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+.detailList > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.detailList dt {
+  flex: none;
+  width: 74px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.detailList dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.detailSection {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.detailOffline {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+.detailSwitch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* 添加机器人：与机器人卡片同尺寸的占位卡，虚线边框，点开弹签发表单 */
+.addCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 164px;
+  padding: 14px 16px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    color 0.16s ease,
+    background 0.16s ease;
+}
+.addCard:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.addCardIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.addCard:hover .addCardIcon {
+  border-color: var(--accent-border);
+  background: var(--surface);
+}
+.addCardTitle {
+  font-size: 14px;
+  font-weight: 600;
+}
+.addCardHint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 空态引导：还没有任何机器人时，网格里占一整行说明 */
+.emptyGuide {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.emptyGuide > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}
+.emptyGuide b {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.emptyGuide p {
+  margin: 2px 0 0;
 }
