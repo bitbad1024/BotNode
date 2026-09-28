@@ -28,14 +28,14 @@
   `(platform, owner_id)` 复合键；本阶段令牌仍是 onebot 专属（Kook 的令牌形态留给 P4），
   复合键只进 `PlatformEvent` 与 Gateway 内部，不落库、不进接口层。
 
-- [ ] **P2-1** `bridge/models.py`：`PlatformEvent` 规范化事件——`platform` / `owner_id` /
+- [x] **P2-1** `bridge/models.py`：`PlatformEvent` 规范化事件——`platform` / `owner_id` /
   机器人自身账号（`self_id`）/ 事件大类（message / notice / request / meta）/ 会话指向
   （群或私聊对方的标识）/ `raw`（原始事件引用，翻译不了的字段从这里兜）；纯模型无 IO，
   配单测（字段口径 + `raw` 兜底）
-- [ ] **P2-2** `bridge/protocols.py`：`BotAdapter` 协议——`platform` 标识、生命周期
+- [x] **P2-2** `bridge/protocols.py`：`BotAdapter` 协议——`platform` 标识、生命周期
   `start` / `stop`、在线列表 `clients()`（含归属与连接身份）、按归属发动作
   `send(owner_id, action, **params)`；结构化 Protocol，不 import onebot
-- [ ] **P2-3** `bridge/gateway.py`：`Gateway` 总线——`register(adapter)` / `subscribe(handler)` /
+- [x] **P2-3** `bridge/gateway.py`：`Gateway` 总线——`register(adapter)` / `subscribe(handler)` /
   按平台路由的发送入口（找不到平台抛错，口径同 onebot 节点的「环境问题当场抛」）；
   事件分发异常口径沿用 onebot（handler 抛异常只记日志，不淹总线）；单测用 FakeAdapter
 - [ ] **P2-4** `bridge/onebot.py`：`OneBotAdapter` 包 `OneBotServer`——handler 里把
