@@ -42,7 +42,7 @@
   `OneBotEvent` 翻译成 `PlatformEvent` 投给 Gateway（心跳过滤沿用 `_emit` 的口径）；
   roster / kick / revoke_by_id / set_token_enabled / connections / conn.call 透传；
   测试复用 `test_onebot.py` 的真 WS 基建，断言翻译结果与透传行为
-- [ ] **P2-5** 装配切换 `bootstrap.py`：建 `OneBotServer` -> 包成 `OneBotAdapter` -> 注册进
+- [x] **P2-5** 装配切换 `bootstrap.py`：建 `OneBotServer` -> 包成 `OneBotAdapter` -> 注册进
   `Gateway`；`on_event` 日志钩子改为订阅 Gateway（记规范化字段，不再认识 OneBotEvent）；
   接口层与工作流注入点换成 Gateway 对外的兼容面（对 `router.py` / `nodes/onebot.py` 形状不变）
 - [ ] **P2-6** 收尾：`tests/test_bridge.py`（FakeAdapter 走总线全链路：注册 -> 事件 ->
