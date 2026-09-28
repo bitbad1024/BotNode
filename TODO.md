@@ -6,7 +6,7 @@
 
 - [x] **P1** 令牌融合在线状态（接口聚合 + 前端状态列）
   - 说明：`online` 是**派生态**（内存实时态），不落库；接口层 `list_tokens` 时聚合各适配器的在线连接。
-- [ ] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
+- [x] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
 - [ ] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
 - [ ] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
 
@@ -45,6 +45,6 @@
 - [x] **P2-5** 装配切换 `bootstrap.py`：建 `OneBotServer` -> 包成 `OneBotAdapter` -> 注册进
   `Gateway`；`on_event` 日志钩子改为订阅 Gateway（记规范化字段，不再认识 OneBotEvent）；
   接口层与工作流注入点换成 Gateway 对外的兼容面（对 `router.py` / `nodes/onebot.py` 形状不变）
-- [ ] **P2-6** 收尾：`tests/test_bridge.py`（FakeAdapter 走总线全链路：注册 -> 事件 ->
+- [x] **P2-6** 收尾：`tests/test_bridge.py`（FakeAdapter 走总线全链路：注册 -> 事件 ->
   订阅 -> 路由发送）；全量回归对齐当前基线（全绿才算完）；`nacho/bridge/__init__.py`
   文档写清「适配器怎么写第二个」
