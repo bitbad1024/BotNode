@@ -409,6 +409,22 @@ class OneBotServer:
         """
         # 握手阶段查出的归属（谁的 / 机器人账号 / 明文令牌），见 _process_request；没配时是匿名
         owner_id, account, token = self._greeted.pop(ws, ("", "", ""))
+        # 一个令牌（归属）同时只允许一条连接：同归属已有连接时，新来的把旧的顶掉。
+        # 只能对「有归属」的连接生效——匿名模式下 id 全是空串，互相顶会把客户端全踢光。
+        # 用「顶掉」而不是「拒绝」：OneBot 实现断线都会自动重连，拒绝会让重连卡死；
+        # 顶掉则始终保留最新一条连接，符合「一个令牌只能一个人连」的语义。
+        if owner_id:
+            for old in tuple(self._by_owner.get(owner_id, set())):
+                # 先把旧连接从索引摘掉再关它：新连接登记后 roster 立刻只剩它一条
+                self._by_client_id.pop(old.client_id, None)
+                self._by_owner[owner_id].discard(old)
+                self._log.info(
+                    "onebot 同令牌已有连接，新连接顶掉旧连接",
+                    owner_id=owner_id,
+                    old_client=old.client_id,
+                    old_remote=old.remote,
+                )
+                await old.close(reason="replaced by new connection")
         conn = OneBotConnection(
             ws,
             options=self._options,

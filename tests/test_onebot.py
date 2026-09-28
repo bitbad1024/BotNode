@@ -269,6 +269,25 @@ async def test_handshake_binds_owner() -> None:
             assert [item.id for item in server.roster(id="alice")] == ["alice"]
 
 
+async def test_same_token_new_connection_replaces_old() -> None:
+    """一个令牌（归属）同时只允许一条连接：第二个连进来把第一个顶掉。"""
+    registry = await memory_registry()
+    issued = await registry.issue("alice")
+
+    async with opened_server(registry) as server:
+        port = port_of(server)
+        async with connect(ws_url(port, issued.token)) as first:
+            assert await wait_until(lambda: len(server.roster()) == 1)
+            old_client_id = server.roster()[0].client_id
+
+            async with connect(ws_url(port, issued.token)) as second:
+                # 旧连接被顶掉：roster 始终只有一条，且是新的那一条
+                assert await wait_until(lambda: len(server.roster()) == 1)
+                assert server.roster()[0].client_id != old_client_id
+                with pytest.raises(ConnectionClosed):
+                    await first.recv()
+
+
 async def test_handshake_rejects_bad_token() -> None:
     """令牌不对 / 没带令牌：握手就 401，连不进来。"""
     registry = await memory_registry()
