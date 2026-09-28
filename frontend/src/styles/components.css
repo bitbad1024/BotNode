@@ -197,6 +197,80 @@
   border-radius: var(--r-sm);
 }
 
+/* 卡片网格型骨架：和卡片网格同列数，版式逐项对齐真实卡片
+   （padding/gap/行高/按钮高与 .card 一致，加载完切换不跳高） */
+.skeleton-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  padding: 16px 18px;
+}
+.skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.skeleton-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.skeleton-card-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.skeleton-card-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.skeleton-card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skeleton-card-field {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.skeleton-card-dt {
+  flex: none;
+  width: 68px;
+  height: 12px;
+}
+.skeleton-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.skeleton-card-switch {
+  flex: none;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+}
+.skeleton-card-btns {
+  display: flex;
+  gap: 8px;
+}
+.skeleton-card-btn {
+  width: 74px;
+  height: 40px;
+  border-radius: var(--r-md);
+}
+
 /* 空态：图标 + 标题 + 说明 + 可选操作，比一句灰字多给出下一步 */
 .empty-state {
   display: flex;

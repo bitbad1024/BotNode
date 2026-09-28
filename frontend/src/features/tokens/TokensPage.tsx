@@ -10,7 +10,7 @@
  * - **停用 ≠ 吊销**：停用只是不许再连（记录还在，开关能拨回来，所以不弹二次确认），
  *   吊销是删记录、不可逆，所以那颗按钮要走确认。
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
   fetchTokens,
   issueToken,
@@ -23,8 +23,8 @@ import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
-import { ListSkeleton } from '../../common/Skeleton'
-import { EmptyState } from '../../common/EmptyState'
+import { CardGridSkeleton } from '../../common/Skeleton'
+import { Modal } from '../../common/Modal'
 import {
   IconAlert,
   IconCopy,
@@ -77,6 +77,8 @@ export default function TokensPage() {
   const [remark, setRemark] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [issued, setIssued] = useState<IssuedToken | null>(null)
+  // 「添加机器人」弹窗是否打开（签发表单从顶部面板移到了弹窗里）
+  const [issueOpen, setIssueOpen] = useState(false)
   // 点开的令牌卡片（看它的连接详情）；展开时每秒拨一次时钟算在线时长
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -155,16 +157,6 @@ export default function TokensPage() {
     }
   }
 
-  const accountInputRef = useRef<HTMLInputElement>(null)
-
-  /** 空态引导：把焦点送进签发表单，省得用户自己找 */
-  function focusIssueForm() {
-    const el = accountInputRef.current
-    if (!el) return
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el.focus({ preventScroll: true })
-  }
-
   return (
     <div className="rise">
       <header className={styles.head}>
@@ -191,90 +183,27 @@ export default function TokensPage() {
         </div>
       )}
 
-      {/* 签发 */}
-      <section className={`card ${styles.panel}`}>
-        <div className={styles.panelHead}>
-          <h3 className={styles.panelTitle}>签发令牌</h3>
-        </div>
-
-        <form className={styles.form} onSubmit={submit}>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="token-account">
-              机器人账号（可选）
-            </label>
-            <input
-              id="token-account"
-              ref={accountInputRef}
-              className={styles.input}
-              value={account}
-              onChange={(e) => setAccount(e.target.value)}
-              placeholder="接入 WS 的那个 OneBot 账号（只用来展示）"
-              maxLength={64}
-            />
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="token-remark">
-              备注（可选）
-            </label>
-            <input
-              id="token-remark"
-              className={styles.input}
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-              placeholder="如 主号"
-              maxLength={255}
-            />
-          </div>
-          <button className="btn" type="submit" disabled={submitting}>
-            <IconPlus size={15} />
-            {submitting ? '签发中…' : '签发'}
-          </button>
-        </form>
-
-        {issued && (
-          <div className={styles.issued}>
-            <div className={styles.issuedHead}>
-              <IconKey size={16} />
-              令牌已签发给「{issued.record.nickname || issued.record.id}」——明文只显示这一次
-            </div>
-            <div className={styles.issuedRow}>
-              <code className={styles.issuedText}>{issued.token}</code>
-              <button className="btn" onClick={() => void copy(issued.token)}>
-                <IconCopy size={15} />
-                复制
-              </button>
-            </div>
-            <div className={styles.issuedHint}>
-              关掉这条提示就拿不回来了（库里只存摘要）。把明文配到 OneBot 实现的反向 WS
-              地址上，它连进来就归到这个账号下。
-            </div>
-          </div>
-        )}
-      </section>
-
       {/* 令牌列表 */}
       <section className={`card ${styles.panel}`}>
         <div className={styles.panelHead}>
           <h3 className={styles.panelTitle}>令牌列表</h3>
         </div>
         {loading ? (
-          <div className={styles.skeletonPad}>
-            <ListSkeleton rows={5} />
-          </div>
-        ) : tokens.length === 0 ? (
-          <EmptyState
-            icon={IconKey}
-            title="还没有任何令牌"
-            hint="没有令牌，客户端连上来会被拒。先签发一个，明文只显示这一次。"
-            action={
-              <button className="btn btn-primary" onClick={focusIssueForm}>
-                <IconPlus size={15} />
-                签发令牌
-              </button>
-            }
-          />
+          <CardGridSkeleton />
         ) : (
           <div className={styles.cardGrid}>
+            {/* 添加机器人：和机器人卡片同尺寸的入口，点开弹签发表单 */}
+            <button
+              type="button"
+              className={styles.addCard}
+              onClick={() => setIssueOpen(true)}
+            >
+              <span className={styles.addCardIcon}>
+                <IconPlus size={22} />
+              </span>
+              <span className={styles.addCardTitle}>添加机器人</span>
+              <span className={styles.addCardHint}>签发访问令牌 · 明文只显示一次</span>
+            </button>
             {tokens.map((t) => {
               return (
                 <div
@@ -380,9 +309,79 @@ export default function TokensPage() {
                 </div>
               )
             })}
+            {tokens.length === 0 && (
+              <div className={styles.emptyGuide}>
+                <IconKey size={16} />
+                <div>
+                  <b>还没有机器人</b>
+                  <p>
+                    点「添加机器人」签发访问令牌，明文只显示这一次。把明文配到 OneBot
+                    实现的反向 WS 地址上，它连进来就归到这个机器人下。
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>
+
+      {/* 添加机器人：签发表单弹窗（明文只在这次出现，先复制再关） */}
+      {issueOpen && (
+        <Modal title="添加机器人" onClose={() => setIssueOpen(false)}>
+          <form className={styles.form} onSubmit={submit}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="token-account">
+                机器人账号（可选）
+              </label>
+              <input
+                id="token-account"
+                className={styles.input}
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                placeholder="接入 WS 的那个 OneBot 账号（只用来展示）"
+                maxLength={64}
+                autoFocus
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="token-remark">
+                备注（可选）
+              </label>
+              <input
+                id="token-remark"
+                className={styles.input}
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+                placeholder="如 主号"
+                maxLength={255}
+              />
+            </div>
+            <button className="btn btn-primary" type="submit" disabled={submitting}>
+              <IconPlus size={15} />
+              {submitting ? '签发中…' : '签发'}
+            </button>
+          </form>
+          {issued && (
+            <div className={styles.issued}>
+              <div className={styles.issuedHead}>
+                <IconKey size={16} />
+                令牌已签发给「{issued.record.nickname || issued.record.id}」——明文只显示这一次
+              </div>
+              <div className={styles.issuedRow}>
+                <code className={styles.issuedText}>{issued.token}</code>
+                <button className="btn" onClick={() => void copy(issued.token)}>
+                  <IconCopy size={15} />
+                  复制
+                </button>
+              </div>
+              <div className={styles.issuedHint}>
+                关掉这条提示就拿不回来了（库里只存摘要）。把明文配到 OneBot 实现的反向 WS
+                地址上，它连进来就归到这个账号下。
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
 
       {/* 破坏性操作统一走确认弹窗：吊销 */}
       {pending && (

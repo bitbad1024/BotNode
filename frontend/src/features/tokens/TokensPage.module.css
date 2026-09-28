@@ -38,15 +38,11 @@
   font-size: 15px;
 }
 
-/* 签发表单 */
+/* 签发表单（在「添加机器人」弹窗里，纵向排布） */
 .form {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 15px 18px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
 }
 .field {
   display: flex;
@@ -58,7 +54,7 @@
   color: var(--text-2);
 }
 .input {
-  width: 220px;
+  width: 100%;
   padding: 9px 12px;
   border-radius: var(--r-md);
   border: 1px solid var(--border-strong);
@@ -82,7 +78,7 @@
 
 /* 刚签发的明文令牌：只出现一次，所以要显眼 */
 .issued {
-  margin: 16px 18px;
+  margin: 14px 0 0;
   padding: 14px 16px;
   border-radius: var(--r-md);
   border: 1px solid var(--accent-border);
@@ -164,9 +160,6 @@
 }
 
 
-.skeletonPad {
-  padding: 0 18px;
-}
 .failure {
   display: flex;
   align-items: center;
@@ -281,4 +274,78 @@
   margin: 0;
   color: var(--text-3);
   font-size: 13px;
+}
+
+/* 添加机器人：与机器人卡片同尺寸的占位卡，虚线边框，点开弹签发表单 */
+.addCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 164px;
+  padding: 14px 16px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    color 0.16s ease,
+    background 0.16s ease;
+}
+.addCard:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.addCardIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.addCard:hover .addCardIcon {
+  border-color: var(--accent-border);
+  background: var(--surface);
+}
+.addCardTitle {
+  font-size: 14px;
+  font-weight: 600;
+}
+.addCardHint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 空态引导：还没有任何机器人时，网格里占一整行说明 */
+.emptyGuide {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.emptyGuide > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}
+.emptyGuide b {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.emptyGuide p {
+  margin: 2px 0 0;
 }
