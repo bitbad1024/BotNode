@@ -3,8 +3,9 @@
 与根目录 ``app.py`` 的分工（对看）::
 
     app.py           读配置 -> 按配置建日志核心 -> 建库引擎 -> 交给本模块 -> 停机收尾
-    nacho/bootstrap  建表与存储 -> 起接口层 HTTP -> 起 OneBot 反向 WS -> 起调度器
-                     -> 载入已发布工作流 -> 停机（含冲刷日志余量、关库连接）
+    nacho/bootstrap  建表与存储 -> 起接口层 HTTP -> 起 bridge 总线（OneBot 适配器经
+                     Gateway）-> 起调度器 -> 载入已发布工作流 -> 停机（含冲刷日志余量、
+                     关库连接）
 
 为什么要在意这个顺序：日志核心必须在**任何业务模块被 import 之前**按配置建好。nacho 里有模块
 级 ``get_logger``（导入即执行）——谁先被 import，谁就顺手把进程默认核心按默认参数建出来，配置
@@ -28,18 +29,12 @@ from .api import (
     SqlUserStore,
     create_app,
 )
+from .bridge import Gateway, PlatformEvent
+from .bridge.onebot import OneBotAdapter
 from .core.cache import CacheOptions, cache
 from .core.logger import BaseLogger, get_logger, manager
 from .core.scheduler import scheduler
-from .onebot import (
-    ONEBOT_LOGGER_NAME,
-    OneBotConnection,
-    OneBotEvent,
-    OneBotOptions,
-    OneBotServer,
-    SqlTokenRegistry,
-    onebot_logger,
-)
+from .onebot import OneBotOptions, SqlTokenRegistry
 from .workflow import SqlWorkflowStore
 from .workflow.runtime import WorkflowTriggers, load_published_workflows
 
@@ -49,8 +44,10 @@ _api_server: uvicorn.Server | None = None
 _api_task: asyncio.Task[None] | None = None
 #: 入口建好、交给本模块共用的数据库引擎；停机时 dispose
 _db_engine: AsyncEngine | None = None
-#: OneBot 反向 WS 服务；停机时一并停
-_onebot_server: OneBotServer | None = None
+#: bridge 总线（平台适配器的注册处 / 事件分发处）；停机时一并停
+_gateway: Gateway | None = None
+#: OneBot 适配器（包着反向 WS 服务端）；主协程停在它的 serve_forever 上
+_onebot_adapter: OneBotAdapter | None = None
 
 
 class _NoSignalServer(uvicorn.Server):
@@ -94,15 +91,24 @@ async def _prepare_stores(
 
 
 # --------------------------------------------------------------------------- 业务
-async def on_event(conn: OneBotConnection, event: OneBotEvent) -> None:
-    """OneBot 事件钩子：业务接这里。
+async def on_platform_event(event: PlatformEvent) -> None:
+    """bridge 事件订阅：业务接这里（P2 只是演示「收到了规范化事件」）。
 
-    现在只记一条日志，演示「收到了事件」；要发动作就这么写::
-
-        await conn.call("send_msg", message_type="private", user_id=..., message="hi")
+    认的是 :class:`~nacho.bridge.models.PlatformEvent`，**不再认识任何平台事件** ——
+    平台差异（OneBot 的整数号、Kook 的字符串号）在适配器里翻译掉了。要发消息走
+    ``gateway.send(platform, owner_id, action, ...)``。P3 的消息触发（``trigger=message``）
+    就从这个钩子里接。
     """
-    log = onebot_logger(ONEBOT_LOGGER_NAME)
-    log.info("收到事件", post_type=event.post_type, self_id=event.self_id, remote=conn.remote)
+    log = get_logger("bridge")
+    log.info(
+        "收到事件",
+        platform=event.platform,
+        owner_id=event.owner_id,
+        kind=event.kind,
+        chat=event.chat,
+        chat_id=event.chat_id,
+        user_id=event.user_id,
+    )
 
 
 # --------------------------------------------------------------------------- 装配
@@ -124,7 +130,7 @@ async def run(
     :param onebot: ``[onebot]`` 那块配置，交给 ``OneBotOptions.from_mapping``；
     :param cache_config: ``[cache]`` 那块配置，交给 ``CacheOptions.from_mapping``。
     """
-    global _api_server, _api_task, _db_engine, _onebot_server
+    global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter
     _db_engine = engine
     log = get_logger("bootstrap")
 
@@ -134,16 +140,20 @@ async def run(
 
     tokens, users, sessions, workflows = await _prepare_stores(engine, log)
 
-    # OneBot 反向 WS：先建好对象，下面的接口层要用它（<prefix>/onebot/* 那组管理接口）
-    # 日志不再各落一份文件：入口那份文件出口是**整进程共用**的（按天分片），
-    # 接口层 / OneBot 的日志照样进它，靠记录里的 logger_name 区分来源。
-    _onebot_server = OneBotServer(
+    # bridge 总线：OneBot 适配器（包着反向 WS 服务端）注册进去，事件翻成规范化形状后
+    # 从总线分发（订阅见 on_platform_event）。日志不再各落一份文件：入口那份文件出口
+    # 是**整进程共用**的（按天分片），bridge / 接口层的日志照样进它，靠记录里的
+    # logger_name 区分来源。
+    _gateway = Gateway()
+    _onebot_adapter = OneBotAdapter(
         OneBotOptions.from_mapping(onebot),
-        handler=on_event,
+        publish=_gateway.publish,  # 投递口：适配器翻译完事件调它
         tokens=tokens,  # 令牌 -> 账号；一个端口接多个客户端，靠它认归属
     )
+    _gateway.register(_onebot_adapter)
+    _gateway.subscribe(on_platform_event)
 
-    # 接口层：建应用（注入同一个 db 上的三份存储 + OneBot）-> 起 uvicorn
+    # 接口层：建应用（注入同一个 db 上的三份存储 + OneBot 适配器）-> 起 uvicorn
     options = ApiOptions.from_mapping(api)
     _api_server = _NoSignalServer(
         uvicorn.Config(
@@ -151,11 +161,13 @@ async def run(
                 options,
                 user_store=users,
                 session_store=sessions,
-                onebot=_onebot_server,
+                # 注入的是适配器（兼容面满足接口层的 OneBotLike 协议：roster / kick /
+                # revoke / tokens 都透传给被包的服务端），<prefix>/onebot/* 那组管理接口零改动
+                onebot=_onebot_adapter,
                 # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）；
-                # 带上 OneBot 服务端：onebot 节点要对归属连接发动作（登记构造的到点闭包也带）
+                # 带上 OneBot 适配器：onebot 节点要对归属连接发动作（登记构造的到点闭包也带）
                 workflow_triggers=WorkflowTriggers(
-                    workflows, scheduler, onebot=_onebot_server
+                    workflows, scheduler, onebot=_onebot_adapter
                 ),
                 workflow_store=workflows,
             ),
@@ -172,20 +184,29 @@ async def run(
 
     # 把**开着运行开关**的已发布工作流的定时触发登记到调度器：只登记、不执行图（到点才跑）。
     # 发布只挪指针、不执行图；跑不跑看开关，运行期拨开关走接口层那个即时启停。
-    # 带上 OneBot 服务端：onebot 节点要按工作流归属给在线连接发动作（登记构造的到点闭包也带）。
-    await load_published_workflows(workflows, scheduler, onebot=_onebot_server)
+    # 带上 OneBot 适配器：onebot 节点要按工作流归属给在线连接发动作（登记构造的到点闭包也带）。
+    await load_published_workflows(workflows, scheduler, onebot=_onebot_adapter)
 
 
 async def serve_forever() -> None:
-    """主协程停在这：OneBot 起监听并一直跑；端口被占等当场抛 ``OSError``（怎么退由入口定）。"""
-    if _onebot_server is None:
+    """主协程停在这：bridge 总线起监听并一直跑；端口被占等当场抛 ``OSError``（怎么退由入口定）。"""
+    if _gateway is None:
         raise RuntimeError("还没装配：先跑 run()")
-    await _onebot_server.serve_forever()
+    await _gateway.start()  # 起所有适配器的监听
+    # 等所有暴露 serve_forever 的适配器（现在就 OneBot 一个；P4 的 Kook 若也是长连接
+    # 服务，主协程的退出条件必须把它算上——只等一个的话，另一个的服务没人守）
+    waiters = [
+        adapter.serve_forever()
+        for adapter in (_gateway.adapter(name) for name in _gateway.platforms)
+        if adapter is not None and hasattr(adapter, "serve_forever")
+    ]
+    if waiters:
+        await asyncio.gather(*waiters)
 
 
 # --------------------------------------------------------------------------- 收尾
 async def shutdown() -> None:
-    """收尾：先停对外的两个服务（接口层 HTTP + OneBot 反向 WS）-> 等调度器跑完在飞的任务
+    """收尾：先停对外的两个服务（接口层 HTTP + bridge 总线）-> 等调度器跑完在飞的任务
     -> 冲刷日志余量 -> 关库连接。
 
     顺序不能反：任务里还会写日志，得等它们收尾了再冲刷、关库，收尾日志才不会丢 —— 所以
@@ -196,8 +217,8 @@ async def shutdown() -> None:
     if _api_task is not None:
         with suppress(asyncio.CancelledError):
             await _api_task
-    if _onebot_server is not None:
-        await _onebot_server.stop()  # 关监听并断开所有客户端
+    if _gateway is not None:
+        await _gateway.stop()  # 逆序停所有适配器（关监听并断开所有客户端）
     await scheduler.stop()  # 等在飞的任务自然收尾（默认 5 秒，超时只记 warning，不强杀）
     await cache.stop()  # 再停缓存：任务收完了，后面不会再有业务来读写
     await manager.stop()  # 停机自动冲刷余量
