@@ -33,7 +33,7 @@
 - **前端名字泛化**：导航 `/tokens` -> `/bots`，页面标题「机器人」；`tokensApi` ->
   `botsApi`（类型 `BotToken` / `BotClient` 不再带 onebot 前缀）；接口路径 `/api/bots/*`。
 
-- [ ] **P5-1** 模型与存储：新增通用「机器人行」模型（platform / owner_id / bot_id /
+- [x] **P5-1** 模型与存储：新增通用「机器人行」模型（platform / owner_id / bot_id /
   加密 token / enabled / account / remark / created_at），`bot_credentials` 表；兼容
   旧 `onebot_tokens`（读时按 platform=onebot 兜底，老客户端握手仍认）。配单测（表结构 /
   加密 / 读旧行）。
