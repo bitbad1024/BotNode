@@ -51,6 +51,8 @@ EventHandler: TypeAlias = Callable[[KookEvent], Awaitable[None]]
 
 #: REST API 基地址（发消息等动作走这里，不是 WS）
 _DEFAULT_API: str = "https://www.kookapp.cn/api/v3"
+#: 网关分发接口：Kook 的网关地址是动态下发的，连接前要 GET 这里拿真实 wss 地址
+_GATEWAY_INDEX: str = f"{_DEFAULT_API}/gateway/index"
 
 
 def _api_url(options: KookOptions, path: str) -> str:
@@ -153,10 +155,45 @@ class KookClient:
                 return
             await asyncio.sleep(self._options.reconnect_interval)
 
+    async def _discover_gateway(self) -> str:
+        """调 gateway/index 拿真实网关地址（Kook 网关是动态下发的，不能硬编码）。
+
+        网关地址通过 ``GET /api/v3/gateway/index`` 下发（带 Bot Token 鉴权），返回的
+        ``data.url`` 里已经带好 token / compress 参数，直接拿它连即可。
+
+        :raises ConnectionError: 没配 Bot Token / 网络失败 / 返回里没有 url。
+        """
+        token = self._options.token
+        if not token:
+            raise ConnectionError("[kook] 未配置 Bot Token，无法获取网关地址")
+        request = urlreq.Request(
+            f"{_GATEWAY_INDEX}?compress=0",
+            headers={"Authorization": f"Bot {token}"},
+            method="GET",
+        )
+
+        def _get() -> str:
+            with urlreq.urlopen(request, timeout=self._options.action_timeout) as resp:
+                payload = cast(
+                    "Mapping[str, object]", json.loads(resp.read().decode("utf-8"))
+                )
+            data = payload.get("data")
+            url = data.get("url") if isinstance(data, dict) else None
+            if not isinstance(url, str) or not url:
+                raise ConnectionError("[kook] gateway/index 没返回网关地址")
+            return url
+
+        try:
+            return await asyncio.to_thread(_get)
+        except ConnectionError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — HTTP / 网络错误统一按环境问题抛
+            raise ConnectionError(f"[kook] 获取网关地址失败：{exc}") from exc
+
     async def _connect_once(self) -> None:
         """建一条连接并跑它的收报文循环；连接断开 / 出错时返回（由 _run_loop 决定重连）。"""
-        gateway = self._options.gateway
         token = self._options.token
+        gateway = self._options.gateway or await self._discover_gateway()
         self._log.info("kook 正在连接网关", gateway=gateway, token_set=bool(token))
         async with ws_connect(
             gateway,

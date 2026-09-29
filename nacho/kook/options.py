@@ -14,8 +14,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
 from typing import cast
 
-#: 默认网关地址（Kook 开发者中心的 WebSocket 网关）
-DEFAULT_GATEWAY: str = "wss://www.kookapp.cn/gateway"
+#: 网关地址默认留空：Kook 的网关是**动态分发**的，连接前要走 gateway/index 拿真实地址
+#: （返回的 url 已带 token / compress 参数）。留空 = 自动获取；显式填一个则直连（测试 / 自建网关）。
+DEFAULT_GATEWAY: str = ""
 #: 默认 Bot Token（用户从 Kook 开放平台签发；空串 = 没配，连接会失败）
 DEFAULT_TOKEN: str = ""
 #: 默认心跳间隔（秒）：Kook 网关要求客户端定期发心跳，超时会被断开
@@ -39,7 +40,8 @@ def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, objec
 class KookOptions:
     """Kook 正向 WS 选项（对应 ``[kook]`` 一节）。"""
 
-    #: 网关地址（框架当客户端，主动连过去）
+    #: 网关地址：留空（默认）连接前走 gateway/index 动态获取真实地址（推荐）；
+    #: 显式填一个则直连这个地址（测试 / 自建网关用）。
     gateway: str = DEFAULT_GATEWAY
     #: Bot Token（Kook 开放平台签发，连接时鉴权用；空串 = 没配）
     token: str = DEFAULT_TOKEN

@@ -222,10 +222,12 @@ action_timeout = 30.0
 # token 留空 = 不接入 Kook（不建适配器，跳过）。
 # =============================================================================
 [kook]
-# Kook 网关地址（开发者中心的 WebSocket 网关）
-gateway = "wss://www.kookapp.cn/gateway"
+# 网关地址：留空 "" = 连接前自动走 gateway/index 动态获取（推荐）；显式填一个则直连（测试 / 自建网关）
+gateway = ""
 # Bot Token（Kook 开放平台签发；留空 "" = 不接入 Kook）
 token = ""
+# Bot Token 落库加密的密钥（经 /api/bots 添加 Kook 机器人时加密用；留空则无法存 kook 凭证）
+secret_key = ""
 # 心跳间隔（秒）：Kook 网关要求定期发心跳，超时会被断开
 heartbeat_interval = 30.0
 # 发一个动作（REST）后等回应的超时（秒）

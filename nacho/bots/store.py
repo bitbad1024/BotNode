@@ -7,6 +7,7 @@
         platform      VARCHAR(16)  INDEX         底层适配器：onebot / kook
         owner_id      VARCHAR(64)  INDEX         归属用户（多用户隔离的过滤列）
         token_hash    VARCHAR(64)  UNIQUE        令牌 / Bot Token 的 sha256 摘要
+        token_secret  VARCHAR(512) DEFAULT ''    Kook Bot Token 的 AES-GCM 密文
         account       VARCHAR(64)                机器人账号（展示用）
         enabled       BOOLEAN      DEFAULT 1     停用开关
         remark        VARCHAR(255)
@@ -24,6 +25,7 @@ import time
 from dataclasses import dataclass
 from uuid import uuid4
 
+from sqlalchemy import Connection, inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -95,10 +97,28 @@ class SqlBotStore:
         )
 
     # ------------------------------------------------------------------ 启动
+    #: 老库增量补列：列名 -> ALTER TABLE ADD COLUMN 的列定义（sqlite / mariadb 都认）。
+    #: ``create_all`` 不会改已有表；P6-1 给 kook 加的可逆密文列对 P5 建的 ``bot_credentials``
+    #: 是增量，升级上来的老库得幂等补这一列，否则 ``select(BotCredentialTable)`` 会取不到。
+    _ADDED_COLUMNS: dict[str, str] = {
+        "token_secret": "VARCHAR(512) NOT NULL DEFAULT ''",
+    }
+
+    def _migrate_bot_columns(self, conn: Connection) -> None:
+        """给已存在的 ``bot_credentials`` 表幂等补新增列（新库 create_all 已建齐）。"""
+        inspector = inspect(conn)
+        existing = {col["name"] for col in inspector.get_columns("bot_credentials")}
+        for name, ddl in self._ADDED_COLUMNS.items():
+            if name not in existing:
+                conn.execute(
+                    text(f"ALTER TABLE bot_credentials ADD COLUMN {name} {ddl}")
+                )
+
     async def ensure_schema(self) -> None:
-        """建表（幂等）：DDL 按方言生成，已有的表跳过。"""
+        """建表（幂等）：DDL 按方言生成，已有的表跳过；再补老库缺失的增量列。"""
         async with self._engine.begin() as conn:
             await conn.run_sync(BotCredentialTable.metadata.create_all)
+            await conn.run_sync(self._migrate_bot_columns)
 
     # ------------------------------------------------------------------ 注册表
     async def resolve(self, token: str) -> BotCredential | None:

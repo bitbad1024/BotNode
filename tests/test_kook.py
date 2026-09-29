@@ -52,7 +52,7 @@ async def wait_until(predicate, timeout: float = 3.0) -> bool:  # type: ignore[n
 def test_options_defaults_and_from_mapping() -> None:
     """缺省值齐全；from_mapping 认的键填进去、多余的键忽略。"""
     options = KookOptions()
-    assert options.gateway == "wss://www.kookapp.cn/gateway"
+    assert options.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
     assert options.token == ""
 
     options = KookOptions.from_mapping(
@@ -198,3 +198,39 @@ async def test_client_call_posts_to_rest(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured["method"] == "POST"
     assert captured["headers"]["Authorization"] == "Bot abc"
     assert captured["body"] == {"target_id": "ch-1", "content": "你好"}
+
+
+async def test_client_discovers_gateway_via_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gateway 留空时，连接前走 gateway/index 拿真实地址（Kook 网关是动态下发的）。"""
+    client = KookClient(KookOptions(token="abc"))
+    captured: dict[str, object] = {}
+
+    class _FakeResp:
+        def __init__(self, payload: object) -> None:
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self) -> _FakeResp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return self._payload
+
+    def fake_get(req, timeout: float) -> _FakeResp:  # type: ignore[no-untyped-def]
+        captured["url"] = req.full_url
+        captured["method"] = req.method
+        captured["headers"] = dict(req.headers)
+        captured["timeout"] = timeout
+        return _FakeResp(
+            {"code": 0, "message": "操作成功", "data": {"url": "wss://gw/kook?token=abc&compress=0"}}
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_get)
+
+    url = await client._discover_gateway()
+    assert url == "wss://gw/kook?token=abc&compress=0"
+    assert captured["method"] == "GET"
+    assert "gateway/index" in str(captured["url"])
+    assert captured["headers"]["Authorization"] == "Bot abc"

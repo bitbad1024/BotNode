@@ -94,12 +94,16 @@ class _FakeClient:
         return None
 
 
-def _make_adapter(client: _FakeClient, publish=None) -> KookAdapter:  # type: ignore[no-untyped-def]
-    """把 FakeClient 塞进适配器（绕过构造时的真客户端）。"""
+def _make_adapter(  # type: ignore[no-untyped-def]
+    client: _FakeClient, publish=None, bot_id: str = "bot-1"
+) -> KookAdapter:
+    """把 FakeClient 塞进适配器（绕过构造时的真客户端与多客户端字典）。"""
     adapter = KookAdapter.__new__(KookAdapter)
     adapter._publish = publish  # noqa: SLF001
     adapter._log = __import__("nacho.core.logger", fromlist=["get_logger"]).get_logger("bridge")
-    adapter._client = client
+    adapter._clients = {bot_id: client}  # noqa: SLF001
+    adapter._by_self = {}  # noqa: SLF001
+    adapter._started: set[str] = set()  # noqa: SLF001
     return adapter
 
 
@@ -135,7 +139,7 @@ async def test_adapter_publishes_translated_event() -> None:
     adapter = _make_adapter(client, publish=publish)
 
     event = KookEvent(type=1, channel_type="GROUP", target_id="ch-1", author_id="u-1", content="hi", self_id="bot-1")
-    await adapter._on_event(event)  # noqa: SLF001
+    await adapter._on_event("bot-1", event)  # noqa: SLF001
 
     assert len(got) == 1
     assert got[0].platform == "kook"
@@ -152,12 +156,12 @@ async def test_adapter_clients_reports_single_bot() -> None:
     assert rows[0].owner_id == "bot-1" and rows[0].self_id == "bot-1"
     assert rows[0].connected_at == 1_700_000_000.0
 
-    # 连上了但还没学到 self_id：仍该列一行（client_id 兜底成 "kook"）
+    # 连上了但还没学到 self_id：仍该列一行（client_id 兜底成 bot_id）
     fresh = _FakeClient(self_id="")
     adapter = _make_adapter(fresh)
     rows = adapter.clients()
     assert len(rows) == 1
-    assert rows[0].self_id == "" and rows[0].client_id == "kook"
+    assert rows[0].self_id == "" and rows[0].client_id == "bot-1"
 
 
 async def test_adapter_clients_empty_when_not_connected() -> None:
@@ -165,3 +169,16 @@ async def test_adapter_clients_empty_when_not_connected() -> None:
     client = _FakeClient(self_id="", connected=False)
     adapter = _make_adapter(client)
     assert adapter.clients() == ()
+
+
+async def test_adapter_add_and_remove_bot_idempotent() -> None:
+    """多客户端登记：add_bot 幂等（不重复建），remove_bot 停并注销、再删无害。"""
+    adapter = KookAdapter()
+    adapter.add_bot("bot-a", "tok-a")
+    adapter.add_bot("bot-a", "tok-a")  # 幂等：已经登记过就不动
+    assert adapter.has_bot("bot-a") is True
+    assert adapter.has_bot("bot-b") is False
+
+    await adapter.remove_bot("bot-a")
+    assert adapter.has_bot("bot-a") is False
+    await adapter.remove_bot("bot-a")  # 再删一次：没有也安静通过

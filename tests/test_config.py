@@ -257,7 +257,7 @@ class TestKookRegion:
     def test_defaults_without_section(self, tmp_path: Path) -> None:
         settings = Settings.load(write(tmp_path, ""))
         kook = settings.kook
-        assert kook.gateway == "wss://www.kookapp.cn/gateway"
+        assert kook.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
         assert kook.token == ""  # 没配 = 不接入
         assert kook.heartbeat_interval == 30.0
 

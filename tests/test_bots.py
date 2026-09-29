@@ -113,3 +113,36 @@ async def test_issue_rejects_empty_token(store: SqlBotStore) -> None:
     """显式传空 token（Kook 场景用户没填）是错误，当场抛。"""
     with pytest.raises(ValueError, match="空令牌"):
         await store.issue("u-admin", platform="kook", token="")
+
+
+async def test_old_bot_table_gets_token_secret_column() -> None:
+    """老库（P5 建的 bot_credentials，没有 token_secret）在 ensure_schema 时补上密文列。
+
+    P6-1 给 kook 加的可逆密文列对老库是增量；不补的话 ``select(BotCredentialTable)`` 会取
+    ``token_secret`` 这一列而报 Unknown column（``create_all`` 不会改已有表）。
+    """
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        # 造一张「老表」：只有 P5 那几列，没有 token_secret
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(
+                "CREATE TABLE bot_credentials ("
+                "bot_id VARCHAR(64) PRIMARY KEY, platform VARCHAR(16),"
+                " owner_id VARCHAR(64), token_hash VARCHAR(64), account VARCHAR(64),"
+                " enabled BOOLEAN, remark VARCHAR(255), created_at FLOAT)"
+            )
+            await conn.exec_driver_sql(
+                "INSERT INTO bot_credentials (bot_id, platform, owner_id, token_hash,"
+                " account, enabled, remark, created_at)"
+                " VALUES ('old-bot', 'onebot', 'u-admin', 'deadbeef', '老机器人', 1, '老数据', 1.0)"
+            )
+
+        store = SqlBotStore(engine)
+        await store.ensure_schema()  # 建表跳过（已存在）+ 补 token_secret
+
+        rows = await store.list_records()
+        assert len(rows) == 1
+        assert rows[0].bot_id == "old-bot"
+        assert rows[0].token_secret == ""  # 老行没有密文，补列默认空串
+    finally:
+        await engine.dispose()

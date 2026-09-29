@@ -47,7 +47,7 @@
   主键 -> bot_id）；保留旧 `/api/onebot/*` 兼容期；全量回归。
 - [x] **P6-1** Kook 凭证行：`bot_credentials` 支持 platform=kook（存 Bot Token，加密）；
   装配层读 Kook 凭证行建 KookAdapter（不再只认 `[kook]` 配置节）。
-- [ ] **P6-2** Kook 管理面：`/api/bots/*` 支持 Kook 机器人的「添加 / 启用 / 停用 / 删」
+- [x] **P6-2** Kook 管理面：`/api/bots/*` 支持 Kook 机器人的「添加 / 启用 / 停用 / 删」
   （不硬套 OneBot 的踢/revoke）；前端「添加机器人」开放 kook 选项。
 - [ ] **P6-3** 收尾：`bridge/__init__.py` / MODULES.md 文档同步（「凭证行」概念、platform
   复合键）；全量回归；勾掉 P5 / P6。
