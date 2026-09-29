@@ -7,7 +7,7 @@
 - [x] **P1** 令牌融合在线状态（接口聚合 + 前端状态列）
   - 说明：`online` 是**派生态**（内存实时态），不落库；接口层 `list_tokens` 时聚合各适配器的在线连接。
 - [x] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
-- [ ] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
+- [x] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
 - [ ] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
 
 ## P3 拆分
@@ -53,5 +53,5 @@
 - [x] **P3-5** 透传 gateway + onebot 别名：`NodeExecutionContext` 加 `gateway` 注入点；
   `runtime.py` / `bootstrap.py` 全链路透传（登记闭包带上）；旧图 `onebot` 类型注册为
   `send` 的别名（platform 恒 onebot），库里已存的 onebot 节点照跑
-- [ ] **P3-6** 收尾：前端颜色表 `onebot` -> `send`（面板项 / 中文名 / 端口 / 表单全从后端
+- [x] **P3-6** 收尾：前端颜色表 `onebot` -> `send`（面板项 / 中文名 / 端口 / 表单全从后端
   注册表来，前端只补颜色）；`nodes/__init__.py` / MODULES.md 文档同步；全量回归对齐基线
