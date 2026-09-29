@@ -44,7 +44,7 @@
 - [x] **P3-2** 登记链路接通消息触发：`register_published_workflow` / `stop_published_workflow`
   / `load_published_workflows` / `WorkflowTriggers` 识别 `trigger=message` 的开始节点，
   登记 / 摘除到 `MessageRouter`（与 time 触发对称：登记那一趟加，执行那一趟不碰）
-- [ ] **P3-3** 装配接通：`bootstrap.py` 建 `MessageRouter`、`on_platform_event` 收到
+- [x] **P3-3** 装配接通：`bootstrap.py` 建 `MessageRouter`、`on_platform_event` 收到
   `kind=message` 事件时拆成普通数据并 `dispatch`；全量回归对齐基线（全绿才算完）
 - [ ] **P3-4** send 节点：`nodes/onebot.py` 泛化为 `send` —— `platform` 参数（缺省 onebot），
   发送改走 `ctx.gateway`（`gateway.send(platform, owner_id, action, **params)`），回执从

@@ -3542,6 +3542,64 @@ async def test_load_published_workflows_registers_message_triggers() -> None:
         await engine.dispose()
 
 
+async def test_on_platform_event_dispatches_message_to_router() -> None:
+    """装配钩子：``kind=message`` 的事件拆成普通数据交给消息路由，非 message 事件不动。
+
+    「PlatformEvent 拆成普通数据」这一步发生在 bootstrap 的 ``on_platform_event``；消息路由
+    本身不 import bridge（依赖方向不破）。这里验证：message 事件带着 text / user_id / 平台
+    字段进 ``trigger_data``，按 owner_id 路由；notice / meta 之类不触发。
+    """
+    import nacho.bootstrap as bootstrap
+    from nacho.bridge.models import PlatformEvent
+    from nacho.workflow.runtime import MessageRouter
+
+    dispatched: list[tuple[str, dict[str, str]]] = []  # (owner_id, trigger_data)
+
+    async def run(workflow_id: str, version: int, **kw: Any) -> None:
+        dispatched.append((kw["trigger_data"].get("owner_id", ""), kw["trigger_data"]))
+
+    router = MessageRouter()
+    router.attach(run)
+    router.register("w1", 1, "u-admin")
+
+    original = bootstrap._message_router
+    bootstrap._message_router = router  # 换掉模块级那个（bootstrap 里 on_platform_event 读它）
+    try:
+        msg = PlatformEvent(
+            platform="onebot",
+            owner_id="u-admin",
+            kind="message",
+            chat="group",
+            chat_id="123",
+            user_id="10001",
+            text="你好",
+            message_id="42",
+        )
+        await bootstrap.on_platform_event(msg)
+        assert dispatched == [
+            (
+                "",
+                {
+                    "message": "你好",
+                    "user_id": "10001",
+                    "platform": "onebot",
+                    "chat": "group",
+                    "chat_id": "123",
+                    "message_id": "42",
+                },
+            )
+        ]
+
+        # 非 message 事件不触发
+        dispatched.clear()
+        await bootstrap.on_platform_event(
+            PlatformEvent(platform="onebot", owner_id="u-admin", kind="notice")
+        )
+        assert dispatched == []
+    finally:
+        bootstrap._message_router = original
+
+
 async def test_api_owner_isolation_between_users() -> None:
     async with api_client(api_app()) as client:
         admin_token = await login(client, ADMIN)
