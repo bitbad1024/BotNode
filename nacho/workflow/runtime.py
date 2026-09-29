@@ -15,7 +15,7 @@
 """
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from nacho.core.logger import BaseLogger, BoundLogger, get_logger
@@ -70,12 +70,19 @@ async def run_published_workflow(
     scheduler: TaskManager,
     *,
     onebot: Any | None = None,
+    trigger_data: Mapping[str, Any] | None = None,
+    user_id: str = "",
 ) -> None:
-    """加载指定版本的图并**执行整条流程**；到点回调走它（见 :func:`make_trigger`）。
+    """加载指定版本的图并**执行整条流程**；到点 / 消息回调都走它。
 
     启动载入**不走这里** —— 那一步只登记触发、不执行图，见
     :func:`register_published_workflow`。``onebot`` 从这里注进节点上下文：``onebot``
     节点靠它发动作（挑连接的归属 ``ctx.owner_id`` 来自定义表）。
+
+    ``trigger_data`` / ``user_id`` 是**消息触发**这一趟的入口：``trigger_data`` 进
+    ``ctx.trigger_data``（start 的 message 端口从它取 ``message``），``user_id`` 是发消息
+    的人（``ctx.user_id``）。定时触发没有这俩，留空即可 —— 与 ``ctx.user_id`` 的
+    ``NO_USER_ID``（空串）口径一致。
 
     归属先读出来：这一趟的每条日志都挂在**这条流的主人**名下（与 ``ctx.owner_id`` 同一个
     出处），日志页里按人筛得到、也追得到责 —— 记成公共的话，谁的流在跑都看不出来。
@@ -99,8 +106,11 @@ async def run_published_workflow(
         run=trigger,
         workflow_id=workflow_id,
         owner_id=owner_id,
+        user_id=user_id,
         onebot=onebot,
     )
+    if trigger_data is not None:
+        ctx.trigger_data = dict(trigger_data)
     runner = SimpleWorkflowRunner()
     try:
         await runner.run(graph, ctx)
@@ -205,6 +215,86 @@ async def stop_published_workflow(
     if removed:
         log.info("已停止定时触发", version=version, count=removed)
     return removed
+
+
+class MessageRouter:
+    """消息触发的登记处：按归属（``owner_id``）找到匹配的工作流，消息进来时逐个跑。
+
+    与时间触发的对偶：``trigger=time`` 把整条流程登记到调度器（cron 到点跑），
+    ``trigger=message`` 把整条流程登记到这里（收到消息事件时跑）。登记在「登记那一趟」
+    （拨运行开关 / 启动载入 / 发布新版）做，``dispatch`` 是「执行那一趟」——**不碰登记表**，
+    与 ``NodeExecutionContext.register_triggers`` 同一套口径。
+
+    路由键 = ``owner_id``：消息发给哪个机器人（owner，握手时令牌定下的 id），就触发那个
+    owner 下所有登记过的 ``trigger=message`` 工作流。发消息的人是 ``user_id``，由调用方
+    从 ``trigger_data`` 里带进来。
+
+    **本模块不 import bridge**：它只认普通数据（``trigger_data`` 字典 + ``user_id``），
+    「PlatformEvent 拆成这些普通数据」由装配层（bootstrap）做 —— 与 P2「bridge 不 import
+    workflow」对得上，依赖方向不破。
+    """
+
+    def __init__(self) -> None:
+        #: owner_id -> { workflow_id -> version }：同一工作流重复登记覆盖（版本号随发布挪）
+        self._routes: dict[str, dict[str, int]] = {}
+        #: dispatch 跑整条流程要用的回调；装配时注入（见 :meth:`attach`）
+        self._run: Callable[..., Awaitable[None]] | None = None
+
+    def attach(self, run: Callable[..., Awaitable[None]]) -> None:
+        """注入「跑整条流程」的回调：``dispatch`` 拿它执行匹配的工作流。
+
+        回调签名是 ``(workflow_id, version) -> Awaitable[None]``，装配层把
+        :func:`run_published_workflow` 连同 store / scheduler 一起闭包进来。
+        """
+        self._run = run
+
+    def register(self, workflow_id: str, version: int, owner_id: str) -> None:
+        """登记一条消息触发：同一工作流重复登记按新版本覆盖（发布挪指针后重新登记）。"""
+        self._routes.setdefault(owner_id, {})[workflow_id] = version
+
+    def unregister(self, workflow_id: str, owner_id: str) -> None:
+        """摘除一条消息触发；不存在无害。"""
+        routes = self._routes.get(owner_id)
+        if routes is not None:
+            routes.pop(workflow_id, None)
+
+    def routes(self, owner_id: str) -> dict[str, int]:
+        """某个归属下登记过的消息触发快照（``{workflow_id: version}``）。"""
+        return dict(self._routes.get(owner_id, {}))
+
+    async def dispatch(self, owner_id: str, *, trigger_data: Mapping[str, Any]) -> int:
+        """消息进来：跑这个归属下**所有**登记过的 ``trigger=message`` 工作流，返回跑过的条数。
+
+        * 每个工作流都拿同一份 ``trigger_data``（消息内容）与 ``user_id``（发消息的人，从
+          ``trigger_data`` 里取，没有就是空串）；
+        * 单个工作流失败只记 error、不淹其它（口径同 :func:`load_published_workflows`）；
+        * 没注入执行回调（``attach`` 没调）时只记 warning、返回 0 —— 路由是纯登记表，
+          执行能力由装配层给。
+
+        :param trigger_data: 消息事件拆成的普通数据（含 ``message`` / ``user_id`` 等）；
+            缺省 ``user_id`` 键时按空串（``NO_USER_ID`` 口径）。
+        """
+        if self._run is None:
+            _log().warning("消息路由未注入执行回调，丢弃消息", owner_id=owner_id)
+            return 0
+        routes = self._routes.get(owner_id)
+        if not routes:
+            return 0
+        user_id = str(trigger_data.get("user_id", "") or "")
+        ran = 0
+        for workflow_id, version in routes.items():
+            try:
+                await self._run(workflow_id, version, trigger_data=trigger_data, user_id=user_id)
+                ran += 1
+            except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能淹其它
+                _log().exception(
+                    "消息触发执行工作流失败",
+                    workflow_id=workflow_id,
+                    owner_id=owner_id,
+                    version=version,
+                    error=str(exc),
+                )
+        return ran
 
 
 class WorkflowTriggers:

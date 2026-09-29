@@ -35,7 +35,7 @@
   要把它带上（与 onebot 同一路数，见 MODULES.md §5「给 ctx 注入新能力」）—— 消息触发跑
   整条流程那一趟也要能拿得到它发动作。
 
-- [ ] **P3-1** 消息触发运行时：`run_published_workflow` 支持注入 `trigger_data` / `user_id`
+- [x] **P3-1** 消息触发运行时：`run_published_workflow` 支持注入 `trigger_data` / `user_id`
   （消息进 start 的 message 端口，user_id 进 `ctx.user_id`）；`runtime.py` 加
   `MessageRouter` —— `register(workflow_id, version, owner_id)` / `unregister(...)` /
   `dispatch(owner_id, *, trigger_data)`（按 owner_id 找到匹配工作流逐个跑整条流程，注入

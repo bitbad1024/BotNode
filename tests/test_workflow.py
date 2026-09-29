@@ -3356,6 +3356,104 @@ async def test_workflow_task_ids_carry_the_workflow_id() -> None:
         await engine.dispose()
 
 
+# ------------------------------------------------------------- 消息触发（P3-1）
+async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None:
+    """消息触发这一趟：``trigger_data`` 进 start 的 message 端口，``user_id`` 进 ctx.user_id。
+
+    定时触发（缺省）不传这俩 —— message 端口拿空串、user_id 是空串（``NO_USER_ID``），
+    行为与现在完全一致。这里用一张 ``start(message) -> log`` 的图，log 节点把 start 送下来的
+    message 写进日志，断言它拿到了消息内容。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import run_published_workflow
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [
+            node("s", "start", trigger="message"),
+            node("l", "log", level="INFO"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "l", "message", "message"), edge("l", "e")],
+    }
+    definition = await store.create("u-admin", "消息回显流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+
+    scheduler = TaskManager()
+    try:
+        async with runtime_logs() as collected:
+            await run_published_workflow(
+                definition.id,
+                1,
+                store,
+                scheduler,
+                trigger_data={"message": "你好"},
+                user_id="10001",
+            )
+            await wait_for_records(collected, count=3)  # 开始 + log + 完成
+            # log 节点把 start 送下来的消息写了出来
+            assert any("你好" in record.message for record in collected)
+    finally:
+        await engine.dispose()
+
+
+async def test_message_router_dispatches_by_owner_and_isolates_failures() -> None:
+    """消息路由：按 owner_id 找匹配工作流、逐个跑，单个失败不淹其它。
+
+    路由键 = owner_id（机器人归属），发消息的人是 ``user_id``。这里直接验证：
+    * ``register`` 登记（重复登记覆盖版本）、``unregister`` 摘除；
+    * ``dispatch`` 只跑该 owner 下登记过的工作流，别的 owner 不动；
+    * 某个工作流抛异常不影响同 owner 的其它工作流（与 ``load_published_workflows`` 同口径）。
+    """
+    from nacho.workflow.runtime import MessageRouter
+
+    ran: list[tuple[str, int, str, str]] = []  # (workflow_id, version, user_id, message)
+
+    async def run(workflow_id: str, version: int, **kw: Any) -> None:
+        if workflow_id == "boom":
+            raise RuntimeError("坏了")
+        ran.append((workflow_id, version, kw.get("user_id", ""), kw["trigger_data"]["message"]))
+
+    router = MessageRouter()
+    router.attach(run)
+
+    router.register("a", 1, "u-admin")
+    router.register("b", 2, "u-admin")
+    router.register("c", 1, "u-robot")  # 别人家的，不该被触发
+    router.register("boom", 1, "u-admin")  # 会抛的，不淹 a / b
+
+    # boom 抛了不计数，返回的是「真正跑成」的条数：a / b 两条
+    assert await router.dispatch("u-admin", trigger_data={"message": "hi", "user_id": "10001"}) == 2
+
+    # a / b 拿到了 user_id 与 message；boom 抛了没淹 a / b
+    assert ("a", 1, "10001", "hi") in ran
+    assert ("b", 2, "10001", "hi") in ran
+    assert all(entry[0] != "c" for entry in ran)  # u-robot 没被触发
+    assert all(entry[0] != "boom" for entry in ran)
+
+    # 摘除后不再跑
+    router.unregister("a", "u-admin")
+    ran.clear()
+    assert await router.dispatch("u-admin", trigger_data={"message": "again"}) == 1
+    assert all(entry[0] != "a" for entry in ran)
+
+
+async def test_message_router_without_executor_drops_and_returns_zero() -> None:
+    """没注入执行回调（``attach`` 没调）：dispatch 只记 warning、返回 0，不炸。"""
+    from nacho.workflow.runtime import MessageRouter
+
+    router = MessageRouter()
+    router.register("a", 1, "u-admin")
+    assert await router.dispatch("u-admin", trigger_data={"message": "hi"}) == 0
+
+
 async def test_api_owner_isolation_between_users() -> None:
     async with api_client(api_app()) as client:
         admin_token = await login(client, ADMIN)
