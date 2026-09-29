@@ -1793,7 +1793,94 @@ def test_onebot_action_is_validated() -> None:
     assert [issue.code for issue in report.errors] == ["INVALID_ONEBOT_ACTION"]
 
 
-# ------------------------------------------------------------- ④-F 运算节点
+# ------------------------------------------------------------- ④-F send 节点（P3 泛化）
+class _FakeGateway:
+    """假的平台总线：只实现 ``send(platform, owner_id, action, **params)``（send 节点用到的面）。"""
+
+    def __init__(self, response: _FakeActionResponse | None = None) -> None:
+        self.calls: list[tuple[str, str, str, dict[str, object]]] = []
+        self._response = response if response is not None else _FakeActionResponse()
+
+    async def send(
+        self, platform: str, owner_id: str, action: str, /, **params: object
+    ) -> _FakeActionResponse:
+        self.calls.append((platform, owner_id, action, dict(params)))
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_send_routes_via_gateway_by_platform() -> None:
+    """send 节点走 ``ctx.gateway`` 按平台路由发动作：参数按动作组装，回执从 send_ok / send_data 送下去。"""
+    from nacho.workflow.nodes import exec_send
+
+    gateway = _FakeGateway(response=_FakeActionResponse(data={"message_id": 7}))
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(
+        id="snd1", type="send", config={"platform": "onebot", "action": "send_group_msg"}
+    )
+    ctx_.inputs = {"group_id": "123", "message": "hi"}
+    result = await exec_send(node_, ctx_)
+
+    assert gateway.calls == [
+        ("onebot", "u-admin", "send_group_msg", {"group_id": 123, "message": "hi"})
+    ]
+    assert result == {"send_ok": True, "send_data": '{"message_id":7}'}
+
+
+@pytest.mark.asyncio
+async def test_send_defaults_platform_to_onebot_and_requires_gateway() -> None:
+    """platform 缺省 onebot；没接总线（ctx.gateway 是 None）是环境问题，当场抛。"""
+    from nacho.workflow.nodes import exec_send
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="snd1", type="send", config={"action": "send_private_msg"})
+    ctx_.inputs = {"user_id": "7", "message": "hi"}
+    await exec_send(node_, ctx_)
+    assert gateway.calls == [("onebot", "u-admin", "send_private_msg", {"user_id": 7, "message": "hi"})]
+
+    # 没接总线：环境问题当场抛
+    no_gateway = NodeExecutionContext(owner_id="u-admin")
+    no_gateway.inputs = {"user_id": "7", "message": "hi"}
+    with pytest.raises(ConnectionError, match="需要平台总线"):
+        await exec_send(node_, no_gateway)
+
+
+@pytest.mark.asyncio
+async def test_send_failed_receipt_warns_but_flows_on() -> None:
+    """对方收下但回执不成功（ok=False）：不抛，send_ok=False + send_data 送下游自己判断。"""
+    from nacho.workflow.nodes import exec_send
+
+    gateway = _FakeGateway(
+        response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "被禁言"})
+    )
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="snd1", type="send", config={"action": "send_group_msg"})
+    ctx_.inputs = {"group_id": "1", "message": "hi"}
+    result = await exec_send(node_, ctx_)  # 不抛
+    assert result == {"send_ok": False, "send_data": '{"msg":"被禁言"}'}
+
+
+def test_send_action_is_validated() -> None:
+    """动作枚举在语义阶段拦住（拼错保存就报 INVALID_SEND_ACTION），合法值放行。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("snd", "send", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "snd"), edge("snd", "e")],
+        }
+
+    assert validate_graph(graph_with(action="send_group_msg", group_id="1", message="hi")).valid
+    report = validate_graph(graph_with(action="发消息", group_id="1", message="hi"))
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_SEND_ACTION"]
+
+
+# ------------------------------------------------------------- ④-G 运算节点
 @pytest.mark.asyncio
 async def test_operator_does_arithmetic_and_formats_result() -> None:
     """加减乘除取余都能算：两边转数字；结果文本化——整数值不带小数点，除法是真除法。"""

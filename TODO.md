@@ -46,7 +46,7 @@
   登记 / 摘除到 `MessageRouter`（与 time 触发对称：登记那一趟加，执行那一趟不碰）
 - [x] **P3-3** 装配接通：`bootstrap.py` 建 `MessageRouter`、`on_platform_event` 收到
   `kind=message` 事件时拆成普通数据并 `dispatch`；全量回归对齐基线（全绿才算完）
-- [ ] **P3-4** send 节点：`nodes/onebot.py` 泛化为 `send` —— `platform` 参数（缺省 onebot），
+- [x] **P3-4** send 节点：`nodes/onebot.py` 泛化为 `send` —— `platform` 参数（缺省 onebot），
   发送改走 `ctx.gateway`（`gateway.send(platform, owner_id, action, **params)`），回执从
   `ActionResult` 泛化成 `send_ok` / `send_data` 送下游（失败回执照常送、不打断流程，
   环境问题当场抛，口径不变）
