@@ -40,7 +40,7 @@ from ..models import ValidationIssue, WorkflowNode
 from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
 
-#: 支持的动作，**顺序即画布下拉顺序**
+#: onebot 支持的动作，**顺序即画布下拉顺序**
 SEND_ACTION_ORDER: tuple[str, ...] = (
     "send_msg",
     "send_group_msg",
@@ -48,24 +48,39 @@ SEND_ACTION_ORDER: tuple[str, ...] = (
     "delete_msg",
 )
 
+#: kook 支持的动作（独立一组，不复用 onebot 的）：Kook 的 id 是**字符串**，动作语义不同
+KOOK_ACTION_ORDER: tuple[str, ...] = (
+    "send_channel_msg",
+    "send_dm_msg",
+    "delete_msg",
+)
+
+#: 平台 -> 动作组：send 节点按 platform 决定「认哪些动作 / 怎么转参数」
+ACTIONS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
+    "onebot": SEND_ACTION_ORDER,
+    "kook": KOOK_ACTION_ORDER,
+}
+
 #: 平台参数的缺省值：现在唯一平台是 onebot
 DEFAULT_PLATFORM: str = "onebot"
 
 
 def validate_send_node(node: WorkflowNode) -> list[ValidationIssue]:
-    """动作必须是枚举里的一个（拼错保存时就拦，运行时不猜）。
+    """动作必须是**这个平台**枚举里的一个（拼错保存时就拦，运行时不猜）。
 
-    参数是否齐（群号 / 用户号 / 消息号）取决于动作，做不到表格里的「必填」，留给运行期抛
+    参数是否齐（频道号 / 用户号 / 消息号）取决于动作，做不到表格里的「必填」，留给运行期抛
     —— 见模块文档的失败口径。
     """
+    platform = _platform_of(node)
+    allowed = ACTIONS_BY_PLATFORM.get(platform, SEND_ACTION_ORDER)
     action = node.config.get("action")
-    if isinstance(action, str) and action.strip() and action.strip() not in SEND_ACTION_ORDER:
+    if isinstance(action, str) and action.strip() and action.strip() not in allowed:
         return [
             ValidationIssue(
                 node_id=node.id,
                 code="INVALID_SEND_ACTION",
-                message=f"send 节点 {node.id} 的动作 {action!r} 不合法",
-                suggestion=f"可选：{' '.join(SEND_ACTION_ORDER)}",
+                message=f"send 节点 {node.id} 的动作 {action!r} 不合法（平台 {platform}）",
+                suggestion=f"可选：{' '.join(allowed)}",
             )
         ]
     return []
@@ -92,7 +107,19 @@ def _int_of(raw: str, name: str, node_id: str) -> int:
 
 
 def _params_of(action: str, node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, object]:
-    """按动作把入口值组装成动作参数（键 = 平台协议里的参数名；现在就是 OneBot 的）。"""
+    """按动作把入口值组装成动作参数（键 = 平台协议里的参数名）。
+
+    按 ``config.platform`` 分派：onebot 走号转整数那套，kook 走字符串那套（id 不转整数）。
+    """
+    if _platform_of(node) == "kook":
+        return _kook_params(action, node, ctx)
+    return _onebot_params(action, node, ctx)
+
+
+def _onebot_params(
+    action: str, node: WorkflowNode, ctx: NodeExecutionContext
+) -> dict[str, object]:
+    """onebot 平台的参数：群号 / 用户号 / 消息号转整数。"""
     message = str(input_value(node, ctx, "message", default=""))
     group_id = str(input_value(node, ctx, "group_id", default=""))
     user_id = str(input_value(node, ctx, "user_id", default=""))
@@ -127,6 +154,31 @@ def _params_of(action: str, node: WorkflowNode, ctx: NodeExecutionContext) -> di
         "message_type": "private",
         "user_id": _int_of(user_id, "user_id", node.id),
         "message": _require(message, "message", node.id),
+    }
+
+
+def _kook_params(
+    action: str, node: WorkflowNode, ctx: NodeExecutionContext
+) -> dict[str, object]:
+    """kook 平台的参数：id 一律字符串**不转整数**，键名用 Kook 的（target_id / content / msg_id）。"""
+    message = str(input_value(node, ctx, "message", default=""))
+    group_id = str(input_value(node, ctx, "group_id", default=""))  # 频道 id（channel_id）
+    user_id = str(input_value(node, ctx, "user_id", default=""))  # 私聊对方
+    message_id = str(input_value(node, ctx, "message_id", default=""))
+
+    if action == "send_channel_msg":
+        return {
+            "target_id": _require(group_id, "group_id（频道号）", node.id),
+            "content": _require(message, "message", node.id),
+        }
+    if action == "send_dm_msg":
+        return {
+            "target_id": _require(user_id, "user_id", node.id),
+            "content": _require(message, "message", node.id),
+        }
+    # delete_msg
+    return {
+        "msg_id": _require(message_id, "message_id", node.id),
     }
 
 
@@ -182,15 +234,16 @@ async def send_response(
 )
 async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """按平台路由向归属连接发动作，把回执从 ``send_ok`` / ``send_data`` 送下去。"""
-    action = str(node.config.get("action", "")).strip() or "send_msg"
-    if action not in SEND_ACTION_ORDER:
+    platform = _platform_of(node)
+    allowed = ACTIONS_BY_PLATFORM.get(platform, SEND_ACTION_ORDER)
+    action = str(node.config.get("action", "")).strip() or allowed[0]
+    if action not in allowed:
         # 保存时会被校验拦住；这里兜住「没走过校验」的图
         raise ValueError(
-            f"[send:{node.id}] 动作 {action!r} 不在支持列表里"
-            f"（可选 {' '.join(SEND_ACTION_ORDER)}）"
+            f"[send:{node.id}] 动作 {action!r} 不在支持列表里（平台 {platform}）"
+            f"（可选 {' '.join(allowed)}）"
         )
 
-    platform = _platform_of(node)
     params = _params_of(action, node, ctx)
     response = await send_response(node, ctx, action, params)
     ok = bool(response.ok)

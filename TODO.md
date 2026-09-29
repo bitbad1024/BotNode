@@ -49,7 +49,7 @@
   `PlatformEvent`（Kook 的 channel/author/内容 -> chat/chat_id/user_id/text，身份转字符串）
   后调 `publish`；`send` 把 `owner_id`（Kook 里是机器人自身，暂按 owner=空串或 token 对应的
   bot id）路由到 `KookClient.call`；配单测（FakeClient 走翻译 + 透传）
-- [ ] **P4-3** `send` 节点支持 Kook 动作组：`nodes/send.py` 按 `platform` 分派动作组与参数
+- [x] **P4-3** `send` 节点支持 Kook 动作组：`nodes/send.py` 按 `platform` 分派动作组与参数
   语义 —— onebot 走 `SEND_ACTION_ORDER`（号转整数），kook 走 `KOOK_ACTION_ORDER`
   （`send_channel_msg` / `send_dm_msg` / `delete_msg`，channel_id / user_id / message_id 都是
   **字符串不转整数**）；校验器同样按 platform 判动作枚举；配单测（platform=kook 时动作组 /

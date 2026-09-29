@@ -1851,6 +1851,62 @@ def test_send_action_is_validated() -> None:
     assert [issue.code for issue in report.errors] == ["INVALID_SEND_ACTION"]
 
 
+@pytest.mark.asyncio
+async def test_send_kook_actions_keep_ids_as_strings() -> None:
+    """kook 平台：独立动作组，id 一律字符串不转整数，参数名转述成 Kook 的 target_id/content。"""
+    from nacho.workflow.nodes import exec_send
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="bot-1", gateway=gateway)
+
+    node_ = WorkflowNode(
+        id="snd1", type="send", config={"platform": "kook", "action": "send_channel_msg"}
+    )
+    ctx_.inputs = {"group_id": "ch-123", "message": "hi"}
+    await exec_send(node_, ctx_)
+    # channel_id 保持字符串，参数名是 Kook 的 target_id / content
+    assert gateway.calls == [
+        ("kook", "bot-1", "send_channel_msg", {"target_id": "ch-123", "content": "hi"})
+    ]
+
+    node_ = WorkflowNode(
+        id="snd2", type="send", config={"platform": "kook", "action": "send_dm_msg"}
+    )
+    ctx_.inputs = {"user_id": "u-456", "message": "悄悄话"}
+    await exec_send(node_, ctx_)
+    assert gateway.calls[-1] == (
+        "kook",
+        "bot-1",
+        "send_dm_msg",
+        {"target_id": "u-456", "content": "悄悄话"},
+    )
+
+
+def test_send_kook_action_is_validated() -> None:
+    """kook 平台的动作枚举独立校验：onebot 动作在 kook 下不合法，反之亦然。"""
+
+    def graph_with(**config: object) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("snd", "send", **config),
+                node("e", "end"),
+            ],
+            "edges": [edge("s", "snd"), edge("snd", "e")],
+        }
+
+    # kook 动作在 kook 平台下合法
+    assert validate_graph(
+        graph_with(platform="kook", action="send_channel_msg", group_id="ch-1", message="hi")
+    ).valid
+    # onebot 动作在 kook 平台下不合法（动作组独立）
+    report = validate_graph(
+        graph_with(platform="kook", action="send_group_msg", group_id="1", message="hi")
+    )
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INVALID_SEND_ACTION"]
+
+
 # ------------------------------------------------------------- ④-G 运算节点
 @pytest.mark.asyncio
 async def test_operator_does_arithmetic_and_formats_result() -> None:
