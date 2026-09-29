@@ -258,12 +258,12 @@ async def stop_published_workflow(
     graph = record.graph()
     message_starts = _message_start_ids(graph)
     removed = 0
+    # 消息触发按 workflow 摘一次（多个消息 start 节点共享同一路由条目，别重复计）
+    if message_starts and message_router is not None:
+        message_router.unregister(workflow_id, owner_id)
+        removed += 1
     for node_id in start_ids(graph.nodes):
         if node_id in message_starts:
-            # 消息触发：从消息路由摘除
-            if message_router is not None:
-                message_router.unregister(workflow_id, owner_id)
-                removed += 1
             continue
         if scheduler.remove(workflow_task_id(workflow_id, node_id)):
             removed += 1

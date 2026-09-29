@@ -52,8 +52,13 @@ def validate_onebot_node(node: WorkflowNode) -> list[ValidationIssue]:
 def _retcode_of(response: Any) -> int:
     """从平台回执取 OneBot 的 retcode：优先下探 ``raw``，取不到用成功 / 失败兜底。"""
     raw = getattr(response, "raw", None)
-    if raw is not None and hasattr(raw, "retcode"):
-        return int(raw.retcode)
+    if raw is not None:
+        retcode = getattr(raw, "retcode", None)
+        if retcode is not None:
+            try:
+                return int(retcode)
+            except (TypeError, ValueError):
+                pass  # retcode 不是整数时按成功 / 失败兜底，别让回执转述打断流程
     return 0 if getattr(response, "ok", False) else 1
 
 

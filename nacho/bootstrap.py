@@ -124,17 +124,20 @@ async def on_platform_event(event: PlatformEvent) -> None:
     router = _message_router
     if router is None:
         return  # 装配还没走到建路由（或没配消息触发）—— 不该发生，防御性放过
-    await router.dispatch(
-        event.owner_id,
-        trigger_data={
-            "message": event.text,
-            "user_id": event.user_id,
-            "platform": event.platform,
-            "chat": event.chat,
-            "chat_id": event.chat_id,
-            "message_id": event.message_id,
-        },
-    )
+    try:
+        await router.dispatch(
+            event.owner_id,
+            trigger_data={
+                "message": event.text,
+                "user_id": event.user_id,
+                "platform": event.platform,
+                "chat": event.chat,
+                "chat_id": event.chat_id,
+                "message_id": event.message_id,
+            },
+        )
+    except Exception:  # noqa: BLE001 — 消息入口尽力而为，别让一条坏事件拖垮整条链路
+        log.exception("消息事件分发失败", platform=event.platform, owner_id=event.owner_id)
 
 
 # --------------------------------------------------------------------------- 装配
