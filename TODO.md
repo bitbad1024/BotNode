@@ -41,7 +41,7 @@
   `dispatch(owner_id, *, trigger_data)`（按 owner_id 找到匹配工作流逐个跑整条流程，注入
   trigger_data / user_id，单个失败不淹其它，口径同 `load_published_workflows`）。纯逻辑
   + FakeStore 单测
-- [ ] **P3-2** 登记链路接通消息触发：`register_published_workflow` / `stop_published_workflow`
+- [x] **P3-2** 登记链路接通消息触发：`register_published_workflow` / `stop_published_workflow`
   / `load_published_workflows` / `WorkflowTriggers` 识别 `trigger=message` 的开始节点，
   登记 / 摘除到 `MessageRouter`（与 time 触发对称：登记那一趟加，执行那一趟不碰）
 - [ ] **P3-3** 装配接通：`bootstrap.py` 建 `MessageRouter`、`on_platform_event` 收到

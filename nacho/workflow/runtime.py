@@ -23,7 +23,8 @@ from nacho.core.scheduler import TaskManager
 
 from .executor import NodeExecutionContext, SimpleWorkflowRunner
 from .graph import start_ids
-from .nodes import get_executor, workflow_task_id
+from .models import WorkflowGraph
+from .nodes import get_executor, get_spec, workflow_task_id
 
 if TYPE_CHECKING:
     from .store import SqlWorkflowStore
@@ -119,6 +120,23 @@ async def run_published_workflow(
         log.error("工作流执行失败", version=version, error=str(exc))
 
 
+def _message_start_ids(graph: WorkflowGraph) -> set[str]:
+    """图里 ``trigger=message`` 的开始节点 id 集合（图是 ``WorkflowGraph``）。
+
+    消息触发与时间触发分走两条登记路：时间触发登记到调度器（cron），消息触发登记到
+    :class:`MessageRouter`（按 owner 路由）。这里只负责认「哪些开始节点是消息触发」，
+    依据是 start 节点 ``config.trigger``（缺省 ``message``，见 :mod:`nacho.workflow.nodes.start`）。
+    """
+    message_starts: set[str] = set()
+    for node in graph.nodes:
+        spec = get_spec(node.type)
+        if spec is None or spec.role != "start":
+            continue
+        if str(node.config.get("trigger", "message")) != "time":
+            message_starts.add(node.id)
+    return message_starts
+
+
 async def register_published_workflow(
     workflow_id: str,
     version: int,
@@ -126,20 +144,23 @@ async def register_published_workflow(
     scheduler: TaskManager,
     *,
     onebot: Any | None = None,
+    message_router: MessageRouter | None = None,
 ) -> int:
     """**只跑开始节点、不跑下游**：把这一版的触发登记好，返回跑过的开始节点数量。
 
     时间触发的开始节点，执行器做的就是「按 cron 把整条流程登记到调度器」（见
-    :func:`nacho.workflow.nodes.start.exec_start`）；消息触发的只写一条「等待消息」日志。
-    两种都只需要跑**开始节点自己**，后面的节点一个都不跑 —— 启动载入不是执行。以前这里是
-    「跑一遍整张图，靠开始节点顺带登记」，代价是每次开机都真的把整条流程执行一次（下游的
-    http / log 全都跟着跑了），而登记本身只是点个名。
+    :func:`nacho.workflow.nodes.start.exec_start`）；消息触发的登记到
+    :class:`MessageRouter`（按 owner 路由，消息进来时跑）。两种都只处理**开始节点自己**，
+    后面的节点一个都不跑 —— 启动载入不是执行。以前这里是「跑一遍整张图，靠开始节点顺带
+    登记」，代价是每次开机都真的把整条流程执行一次（下游的 http / log 全都跟着跑了），
+    而登记本身只是点个名。
 
     这是**登记那一趟**（``ctx.register_triggers=True``）：加 / 摘任务只在这儿发生；真正整图
     执行（cron 到点走 :func:`run_published_workflow`）那一趟不碰调度器，它自己会排下一次。
 
     ``onebot``（OneBot 服务端，可选）要在这里就带上：交给调度器的到点回调是**这一趟构造
-    的**（``make_trigger`` 闭包），到点执行那一趟没机会再补。
+    的**（``make_trigger`` 闭包），到点执行那一趟没机会再补。``message_router``（可选）同样
+    要在这里就带上：消息触发的登记 / 摘除也发生在这一趟，错过就没人给它登记了。
 
     与执行那条路一个口径：归属先读出来，日志都挂在流的**主人**名下（``owner_id``），
     节点上下文也带同一份（见 :meth:`NodeExecutionContext.owner_id`）。
@@ -156,6 +177,7 @@ async def register_published_workflow(
 
     graph = record.graph()
     starts = set(start_ids(graph.nodes))
+    message_starts = _message_start_ids(graph)
     # 登记时给的到点回调是「跑整条流程」那个（与到点触发同一条路）；
     # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
@@ -170,6 +192,19 @@ async def register_published_workflow(
     primed = 0
     for node in graph.nodes:
         if node.id not in starts:
+            continue
+        if node.id in message_starts:
+            # 消息触发：登记到消息路由（按 owner 路由），不跑执行器（执行器只是写「等待消息」）
+            if message_router is None:
+                log.warning(
+                    "消息触发的开始节点未注入消息路由，跳过登记",
+                    version=version,
+                    node_id=node.id,
+                )
+                continue
+            message_router.register(workflow_id, version, owner_id)
+            log.info("已登记消息触发", version=version, node_id=node.id)
+            primed += 1
             continue
         executor = get_executor(node.type)
         if executor is None:
@@ -190,12 +225,14 @@ async def stop_published_workflow(
     version: int,
     store: SqlWorkflowStore,
     scheduler: TaskManager,
+    *,
+    message_router: MessageRouter | None = None,
 ) -> int:
-    """把这一版里**开始节点登记过的定时任务**摘掉，返回摘掉的数量。
+    """把这一版里**开始节点登记过的触发**摘掉（定时任务 + 消息路由），返回摘掉的数量。
 
-    与登记对称：任务名由 :func:`nacho.workflow.nodes.start.workflow_task_id` 定
-    （``wf-<工作流 id>-<节点 id>``），照图里的开始节点算一遍 id 去摘即可 ——
-    **不用把图跑一遍**（那是执行，不是停机）。
+    与登记对称：定时任务名由 :func:`nacho.workflow.nodes.start.workflow_task_id` 定
+    （``wf-<工作流 id>-<节点 id>``），照图里的开始节点算一遍 id 去摘；消息触发的从
+    :class:`MessageRouter` 摘除（按 workflow_id）—— **不用把图跑一遍**（那是执行，不是停机）。
 
     与登记对称，归属一样从定义表读：停用也是「谁的流被停了」，记成公共就没法按人查。
     """
@@ -208,12 +245,20 @@ async def stop_published_workflow(
         log.warning("工作流版本不存在，跳过停用", version=version)
         return 0
 
+    graph = record.graph()
+    message_starts = _message_start_ids(graph)
     removed = 0
-    for node_id in start_ids(record.graph().nodes):
+    for node_id in start_ids(graph.nodes):
+        if node_id in message_starts:
+            # 消息触发：从消息路由摘除
+            if message_router is not None:
+                message_router.unregister(workflow_id, owner_id)
+                removed += 1
+            continue
         if scheduler.remove(workflow_task_id(workflow_id, node_id)):
             removed += 1
     if removed:
-        log.info("已停止定时触发", version=version, count=removed)
+        log.info("已停止触发", version=version, count=removed)
     return removed
 
 
@@ -306,7 +351,8 @@ class WorkflowTriggers:
     开关照样落库，只是生效点在下次启动载入。
 
     ``onebot``（OneBot 服务端，可选）装配时给：拨开关即时生效走的是这儿的登记，登记构造的
-    到点闭包要带上它（见 :func:`make_trigger`）。
+    到点闭包要带上它（见 :func:`make_trigger`）。``message_router``（可选）同理：消息触发的
+    登记 / 摘除也走这儿。
     """
 
     def __init__(
@@ -315,21 +361,32 @@ class WorkflowTriggers:
         scheduler: TaskManager,
         *,
         onebot: Any | None = None,
+        message_router: MessageRouter | None = None,
     ) -> None:
         self._store: SqlWorkflowStore = store
         self._scheduler: TaskManager = scheduler
         self._onebot: Any | None = onebot
+        self._message_router: MessageRouter | None = message_router
 
     async def start(self, workflow_id: str, version: int) -> int:
-        """登记这一版的时间触发（重复调用幂等），返回跑过的开始节点数量。"""
+        """登记这一版的触发（重复调用幂等），返回跑过的开始节点数量。"""
         return await register_published_workflow(
-            workflow_id, version, self._store, self._scheduler, onebot=self._onebot
+            workflow_id,
+            version,
+            self._store,
+            self._scheduler,
+            onebot=self._onebot,
+            message_router=self._message_router,
         )
 
     async def stop(self, workflow_id: str, version: int) -> int:
-        """摘掉这一版登记过的定时任务（重复调用无害），返回摘掉的数量。"""
+        """摘掉这一版登记过的触发（重复调用无害），返回摘掉的数量。"""
         return await stop_published_workflow(
-            workflow_id, version, self._store, self._scheduler
+            workflow_id,
+            version,
+            self._store,
+            self._scheduler,
+            message_router=self._message_router,
         )
 
 
@@ -338,14 +395,15 @@ async def load_published_workflows(
     scheduler: TaskManager,
     *,
     onebot: Any | None = None,
+    message_router: MessageRouter | None = None,
     page_size: int = 500,
 ) -> int:
     """启动时把**开着运行开关**的已发布工作流登记就绪，返回载入的开始节点数量。
 
     遍历 ``status=published`` 且 ``published_version>0`` **且 ``enabled``** 的定义，逐个跑其
-    已发布版本的**开始节点**（时间触发的据此把整条流程登记到 cron；**下游一个都不执行**，见
-    :func:`register_published_workflow`）。发布 ≠ 运行：刚发布的（开关默认关）不在这里被跑。
-    单个失败不影响其他工作流，异常只记 error。
+    已发布版本的**开始节点**（时间触发的据此把整条流程登记到 cron，消息触发的登记到消息
+    路由；**下游一个都不执行**，见 :func:`register_published_workflow`）。发布 ≠ 运行：刚发布
+    的（开关默认关）不在这里被跑。单个失败不影响其他工作流，异常只记 error。
 
     **翻页翻到底，不给自己设总量上限**：以前是写死 ``limit=500`` 一次拉完 —— 超过 500 条的
     那些工作流开机根本不会登记（静默漏跑，最难查的那种）。现在按 ``page_size`` 一页页拉
@@ -396,6 +454,7 @@ async def load_published_workflows(
                     store,
                     scheduler,
                     onebot=onebot,
+                    message_router=message_router,
                 )
                 registered += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动

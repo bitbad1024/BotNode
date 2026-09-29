@@ -3454,6 +3454,94 @@ async def test_message_router_without_executor_drops_and_returns_zero() -> None:
     assert await router.dispatch("u-admin", trigger_data={"message": "hi"}) == 0
 
 
+async def test_register_published_workflow_registers_message_trigger() -> None:
+    """登记链路：``trigger=message`` 的开始节点登记到消息路由，而不是跑执行器。
+
+    与时间触发的对偶：``trigger=time`` 登记到调度器，``trigger=message`` 登记到消息路由
+    （按 owner 路由）。登记那一趟只点名、不跑下游，消息路由里出现 ``{workflow_id: version}``。
+    """
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import (
+        MessageRouter,
+        register_published_workflow,
+        stop_published_workflow,
+    )
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    graph = {
+        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    definition = await store.create("u-admin", "消息流")
+    await store.add_version(
+        definition,
+        graph_json=canonical_graph_json(graph),
+        checksum=graph_checksum(graph),
+    )
+    assert await store.publish(definition.id, 1) is not None
+
+    scheduler = TaskManager()
+    router = MessageRouter()
+    try:
+        primed = await register_published_workflow(
+            definition.id, 1, store, scheduler, message_router=router
+        )
+        assert primed == 1
+        # 消息路由里登记上了；调度器里没有（消息触发不走 cron）
+        assert router.routes("u-admin") == {definition.id: 1}
+        assert scheduler.list() == []
+
+        # 停用：从消息路由摘除
+        assert await stop_published_workflow(
+            definition.id, 1, store, scheduler, message_router=router
+        ) == 1
+        assert router.routes("u-admin") == {}
+    finally:
+        await engine.dispose()
+
+
+async def test_load_published_workflows_registers_message_triggers() -> None:
+    """启动载入：开着开关的已发布**消息**流登记到消息路由（与定时流分走两条登记路）。"""
+    from nacho.core.scheduler import TaskManager
+    from nacho.workflow.runtime import MessageRouter, load_published_workflows
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+
+    msg_graph = {
+        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    time_graph = {
+        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    msg = await store.create("u-admin", "消息流")
+    timed = await store.create("u-admin", "定时流")
+    for definition, graph in ((msg, msg_graph), (timed, time_graph)):
+        await store.add_version(
+            definition,
+            graph_json=canonical_graph_json(graph),
+            checksum=graph_checksum(graph),
+        )
+        assert await store.publish(definition.id, 1) is not None
+        assert await store.set_enabled(definition.id, True) is not None
+
+    scheduler = TaskManager()
+    router = MessageRouter()
+    try:
+        assert await load_published_workflows(store, scheduler, message_router=router) == 2
+        # 消息流进了消息路由，定时流进了调度器
+        assert router.routes("u-admin") == {msg.id: 1}
+        assert [t.task_id for t in scheduler.list()] == [f"wf-{timed.id}-s"]
+    finally:
+        await engine.dispose()
+
+
 async def test_api_owner_isolation_between_users() -> None:
     async with api_client(api_app()) as client:
         admin_token = await login(client, ADMIN)
