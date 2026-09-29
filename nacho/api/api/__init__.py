@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from .auth.router import router as auth_router
+from .bots.router import router as bots_router
 from .log.router import router as log_router
 from .onebot.router import router as onebot_router
 from .profile.router import router as profile_router
@@ -23,6 +24,7 @@ from .workflow import router as workflow_router
 
 __all__ = [
     "auth_router",
+    "bots_router",
     "log_router",
     "onebot_router",
     "profile_router",

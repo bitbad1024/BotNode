@@ -710,3 +710,58 @@ async def test_scope_client_list_is_scoped() -> None:
                 row.id
                 for row in ApiResponse[list[ClientData]].model_validate(every.json()).data
             } == {"u-admin", "u-robot"}
+
+
+# --------------------------------------------------------------------- 机器人接口（P5-2 泛化壳）
+async def test_bots_list_and_add_onebot() -> None:
+    """/api/bots：列表与添加；platform=onebot 走现有令牌签发，响应带 platform 字段。"""
+    async with opened_server(await memory_registry()) as server:
+        app = api_app(server)
+        async with api_client(app) as client:
+            headers = {"Authorization": f"Bearer {await login(client)}"}
+
+            # 初始为空
+            listed = await client.get("/api/bots", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert ApiResponse[list[dict]].model_validate(listed.json()).data == []
+
+            # 添加一个 onebot 机器人
+            added = await client.post(
+                "/api/bots",
+                headers=headers,
+                json={"platform": "onebot", "account": "机器人一号", "remark": "主号"},
+            )
+            assert added.status_code == 200, added.text
+            data = added.json()["data"]
+            assert data["record"]["platform"] == "onebot"
+            assert data["record"]["id"] == "u-admin"  # 归属 = 当前登录用户
+            assert data["token"].startswith("nbo_")  # 明文只露这一次
+
+            # 列表里出现
+            listed = await client.get("/api/bots", headers=headers)
+            rows = listed.json()["data"]
+            assert [row["platform"] for row in rows] == ["onebot"]
+            assert rows[0]["account"] == "机器人一号"
+
+
+async def test_bots_add_kook_not_implemented() -> None:
+    """platform=kook 暂未接入：回 501。"""
+    async with opened_server(await memory_registry()) as server:
+        app = api_app(server)
+        async with api_client(app) as client:
+            headers = {"Authorization": f"Bearer {await login(client)}"}
+            added = await client.post(
+                "/api/bots",
+                headers=headers,
+                json={"platform": "kook", "account": "kook-bot"},
+            )
+            assert added.status_code == 501
+
+
+async def test_bots_requires_login() -> None:
+    """机器人接口都要登录：没带令牌 401。"""
+    async with opened_server(await memory_registry()) as server:
+        app = api_app(server)
+        async with api_client(app) as client:
+            assert (await client.get("/api/bots")).status_code == 401
+            assert (await client.post("/api/bots", json={"platform": "onebot"})).status_code == 401
