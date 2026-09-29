@@ -49,7 +49,7 @@ def _bot_of(record: TokenLike, nickname: str, *, online: bool, clients) -> BotDa
     """一条令牌记录 -> 机器人响应（补 platform=onebot + owner_id）。"""
     return BotData(
         id=record.id,
-        platform="onebot",  # 过渡期：底层只有 onebot，platform 恒 onebot
+        platform=record.platform,
         owner_id=record.owner_id,
         account=record.account,
         enabled=record.enabled,
@@ -69,7 +69,7 @@ async def _ensure_in_scope(user, server: OneBotLike, bot_id: str) -> TokenLike: 
             ErrorCode.HTTP_ERROR, "没配令牌注册表", status_code=status.HTTP_404_NOT_FOUND
         )
     record = await registry.get_by_id(bot_id)
-    if record is None or not may_touch(user, record.id):
+    if record is None or not may_touch(user, record.owner_id):
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个机器人", status_code=status.HTTP_404_NOT_FOUND)
     return record
 
@@ -96,11 +96,11 @@ async def list_bots(
             status_code=status.HTTP_404_NOT_FOUND,
         )
     records = await registry.list_records(owner_id=None if is_admin(user) else user.user.id)
-    names = await _nicknames_of(users, [record.id for record in records])
+    names = await _nicknames_of(users, [record.owner_id for record in records])
     data: list[BotData] = []
     for record in records:
-        nickname = names.get(record.id, "")
-        clients = server.roster(id=record.id)
+        nickname = names.get(record.owner_id, "")
+        clients = server.roster(id=record.owner_id)
         data.append(_bot_of(record, nickname, online=bool(clients), clients=clients))
     return ApiResponse[list[BotData]](data=data, trace_id=trace_id)
 
@@ -140,7 +140,7 @@ async def add_bot(
             ErrorCode.HTTP_ERROR, "没配令牌注册表", status_code=status.HTTP_404_NOT_FOUND
         )
     issued = await registry.issue(user.user.id, account=payload.account, remark=payload.remark)
-    nickname = await _nickname_of(users, issued.record.id)
+    nickname = await _nickname_of(users, issued.record.owner_id)
     return ApiResponse[IssuedBotData](
         data=IssuedBotData(
             record=_bot_of(issued.record, nickname, online=False, clients=[]),
@@ -173,8 +173,8 @@ async def set_bot_enabled(
     changed = await server.set_token_enabled(bot_id, payload.enabled)
     if not changed:
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个机器人", status_code=status.HTTP_404_NOT_FOUND)
-    nickname = await _nickname_of(users, record.id)
-    clients = server.roster(id=record.id)
+    nickname = await _nickname_of(users, record.owner_id)
+    clients = server.roster(id=record.owner_id)
     return ApiResponse[BotData](
         data=_bot_of(record, nickname, online=bool(clients), clients=clients),
         trace_id=trace_id,

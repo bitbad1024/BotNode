@@ -405,8 +405,7 @@ class OneBotServer:
             self._log.warning("onebot 握手令牌无效，已拒绝", path=request.path)
             return connection.respond(HTTPStatus.UNAUTHORIZED, "access token mismatch\n")
         # 归属（owner_id）与机器人主键（bot_id = record.id）分开：连接上绑归属、另记 bot_id
-        owner_id = getattr(record, "owner_id", "") or record.id
-        self._greeted[connection] = (owner_id, record.id, record.account, token)
+        self._greeted[connection] = (record.owner_id, record.id, record.account, token)
         return None
 
     # ------------------------------------------------------------------ 连接与分发

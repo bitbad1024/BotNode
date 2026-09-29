@@ -99,7 +99,7 @@ def _token_of(
     """
     return TokenData(
         id=record.id,
-        platform=getattr(record, "platform", "onebot"),
+        platform=record.platform,
         owner_id=record.owner_id,
         account=record.account,
         enabled=record.enabled,
