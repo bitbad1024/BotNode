@@ -249,3 +249,34 @@ class TestTemplate:
         """模板里的值要和代码默认值一致，否则「照抄模板启动」会悄悄改行为。"""
         loaded = Settings.load(TEMPLATE_PATH)
         assert loaded.model_copy(update={"config_path": None}) == Settings()
+
+
+class TestKookRegion:
+    """[kook]：正向 WS 接入；token 留空 = 不接入。"""
+
+    def test_defaults_without_section(self, tmp_path: Path) -> None:
+        settings = Settings.load(write(tmp_path, ""))
+        kook = settings.kook
+        assert kook.gateway == "wss://www.kookapp.cn/gateway"
+        assert kook.token == ""  # 没配 = 不接入
+        assert kook.heartbeat_interval == 30.0
+
+    def test_kook_section_reads_token_and_intervals(self, tmp_path: Path) -> None:
+        settings = Settings.load(
+            write(
+                tmp_path,
+                dedent(
+                    """\
+                    [kook]
+                    token = "bot-token-xxx"
+                    heartbeat_interval = 15.0
+                    reconnect_interval = 5.0
+                    """
+                ),
+            )
+        )
+        kook = settings.kook
+        assert kook.token == "bot-token-xxx"
+        assert kook.heartbeat_interval == 15.0
+        assert kook.reconnect_interval == 5.0
+        assert kook.action_timeout == 30.0  # 没写的回默认

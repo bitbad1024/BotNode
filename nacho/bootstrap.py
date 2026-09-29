@@ -30,10 +30,12 @@ from .api import (
     create_app,
 )
 from .bridge import Gateway, PlatformEvent
+from .bridge.kook import KookAdapter
 from .bridge.onebot import OneBotAdapter
 from .core.cache import CacheOptions, cache
 from .core.logger import BaseLogger, get_logger, manager
 from .core.scheduler import scheduler
+from .kook import KookOptions
 from .onebot import OneBotOptions, SqlTokenRegistry
 from .workflow import SqlWorkflowStore
 from .workflow.runtime import (
@@ -53,6 +55,8 @@ _db_engine: AsyncEngine | None = None
 _gateway: Gateway | None = None
 #: OneBot 适配器（包着反向 WS 服务端）；主协程停在它的 serve_forever 上
 _onebot_adapter: OneBotAdapter | None = None
+#: Kook 适配器（包着正向 WS 客户端）；配了 [kook].token 才建，否则 None
+_kook_adapter: KookAdapter | None = None
 #: 消息路由（trigger=message 工作流的登记处 / 消息分发处）；载入时一并登记
 _message_router: MessageRouter | None = None
 
@@ -148,18 +152,22 @@ async def run(
     api_host: str,
     api_port: int,
     onebot: Mapping[str, object],
+    kook: Mapping[str, object] | None = None,
     cache_config: Mapping[str, object],
 ) -> None:
-    """把业务挂起来（不阻塞）：建表 -> 起接口层 -> 起 OneBot -> 起调度器 -> 载入已发布工作流。
+    """把业务挂起来（不阻塞）：建表 -> 起接口层 -> 起 OneBot / Kook -> 起调度器 -> 载入工作流。
 
     :param engine: 入口建好的共用引擎（与日志库出口默认是同一个）；
     :param api: ``[api]`` 那块配置，交给 ``ApiOptions.from_mapping``；
     :param api_host / api_port: 接口层监听地址 —— 这两个归入口管（``ApiOptions`` 里没有，它
         只管前缀与令牌有效期）；
     :param onebot: ``[onebot]`` 那块配置，交给 ``OneBotOptions.from_mapping``；
+    :param kook: ``[kook]`` 那块配置，交给 ``KookOptions.from_mapping``；``token`` 留空就
+        不接入 Kook（跳过建适配器）；
     :param cache_config: ``[cache]`` 那块配置，交给 ``CacheOptions.from_mapping``。
     """
-    global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter, _message_router
+    global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter, _kook_adapter
+    global _message_router
     _db_engine = engine
     log = get_logger("bootstrap")
 
@@ -180,6 +188,14 @@ async def run(
         tokens=tokens,  # 令牌 -> 账号；一个端口接多个客户端，靠它认归属
     )
     _gateway.register(_onebot_adapter)
+
+    # Kook 适配器（正向 WS 客户端）：配了 Bot Token 才接入 —— 第二个适配器，验证
+    # BotAdapter 协议对「方向相反」的平台也通用。没配 token 就跳过（不建适配器）。
+    if kook is not None:
+        kook_options = KookOptions.from_mapping(kook)
+        if kook_options.token:
+            _kook_adapter = KookAdapter(kook_options, publish=_gateway.publish)
+            _gateway.register(_kook_adapter)
 
     # 消息路由：trigger=message 工作流的登记处 + 消息分发处。它不 import bridge，只认普通
     # 数据；「跑整条流程」的回调在这里把 run_published_workflow 连同 store / scheduler 闭包
@@ -250,8 +266,8 @@ async def serve_forever() -> None:
     if _gateway is None:
         raise RuntimeError("还没装配：先跑 run()")
     await _gateway.start()  # 起所有适配器的监听
-    # 等所有暴露 serve_forever 的适配器（现在就 OneBot 一个；P4 的 Kook 若也是长连接
-    # 服务，主协程的退出条件必须把它算上——只等一个的话，另一个的服务没人守）
+    # 等所有暴露 serve_forever 的适配器（OneBot 反向 WS、Kook 正向 WS 都是长连接；
+    # 只等一个的话，另一个的服务没人守——所以这里按平台遍历，一个不落）
     waiters = [
         adapter.serve_forever()
         for adapter in (_gateway.adapter(name) for name in _gateway.platforms)

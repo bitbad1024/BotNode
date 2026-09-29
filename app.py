@@ -211,6 +211,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
             api_host=settings.api.host,
             api_port=settings.api.port,
             onebot=settings.onebot.model_dump(),
+            kook=settings.kook.model_dump(),
             cache_config=settings.cache.model_dump(),
         )
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等

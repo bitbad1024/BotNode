@@ -8,50 +8,55 @@
   - 说明：`online` 是**派生态**（内存实时态），不落库；接口层 `list_tokens` 时聚合各适配器的在线连接。
 - [x] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
 - [x] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
-- [ ] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
+- [x] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
 
-## P3 拆分
+## P4 拆分
 
-设计基调（与 P2 同路数：每步独立可验证、全量测试始终绿）：
+设计基调（与 P2 / P3 同路数：每步独立可验证、全量测试始终绿；关键差异先讲清）：
 
-- **消息触发 = 时间触发的对偶**：`trigger=time` 把整条流程登记到调度器（cron 到点跑）；
-  `trigger=message` 把整条流程登记到「消息路由」（收到 message 事件时跑）。两者都在
-  「登记那一趟」（拨运行开关 / 启动载入 / 发布新版）登记，执行那一趟不碰登记表 ——
-  与 `NodeExecutionContext.register_triggers` 同一套口径。
-- **路由键 = owner_id**：消息发给哪个机器人（owner，握手时令牌定下的 id），就触发那个
-  owner 下所有 `trigger=message` 且开着运行开关的已发布工作流；发消息的人是 `user_id`
-  （`ctx.trigger_data` 带上 message 等字段，start 的 message 端口原样送下去）。
-- **依赖方向不破**：消息路由**不 import bridge** —— 它只认普通数据（``trigger_data``
-  字典 + ``owner_id`` / ``user_id``），「PlatformEvent 拆成这些普通数据」这件事由装配层
-  （bootstrap）做，与 P2「bridge 不 import workflow / onebot」对得上。
-- **send 节点 = onebot 节点的平台无关版**：动作与参数沿用 onebot 那套集合（现在它是唯一
-  平台），发送从「直接摸 `ctx.onebot` 挑连接」换成「`gateway.send(platform, owner_id,
-  action, **params)` 按平台路由」；`platform` 参数缺省 `"onebot"`。onebot 专属的动作语义
-  （群号 / 用户号 / 消息号转整数）仍由节点自己管 —— 那是这个平台的动作契约，不是别的
-  平台的事。
-- **兼容面**：旧图里的 `onebot` 类型保留为 `send` 的别名（platform 恒 onebot），库里已存的
-  图照跑照校验；接口层 `OneBotLike` 与 `ctx.onebot` 兼容面 P2 已满足，本阶段不破坏。
-- **注入点**：`ctx` 新增 `gateway`（发送能力，与 `onebot` 并列）；登记链路构造的到点闭包
-  要把它带上（与 onebot 同一路数，见 MODULES.md §5「给 ctx 注入新能力」）—— 消息触发跑
-  整条流程那一趟也要能拿得到它发动作。
+- **连接方向相反**：OneBot 是**反向 WS**（框架当服务端，等实现连进来，令牌在握手时鉴权）；
+  Kook 是**正向 WebSocket**（框架当客户端，主动连 Kook 网关，用 **Bot Token** 鉴权）。所以
+  `nacho/kook/` 的核心是「正向 WS 客户端 + 断线重连 + 心跳 + 事件分发」，跟 `OneBotServer`
+  的服务端模型不是一个东西 —— 这恰恰是验证 `BotAdapter` 协议是否「真通用」的关键点。
+- **令牌形态不同**：OneBot 的令牌是「反向 WS 握手鉴权」，落在 `onebot_tokens` 表、走
+  `TokenRegistry` 的 `resolve`/`issue`；Kook 的凭证是「Bot Token」（Kook 开放平台签发，用户
+  填进配置 / 库里），**不能**套 `TokenRegistry` 那套 `resolve`/`issue` 语义。Kook 的凭证形态
+  在本阶段定义为「配置里带（`[kook] token=...`）」，不落库、不进接口层令牌列表 —— 接口层
+  `OneBotLike` 管理面是 onebot 专属，Kook 不硬套。
+- **依赖方向不破**：`nacho/bridge/kook.py` 是 bridge 里**第二个**允许 import 平台包的地方；
+  `nacho/kook/` 只依赖 `nacho.core`（logger）与 `websockets`（正向客户端也要它）；`nacho/kook/`
+  不 import `nacho.api` / `nacho.workflow`。
+- **规范化口径复用**：Kook 事件的 `PlatformEvent` 翻译、`BotClient`、`ActionResult` 都走
+  P2 定的那套形状（身份一律字符串；翻译不了的挂 `raw`）；发送走 `gateway.send("kook",
+  owner_id, action, ...)`。
+- **Kook 新增一组动作（不复用 OneBot 动作）**：OneBot 那套（`send_msg` / `send_group_msg` /
+  `send_private_msg` / `delete_msg`，号转整数）是 OneBot 专属契约，Kook 的 channel_id 是
+  **字符串**、且发消息走「频道消息 / 私聊消息」两类。Kook 独立一组动作（候选）：
+  `send_channel_msg`（channel_id 字符串 + message）、`send_dm_msg`（user_id 字符串 +
+  message）、`delete_msg`（message_id 字符串）。动作参数**不转整数**（Kook 的 id 是字符串）。
+  `send` 节点按 `platform` 决定「用哪组动作 / 怎么转参数」——这是节点层的平台分派，不是
+  改 bridge。
+- **可选依赖**：`nacho[kook]` 复用 `websockets`（正向客户端也要），`pyproject.toml` 加
+  `kook = ["websockets>=13"]`；`nacho/kook/__init__.py` 不强制任何额外依赖。
 
-- [x] **P3-1** 消息触发运行时：`run_published_workflow` 支持注入 `trigger_data` / `user_id`
-  （消息进 start 的 message 端口，user_id 进 `ctx.user_id`）；`runtime.py` 加
-  `MessageRouter` —— `register(workflow_id, version, owner_id)` / `unregister(...)` /
-  `dispatch(owner_id, *, trigger_data)`（按 owner_id 找到匹配工作流逐个跑整条流程，注入
-  trigger_data / user_id，单个失败不淹其它，口径同 `load_published_workflows`）。纯逻辑
-  + FakeStore 单测
-- [x] **P3-2** 登记链路接通消息触发：`register_published_workflow` / `stop_published_workflow`
-  / `load_published_workflows` / `WorkflowTriggers` 识别 `trigger=message` 的开始节点，
-  登记 / 摘除到 `MessageRouter`（与 time 触发对称：登记那一趟加，执行那一趟不碰）
-- [x] **P3-3** 装配接通：`bootstrap.py` 建 `MessageRouter`、`on_platform_event` 收到
-  `kind=message` 事件时拆成普通数据并 `dispatch`；全量回归对齐基线（全绿才算完）
-- [x] **P3-4** send 节点：`nodes/onebot.py` 泛化为 `send` —— `platform` 参数（缺省 onebot），
-  发送改走 `ctx.gateway`（`gateway.send(platform, owner_id, action, **params)`），回执从
-  `ActionResult` 泛化成 `send_ok` / `send_data` 送下游（失败回执照常送、不打断流程，
-  环境问题当场抛，口径不变）
-- [x] **P3-5** 透传 gateway + onebot 别名：`NodeExecutionContext` 加 `gateway` 注入点；
-  `runtime.py` / `bootstrap.py` 全链路透传（登记闭包带上）；旧图 `onebot` 类型注册为
-  `send` 的别名（platform 恒 onebot），库里已存的 onebot 节点照跑
-- [x] **P3-6** 收尾：前端颜色表 `onebot` -> `send`（面板项 / 中文名 / 端口 / 表单全从后端
-  注册表来，前端只补颜色）；`nodes/__init__.py` / MODULES.md 文档同步；全量回归对齐基线
+- [x] **P4-1** `nacho/kook/` 平台包：`options.py`（`KookOptions`：网关地址 / Bot Token /
+  心跳间隔 / 动作超时）、`models.py`（Kook 事件模型：消息 / 系统事件 / 心跳等，`extra=allow`）、
+  `client.py`（`KookClient`：正向 WS 连接 + `connect`/`close`/`send`/`call` 动作发送 + 事件
+  分发 handler 钩子 + 断线重连 + 心跳；**不 import 业务**）。纯「连接 + 协议」层，配单测
+  （用 `websockets` 本地测试服务端模拟 Kook 网关）
+- [x] **P4-2** `bridge/kook.py`：`KookAdapter` 包 `KookClient`，实现 `BotAdapter` 协议
+  （`platform="kook"` / `start` / `stop` / `clients` / `send`）；handler 里把 Kook 事件翻译成
+  `PlatformEvent`（Kook 的 channel/author/内容 -> chat/chat_id/user_id/text，身份转字符串）
+  后调 `publish`；`send` 把 `owner_id`（Kook 里是机器人自身，暂按 owner=空串或 token 对应的
+  bot id）路由到 `KookClient.call`；配单测（FakeClient 走翻译 + 透传）
+- [x] **P4-3** `send` 节点支持 Kook 动作组：`nodes/send.py` 按 `platform` 分派动作组与参数
+  语义 —— onebot 走 `SEND_ACTION_ORDER`（号转整数），kook 走 `KOOK_ACTION_ORDER`
+  （`send_channel_msg` / `send_dm_msg` / `delete_msg`，channel_id / user_id / message_id 都是
+  **字符串不转整数**）；校验器同样按 platform 判动作枚举；配单测（platform=kook 时动作组 /
+  参数语义切换，platform=onebot 行为不变）
+- [x] **P4-4** 装配 `bootstrap.py`：读 `[kook]` 配置 -> 建 `KookClient` -> 包成
+  `KookAdapter` -> `gateway.register`；`serve_forever` 的退出条件把 Kook 客户端算上
+  （P2 已留了「只等一个会没人守另一个」的口子）；配单测（装配切换）
+- [x] **P4-5** 收尾：`bridge/__init__.py` 文档更新（「适配器怎么写第二个」补上「正向连接
+  平台」的差异）；`pyproject.toml` 加 `kook` 可选依赖；全量回归对齐基线（全绿才算完）；
+  勾掉 P4-1~P4-5 与总览 P4

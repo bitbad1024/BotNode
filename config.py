@@ -454,6 +454,21 @@ class OneBotSettings(_Region):
         return value
 
 
+# ------------------------------------------------------------------------ 区域：[kook]
+class KookSettings(_Region):
+    """``[kook]``：Kook 正向 WS 接入 —— 框架当客户端，主动连 Kook 网关（用 Bot Token 鉴权）。
+
+    与 OneBot 相反：这里配的是「连哪个网关 / 用什么凭证」，不是「监听哪个端口」。
+    ``token`` 留空 = 没配，不接入 Kook（装配层据此跳过建适配器）。
+    """
+
+    gateway: str = "wss://www.kookapp.cn/gateway"  # Kook 网关地址
+    token: str = ""  # Bot Token（Kook 开放平台签发；留空 = 不接入）
+    heartbeat_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    reconnect_interval: float = Field(default=3.0, gt=0, description="大于 0 的秒数")
+
+
 # --------------------------------------------------------------------------- 整份设置
 class Settings(_Region):
     """一份设置：字段就是配置文件里的区域，一一对应；最后一项是元信息，不是配置项。
@@ -467,6 +482,7 @@ class Settings(_Region):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     onebot: OneBotSettings = Field(default_factory=OneBotSettings)
+    kook: KookSettings = Field(default_factory=KookSettings)
 
     #: 配置来源；None = 没找到配置文件，用的全是默认值
     config_path: Path | None = None
@@ -500,5 +516,6 @@ class Settings(_Region):
             database=_load(DatabaseSettings, public_db, _where_in("database")),
             logging=_load_logging(_section(data, "logging"), public_db),
             onebot=_load(OneBotSettings, _section(data, "onebot"), _where_in("onebot")),
+            kook=_load(KookSettings, _section(data, "kook"), _where_in("kook")),
             config_path=config_path,
         )
