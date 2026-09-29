@@ -464,6 +464,7 @@ class KookSettings(_Region):
 
     gateway: str = "wss://www.kookapp.cn/gateway"  # Kook 网关地址
     token: str = ""  # Bot Token（Kook 开放平台签发；留空 = 不接入）
+    secret_key: str = ""  # Bot Token 落库加密的密钥（kook 凭证行加密用；留空则无法存 kook 凭证）
     heartbeat_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     reconnect_interval: float = Field(default=3.0, gt=0, description="大于 0 的秒数")

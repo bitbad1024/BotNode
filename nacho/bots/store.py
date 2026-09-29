@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from .crypto import decrypt_token, encrypt_token
 from .models import BotCredential, BotPlatform
 
 
@@ -58,6 +59,7 @@ class BotCredentialTable(SQLModel, table=True):
     platform: str = Field(index=True, max_length=16)
     owner_id: str = Field(index=True, max_length=64)
     token_hash: str = Field(unique=True, index=True, max_length=64)
+    token_secret: str = Field(default="", max_length=512)
     account: str = Field(default="", max_length=64)
     enabled: bool = Field(default=True)
     remark: str = Field(default="", max_length=255)
@@ -71,6 +73,7 @@ def _to_record(row: BotCredentialTable) -> BotCredential:
         owner_id=row.owner_id,
         bot_id=row.bot_id,
         token_hash=row.token_hash,
+        token_secret=row.token_secret,
         account=row.account,
         enabled=bool(row.enabled),
         remark=row.remark,
@@ -121,23 +124,34 @@ class SqlBotStore:
         account: str = "",
         remark: str = "",
         token: str | None = None,
+        secret_key: str = "",
     ) -> IssuedBotCredential:
         """给 ``owner_id`` 签一个机器人（每次**新 bot_id**，一个用户可多个）。
 
-        ``token`` 不传就随机生成（OneBot 反向 WS 用）；Kook（P6）由用户填 Bot Token，
-        传入即按它存摘要。``platform`` 决定这条凭证属于哪个底层适配器。
+        ``token`` 不传就随机生成（OneBot 反向 WS 用）；Kook 由用户填 Bot Token，传入即按它
+        存摘要。``platform`` 决定这条凭证属于哪个底层适配器。
 
-        :raises ValueError: ``token`` 为空串（既没传也没生成出有效值）。
+        **Kook 的 Token 可逆加密**：``platform=kook`` 时把明文加密存进 ``token_secret`` 列
+        （连接时拿明文鉴权，得解回来），``secret_key`` 此时**必填**；OneBot 只存摘要、
+        不加密、不用 ``secret_key``。
+
+        :raises ValueError: ``token`` 为空串；或 kook 平台没给 ``secret_key``。
         """
         if token is None:
             token = "nbo_" + secrets.token_urlsafe(32)
         if not token:
             raise ValueError("机器人凭证不能是空令牌")
+        token_secret = ""
+        if platform == "kook":
+            if not secret_key:
+                raise ValueError("Kook 机器人需要加密密钥（secret_key）才能存 Bot Token")
+            token_secret = encrypt_token(token, secret_key)
         row = BotCredentialTable(
             bot_id=uuid4().hex,
             platform=platform,
             owner_id=owner_id,
             token_hash=hash_token(token),
+            token_secret=token_secret,
             account=account,
             remark=remark,
         )
@@ -155,6 +169,30 @@ class SqlBotStore:
         async with self._sessions() as session:
             result = await session.exec(statement)
             return [_to_record(row) for row in result.all()]
+
+    async def list_platform(self, platform: BotPlatform, *, enabled_only: bool = True) -> list[BotCredential]:
+        """列某个平台下的凭证行（Kook 装配用：读所有 enabled 的 kook 机器人）。"""
+        statement = select(BotCredentialTable).where(BotCredentialTable.platform == platform)
+        if enabled_only:
+            statement = statement.where(BotCredentialTable.enabled.is_(True))
+        statement = statement.order_by(BotCredentialTable.created_at.asc())
+        async with self._sessions() as session:
+            result = await session.exec(statement)
+            return [_to_record(row) for row in result.all()]
+
+    async def decrypt_token(self, bot_id: str, secret_key: str) -> str | None:
+        """解出某条 Kook 凭证的明文 Bot Token；不是 kook / 没有密文 / 解不开返回 None。
+
+        装配层（bootstrap）建 KookAdapter 时用：连接要拿明文 Token 鉴权。
+        """
+        async with self._sessions() as session:
+            row = await session.get(BotCredentialTable, bot_id)
+        if row is None or row.platform != "kook" or not row.token_secret:
+            return None
+        try:
+            return decrypt_token(row.token_secret, secret_key)
+        except ValueError:
+            return None
 
     async def get_by_id(self, bot_id: str) -> BotCredential | None:
         """按主键（bot_id）取一条；没有返回 None（对齐 TokenRegistry.get_by_id）。"""

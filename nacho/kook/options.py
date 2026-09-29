@@ -43,6 +43,8 @@ class KookOptions:
     gateway: str = DEFAULT_GATEWAY
     #: Bot Token（Kook 开放平台签发，连接时鉴权用；空串 = 没配）
     token: str = DEFAULT_TOKEN
+    #: Bot Token 落库加密的密钥（kook 凭证行加解密用；[kook].token 直连时用不到）
+    secret_key: str = ""
     #: 心跳间隔（秒）
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL
     #: 单个动作等回应的超时（秒）
@@ -58,6 +60,7 @@ class KookOptions:
         return cls(
             gateway=cast(str, picked.get("gateway", DEFAULT_GATEWAY)),
             token=cast(str, picked.get("token", DEFAULT_TOKEN)),
+            secret_key=cast(str, picked.get("secret_key", "")),
             heartbeat_interval=cast(
                 float, picked.get("heartbeat_interval", DEFAULT_HEARTBEAT_INTERVAL)
             ),

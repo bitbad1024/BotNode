@@ -45,7 +45,7 @@
   走旧流程。配前端联调。
 - [x] **P5-4** 兼容与迁移：老 `onebot_tokens` 数据按需迁移成 `bot_credentials`（owner_id
   主键 -> bot_id）；保留旧 `/api/onebot/*` 兼容期；全量回归。
-- [ ] **P6-1** Kook 凭证行：`bot_credentials` 支持 platform=kook（存 Bot Token，加密）；
+- [x] **P6-1** Kook 凭证行：`bot_credentials` 支持 platform=kook（存 Bot Token，加密）；
   装配层读 Kook 凭证行建 KookAdapter（不再只认 `[kook]` 配置节）。
 - [ ] **P6-2** Kook 管理面：`/api/bots/*` 支持 Kook 机器人的「添加 / 启用 / 停用 / 删」
   （不硬套 OneBot 的踢/revoke）；前端「添加机器人」开放 kook 选项。

@@ -190,13 +190,35 @@ async def run(
     )
     _gateway.register(_onebot_adapter)
 
-    # Kook 适配器（正向 WS 客户端）：配了 Bot Token 才接入 —— 第二个适配器，验证
-    # BotAdapter 协议对「方向相反」的平台也通用。没配 token 就跳过（不建适配器）。
-    if kook is not None:
-        kook_options = KookOptions.from_mapping(kook)
-        if kook_options.token:
-            _kook_adapter = KookAdapter(kook_options, publish=_gateway.publish)
-            _gateway.register(_kook_adapter)
+    # Kook 适配器（正向 WS 客户端）：读「凭证行」建适配器 —— 不再只认 [kook].token 配置节。
+    # 库里 platform=kook 且开着开关的每一行 = 一个 Kook 机器人（多实例），逐个建 KookAdapter
+    # 注册进总线（Bot Token 从 token_secret 解密出来）。[kook].token 配了则作为**兼容路径**
+    # 追加（没入库的单 bot 场景）；两者都有时都注册。
+    kook_options = KookOptions.from_mapping(kook) if kook is not None else KookOptions()
+    secret_key: str = kook_options.secret_key
+    _kook_adapter = None  # 「最后建的那个」记在旧变量名里，收尾/下探兼容用
+    kook_credentials = await tokens.list_platform("kook", enabled_only=True)
+    for cred in kook_credentials:
+        if not secret_key:
+            log.warning("Kook 凭证行存在但没配 secret_key，跳过建适配器", bot_id=cred.bot_id)
+            continue
+        bot_token = await tokens.decrypt_token(cred.bot_id, secret_key)
+        if not bot_token:
+            log.warning("Kook 凭证行解密失败，跳过建适配器", bot_id=cred.bot_id)
+            continue
+        options = KookOptions(
+            gateway=kook_options.gateway,
+            token=bot_token,
+            heartbeat_interval=kook_options.heartbeat_interval,
+            action_timeout=kook_options.action_timeout,
+            reconnect_interval=kook_options.reconnect_interval,
+        )
+        _kook_adapter = KookAdapter(options, publish=_gateway.publish)
+        _gateway.register(_kook_adapter)
+    # 兼容路径：[kook].token 配了但没走凭证行（旧部署）时，仍按原样建一个
+    if kook_options.token and not kook_credentials:
+        _kook_adapter = KookAdapter(kook_options, publish=_gateway.publish)
+        _gateway.register(_kook_adapter)
 
     # 消息路由：trigger=message 工作流的登记处 + 消息分发处。它不 import bridge，只认普通
     # 数据；「跑整条流程」的回调在这里把 run_published_workflow 连同 store / scheduler 闭包

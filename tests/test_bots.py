@@ -37,12 +37,50 @@ async def test_issue_creates_multiple_bots_per_owner(store: SqlBotStore) -> None
 
 
 async def test_issue_platform_tagged(store: SqlBotStore) -> None:
-    """platform 区分底层适配器：onebot 缺省，kook 显式。"""
+    """platform 区分底层适配器：onebot 缺省，kook 显式（kook 需 secret_key）。"""
     ob = await store.issue("u-admin", platform="onebot")
-    kk = await store.issue("u-admin", platform="kook", token="kook-bot-token-xxx")
+    kk = await store.issue(
+        "u-admin", platform="kook", token="kook-bot-token-xxx", secret_key="test-key"
+    )
     assert ob.record.platform == "onebot"
     assert kk.record.platform == "kook"
     assert kk.record.token_hash == hash_token("kook-bot-token-xxx")
+    assert kk.record.token_secret != ""  # kook 有密文
+
+
+async def test_kook_token_encrypted_and_decryptable(store: SqlBotStore) -> None:
+    """Kook 的 Bot Token 落库是密文（可逆），能解回明文；OneBot 无密文列。"""
+    kk = await store.issue(
+        "u-admin", platform="kook", token="kook-secret-token", secret_key="my-secret-key"
+    )
+    assert kk.record.token_secret != "kook-secret-token"  # 不落明文
+    assert kk.record.token_secret.startswith("v1.")  # 版本前缀
+
+    decrypted = await store.decrypt_token(kk.record.bot_id, "my-secret-key")
+    assert decrypted == "kook-secret-token"
+
+    # 密钥不对 / 非 kook / 不存在 -> None
+    assert await store.decrypt_token(kk.record.bot_id, "wrong-key") is None
+    ob = await store.issue("u-admin", platform="onebot")
+    assert await store.decrypt_token(ob.record.bot_id, "my-secret-key") is None
+    assert await store.decrypt_token("不存在", "my-secret-key") is None
+
+
+async def test_kook_issue_requires_secret_key(store: SqlBotStore) -> None:
+    """Kook 平台不给 secret_key 当场抛（Bot Token 没法加密落库）。"""
+    with pytest.raises(ValueError, match="secret_key"):
+        await store.issue("u-admin", platform="kook", token="kook-bot-token-xxx")
+
+
+async def test_list_platform_filters_enabled(store: SqlBotStore) -> None:
+    """按平台列凭证行，只取开着开关的（Kook 装配用）。"""
+    await store.issue("u-admin", platform="kook", token="t1", secret_key="k")
+    kk2 = await store.issue("u-admin", platform="kook", token="t2", secret_key="k")
+    await store.issue("u-admin", platform="onebot")  # 别的平台，不该出现
+    await store.set_enabled(kk2.record.bot_id, False)  # 停用的不该出现
+
+    rows = await store.list_platform("kook", enabled_only=True)
+    assert [r.token_hash for r in rows] == [hash_token("t1")]
 
 
 async def test_resolve_by_token(store: SqlBotStore) -> None:

@@ -32,7 +32,10 @@ class BotCredential:
     :param owner_id: 归属用户 id（谁添加的这个机器人）；
     :param bot_id: 这一行的主键（跨平台唯一：``(platform, bot_id)``）；旧 OneBot 里它
         曾是 owner_id 本身，泛化后独立成行 id；
-    :param token_hash: 令牌 / Bot Token 的 sha256 摘要（明文不落库）；
+    :param token_hash: 令牌 / Bot Token 的 sha256 摘要（明文不落库；握手按它查唯一索引）；
+    :param token_secret: **Kook 专用**：Bot Token 的 AES-GCM 密文（``v1.<nonce>.<密文>``）。
+        Kook 是正向 WS，连接时要拿明文 Token 鉴权，所以得**可逆**存一份密文（解回来用）；
+        OneBot 是随机令牌 + 反向 WS，只存摘要、无此列值。**这个字段不进管理接口响应**。
     :param account: 机器人账号（OneBot 是接入 WS 的机器人号，Kook 是 Bot 名；展示用）；
     :param enabled: 停用开关（记录还在，但不许再连 / 再启）；
     :param remark: 备注；
@@ -43,6 +46,7 @@ class BotCredential:
     owner_id: str
     bot_id: str
     token_hash: str = ""
+    token_secret: str = ""
     account: str = ""
     enabled: bool = True
     remark: str = ""
