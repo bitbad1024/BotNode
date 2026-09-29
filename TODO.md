@@ -10,41 +10,48 @@
 - [ ] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
 - [ ] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
 
-## P2 拆分
+## P3 拆分
 
-设计基调（与 P1 同路数：每步独立可验证、全量测试始终绿）：
+设计基调（与 P2 同路数：每步独立可验证、全量测试始终绿）：
 
-- **包一层，不改一层**：`nacho/onebot/` 已经是干净的「连接 + 协议」层，**一行不动**；
-  适配器在 bridge 里**包住** `OneBotServer`，事件翻译（`OneBotEvent` -> `PlatformEvent`）、
-  能力转述（roster / kick / 发动作）都发生在包的这层。Kook（P4）照此再写一个适配器即可。
-- **依赖方向**：`nacho/bridge/` 只依赖 `nacho.core`（logger）；不 import
-  `nacho.api` / `nacho.workflow` / `nacho.onebot`。协议靠结构化 Protocol + PEP 563 惰性注解，
-  套路抄 `api/api/onebot/protocols.py`（那边已验证：api 与 onebot 互不 import 也能对上）。
-- **兼容面**：P2 不动接口层与工作流（泛化是 P3/P4 的事）。Gateway / 适配器要继续**结构化
-  满足** `OneBotLike`（roster / kick / revoke_by_id / set_token_enabled / tokens）与
-  `ctx.onebot`（`connections` + `conn.id` + `conn.call`）——`router.py` 与 `onebot.py` 节点
-  零改动，这是 P2 的验收线之一。
-- **归属 id 空间先定口径**：跨平台后「谁的」不再唯一——Gateway 层的身份是
-  `(platform, owner_id)` 复合键；本阶段令牌仍是 onebot 专属（Kook 的令牌形态留给 P4），
-  复合键只进 `PlatformEvent` 与 Gateway 内部，不落库、不进接口层。
+- **消息触发 = 时间触发的对偶**：`trigger=time` 把整条流程登记到调度器（cron 到点跑）；
+  `trigger=message` 把整条流程登记到「消息路由」（收到 message 事件时跑）。两者都在
+  「登记那一趟」（拨运行开关 / 启动载入 / 发布新版）登记，执行那一趟不碰登记表 ——
+  与 `NodeExecutionContext.register_triggers` 同一套口径。
+- **路由键 = owner_id**：消息发给哪个机器人（owner，握手时令牌定下的 id），就触发那个
+  owner 下所有 `trigger=message` 且开着运行开关的已发布工作流；发消息的人是 `user_id`
+  （`ctx.trigger_data` 带上 message 等字段，start 的 message 端口原样送下去）。
+- **依赖方向不破**：消息路由**不 import bridge** —— 它只认普通数据（``trigger_data``
+  字典 + ``owner_id`` / ``user_id``），「PlatformEvent 拆成这些普通数据」这件事由装配层
+  （bootstrap）做，与 P2「bridge 不 import workflow / onebot」对得上。
+- **send 节点 = onebot 节点的平台无关版**：动作与参数沿用 onebot 那套集合（现在它是唯一
+  平台），发送从「直接摸 `ctx.onebot` 挑连接」换成「`gateway.send(platform, owner_id,
+  action, **params)` 按平台路由」；`platform` 参数缺省 `"onebot"`。onebot 专属的动作语义
+  （群号 / 用户号 / 消息号转整数）仍由节点自己管 —— 那是这个平台的动作契约，不是别的
+  平台的事。
+- **兼容面**：旧图里的 `onebot` 类型保留为 `send` 的别名（platform 恒 onebot），库里已存的
+  图照跑照校验；接口层 `OneBotLike` 与 `ctx.onebot` 兼容面 P2 已满足，本阶段不破坏。
+- **注入点**：`ctx` 新增 `gateway`（发送能力，与 `onebot` 并列）；登记链路构造的到点闭包
+  要把它带上（与 onebot 同一路数，见 MODULES.md §5「给 ctx 注入新能力」）—— 消息触发跑
+  整条流程那一趟也要能拿得到它发动作。
 
-- [x] **P2-1** `bridge/models.py`：`PlatformEvent` 规范化事件——`platform` / `owner_id` /
-  机器人自身账号（`self_id`）/ 事件大类（message / notice / request / meta）/ 会话指向
-  （群或私聊对方的标识）/ `raw`（原始事件引用，翻译不了的字段从这里兜）；纯模型无 IO，
-  配单测（字段口径 + `raw` 兜底）
-- [x] **P2-2** `bridge/protocols.py`：`BotAdapter` 协议——`platform` 标识、生命周期
-  `start` / `stop`、在线列表 `clients()`（含归属与连接身份）、按归属发动作
-  `send(owner_id, action, **params)`；结构化 Protocol，不 import onebot
-- [x] **P2-3** `bridge/gateway.py`：`Gateway` 总线——`register(adapter)` / `subscribe(handler)` /
-  按平台路由的发送入口（找不到平台抛错，口径同 onebot 节点的「环境问题当场抛」）；
-  事件分发异常口径沿用 onebot（handler 抛异常只记日志，不淹总线）；单测用 FakeAdapter
-- [x] **P2-4** `bridge/onebot.py`：`OneBotAdapter` 包 `OneBotServer`——handler 里把
-  `OneBotEvent` 翻译成 `PlatformEvent` 投给 Gateway（心跳过滤沿用 `_emit` 的口径）；
-  roster / kick / revoke_by_id / set_token_enabled / connections / conn.call 透传；
-  测试复用 `test_onebot.py` 的真 WS 基建，断言翻译结果与透传行为
-- [x] **P2-5** 装配切换 `bootstrap.py`：建 `OneBotServer` -> 包成 `OneBotAdapter` -> 注册进
-  `Gateway`；`on_event` 日志钩子改为订阅 Gateway（记规范化字段，不再认识 OneBotEvent）；
-  接口层与工作流注入点换成 Gateway 对外的兼容面（对 `router.py` / `nodes/onebot.py` 形状不变）
-- [x] **P2-6** 收尾：`tests/test_bridge.py`（FakeAdapter 走总线全链路：注册 -> 事件 ->
-  订阅 -> 路由发送）；全量回归对齐当前基线（全绿才算完）；`nacho/bridge/__init__.py`
-  文档写清「适配器怎么写第二个」
+- [ ] **P3-1** 消息触发运行时：`run_published_workflow` 支持注入 `trigger_data` / `user_id`
+  （消息进 start 的 message 端口，user_id 进 `ctx.user_id`）；`runtime.py` 加
+  `MessageRouter` —— `register(workflow_id, version, owner_id)` / `unregister(...)` /
+  `dispatch(owner_id, *, trigger_data)`（按 owner_id 找到匹配工作流逐个跑整条流程，注入
+  trigger_data / user_id，单个失败不淹其它，口径同 `load_published_workflows`）。纯逻辑
+  + FakeStore 单测
+- [ ] **P3-2** 登记链路接通消息触发：`register_published_workflow` / `stop_published_workflow`
+  / `load_published_workflows` / `WorkflowTriggers` 识别 `trigger=message` 的开始节点，
+  登记 / 摘除到 `MessageRouter`（与 time 触发对称：登记那一趟加，执行那一趟不碰）
+- [ ] **P3-3** 装配接通：`bootstrap.py` 建 `MessageRouter`、`on_platform_event` 收到
+  `kind=message` 事件时拆成普通数据并 `dispatch`；全量回归对齐基线（全绿才算完）
+- [ ] **P3-4** send 节点：`nodes/onebot.py` 泛化为 `send` —— `platform` 参数（缺省 onebot），
+  发送改走 `ctx.gateway`（`gateway.send(platform, owner_id, action, **params)`），回执从
+  `ActionResult` 泛化成 `send_ok` / `send_data` 送下游（失败回执照常送、不打断流程，
+  环境问题当场抛，口径不变）
+- [ ] **P3-5** 透传 gateway + onebot 别名：`NodeExecutionContext` 加 `gateway` 注入点；
+  `runtime.py` / `bootstrap.py` 全链路透传（登记闭包带上）；旧图 `onebot` 类型注册为
+  `send` 的别名（platform 恒 onebot），库里已存的 onebot 节点照跑
+- [ ] **P3-6** 收尾：前端颜色表 `onebot` -> `send`（面板项 / 中文名 / 端口 / 表单全从后端
+  注册表来，前端只补颜色）；`nodes/__init__.py` / MODULES.md 文档同步；全量回归对齐基线
