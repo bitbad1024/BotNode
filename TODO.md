@@ -40,7 +40,7 @@
 - [x] **P5-2** 接口层泛化：`/api/onebot/*` 改挂 `/api/bots/*`（旧路径保留转发或标记废弃）；
   `OneBotLike` 协议泛化成 `BotLike`（按 platform 路由到对应适配器）；签发改成「按 platform
   生成凭证行」。配单测（接口路径 / 签发分平台）。
-- [ ] **P5-3** 前端泛化：导航 `/tokens` -> `/bots`，`tokensApi` -> `botsApi`，「添加机器人」
+- [x] **P5-3** 前端泛化：导航 `/tokens` -> `/bots`，`tokensApi` -> `botsApi`，「添加机器人」
   弹窗加「底层适配器」下拉（onebot / kook，kook 暂置灰或提示 P6 开放）；OneBot 机器人
   走旧流程。配前端联调。
 - [ ] **P5-4** 兼容与迁移：老 `onebot_tokens` 数据按需迁移成 `bot_credentials`（owner_id

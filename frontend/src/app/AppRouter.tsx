@@ -22,7 +22,7 @@ export default function AppRouter() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
-          <Route path="/tokens" element={<TokensPage />} />
+          <Route path="/bots" element={<TokensPage />} />
           <Route path="/workflows" element={<WorkflowPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/debug" element={<DebugPage />} />

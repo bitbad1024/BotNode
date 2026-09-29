@@ -26,7 +26,7 @@ import styles from './DashboardPage.module.css'
 
 const MODULE_ICONS = {
   '/sessions': IconDevices,
-  '/tokens': IconKey,
+  '/bots': IconKey,
   '/logs': IconLogs,
   '/debug': IconTerminal,
 } as const
@@ -257,7 +257,7 @@ export default function DashboardPage() {
                   <span className={styles.moduleName}>{m.label}</span>
                   <span className={styles.moduleHint}>
                     {m.path === '/sessions' && '查看登录设备，远程下线其他会话'}
-                    {m.path === '/tokens' && 'OneBot 令牌签发、吊销与在线客户端'}
+                    {m.path === '/bots' && '机器人管理：添加、启停与在线客户端'}
                     {m.path === '/logs' && '运行日志检索'}
                     {m.path === '/debug' && 'OneBot 反向 WS 收发模拟器'}
                   </span>
