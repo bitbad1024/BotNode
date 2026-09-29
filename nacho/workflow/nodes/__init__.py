@@ -14,7 +14,8 @@
       regex.py           内置节点：regex（正则提取 / 替换；抽不到送空串不打断流程）
       now.py             内置节点：now（当前时间：strftime 格式文本 + Unix 时间戳）
       condition.py       内置节点：condition（条件分支：true / false 双出口，引擎按选中出口剪枝）
-      onebot.py          内置节点：onebot（对归属连接发动作：发消息 / 撤回，回执照常送下游）
+      send.py            内置节点：send（对归属连接按平台路由发动作：platform 参数 + 发消息 / 撤回，回执照常送下游）
+      onebot.py          内置节点：onebot（send 的别名，platform 恒 onebot，给库里旧图兜底）
       operator.py        内置节点：operator（算术：+ - * / %，结果文本化；算不出来送空串）
       cache.py           内置节点：cache（变量存取：get / set；作用域账号 / 图，前缀区分）
 
@@ -78,6 +79,7 @@ from .now import exec_now
 from .onebot import exec_onebot
 from .operator import exec_operator
 from .regex import exec_regex
+from .send import exec_send
 from .registry import (
     declare_node_type,
     get_executor,
@@ -135,6 +137,7 @@ __all__ = [
     "exec_now",
     "exec_condition",
     "exec_onebot",
+    "exec_send",
     "exec_operator",
     "exec_cache",
 ]

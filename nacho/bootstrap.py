@@ -36,7 +36,12 @@ from .core.logger import BaseLogger, get_logger, manager
 from .core.scheduler import scheduler
 from .onebot import OneBotOptions, SqlTokenRegistry
 from .workflow import SqlWorkflowStore
-from .workflow.runtime import WorkflowTriggers, load_published_workflows
+from .workflow.runtime import (
+    MessageRouter,
+    WorkflowTriggers,
+    load_published_workflows,
+    run_published_workflow,
+)
 
 # --------------------------------------------------------------------------- 状态
 #: 接口层 HTTP 服务（随主程序由 uvicorn 起）；停机时取用
@@ -48,6 +53,8 @@ _db_engine: AsyncEngine | None = None
 _gateway: Gateway | None = None
 #: OneBot 适配器（包着反向 WS 服务端）；主协程停在它的 serve_forever 上
 _onebot_adapter: OneBotAdapter | None = None
+#: 消息路由（trigger=message 工作流的登记处 / 消息分发处）；载入时一并登记
+_message_router: MessageRouter | None = None
 
 
 class _NoSignalServer(uvicorn.Server):
@@ -92,12 +99,15 @@ async def _prepare_stores(
 
 # --------------------------------------------------------------------------- 业务
 async def on_platform_event(event: PlatformEvent) -> None:
-    """bridge 事件订阅：业务接这里（P2 只是演示「收到了规范化事件」）。
+    """bridge 事件订阅：业务接这里。
 
     认的是 :class:`~nacho.bridge.models.PlatformEvent`，**不再认识任何平台事件** ——
     平台差异（OneBot 的整数号、Kook 的字符串号）在适配器里翻译掉了。要发消息走
-    ``gateway.send(platform, owner_id, action, ...)``。P3 的消息触发（``trigger=message``）
-    就从这个钩子里接。
+    ``gateway.send(platform, owner_id, action, ...)``。
+
+    ``kind=message`` 的事件拆成普通数据（``trigger_data`` + ``owner_id`` / ``user_id``）交给
+    消息路由（``MessageRouter.dispatch``）触发 ``trigger=message`` 的工作流 —— 「PlatformEvent
+    拆成普通数据」这一步就发生在这里，消息路由本身不 import bridge，依赖方向不破。
     """
     log = get_logger("bridge")
     log.info(
@@ -109,6 +119,25 @@ async def on_platform_event(event: PlatformEvent) -> None:
         chat_id=event.chat_id,
         user_id=event.user_id,
     )
+    if event.kind != "message":
+        return
+    router = _message_router
+    if router is None:
+        return  # 装配还没走到建路由（或没配消息触发）—— 不该发生，防御性放过
+    try:
+        await router.dispatch(
+            event.owner_id,
+            trigger_data={
+                "message": event.text,
+                "user_id": event.user_id,
+                "platform": event.platform,
+                "chat": event.chat,
+                "chat_id": event.chat_id,
+                "message_id": event.message_id,
+            },
+        )
+    except Exception:  # noqa: BLE001 — 消息入口尽力而为，别让一条坏事件拖垮整条链路
+        log.exception("消息事件分发失败", platform=event.platform, owner_id=event.owner_id)
 
 
 # --------------------------------------------------------------------------- 装配
@@ -130,7 +159,7 @@ async def run(
     :param onebot: ``[onebot]`` 那块配置，交给 ``OneBotOptions.from_mapping``；
     :param cache_config: ``[cache]`` 那块配置，交给 ``CacheOptions.from_mapping``。
     """
-    global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter
+    global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter, _message_router
     _db_engine = engine
     log = get_logger("bootstrap")
 
@@ -151,6 +180,23 @@ async def run(
         tokens=tokens,  # 令牌 -> 账号；一个端口接多个客户端，靠它认归属
     )
     _gateway.register(_onebot_adapter)
+
+    # 消息路由：trigger=message 工作流的登记处 + 消息分发处。它不 import bridge，只认普通
+    # 数据；「跑整条流程」的回调在这里把 run_published_workflow 连同 store / scheduler 闭包
+    # 进来（消息触发跑整条流程那一趟也要能拿得到它们发动作）。
+    _message_router = MessageRouter()
+    _message_router.attach(
+        lambda workflow_id, version, **kw: run_published_workflow(
+            workflow_id,
+            version,
+            workflows,
+            scheduler,
+            onebot=_onebot_adapter,
+            gateway=_gateway,
+            **kw,
+        )
+    )
+
     _gateway.subscribe(on_platform_event)
 
     # 接口层：建应用（注入同一个 db 上的三份存储 + OneBot 适配器）-> 起 uvicorn
@@ -167,7 +213,11 @@ async def run(
                 # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）；
                 # 带上 OneBot 适配器：onebot 节点要对归属连接发动作（登记构造的到点闭包也带）
                 workflow_triggers=WorkflowTriggers(
-                    workflows, scheduler, onebot=_onebot_adapter
+                    workflows,
+                    scheduler,
+                    onebot=_onebot_adapter,
+                    gateway=_gateway,
+                    message_router=_message_router,
                 ),
                 workflow_store=workflows,
             ),
@@ -182,10 +232,17 @@ async def run(
     # 启动定时任务调度器：开始节点（trigger=time）靠它到点触发
     await scheduler.start()
 
-    # 把**开着运行开关**的已发布工作流的定时触发登记到调度器：只登记、不执行图（到点才跑）。
-    # 发布只挪指针、不执行图；跑不跑看开关，运行期拨开关走接口层那个即时启停。
-    # 带上 OneBot 适配器：onebot 节点要按工作流归属给在线连接发动作（登记构造的到点闭包也带）。
-    await load_published_workflows(workflows, scheduler, onebot=_onebot_adapter)
+    # 把**开着运行开关**的已发布工作流的触发登记就绪：定时触发登记到调度器、消息触发登记到
+    # 消息路由，只登记、不执行图（到点 / 来消息才跑）。发布只挪指针、不执行图；跑不跑看开关，
+    # 运行期拨开关走接口层那个即时启停。带上 OneBot 适配器：onebot 节点要按工作流归属给在线
+    # 连接发动作（登记构造的到点闭包也带）。
+    await load_published_workflows(
+        workflows,
+        scheduler,
+        onebot=_onebot_adapter,
+        gateway=_gateway,
+        message_router=_message_router,
+    )
 
 
 async def serve_forever() -> None:

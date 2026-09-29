@@ -198,6 +198,9 @@ class NodeExecutionContext:
     :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
         ``connected_at`` / ``call()`` —— 即 ``nacho.onebot.server.OneBotServer``）。装配层
         注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
+    :param gateway: 平台总线（鸭子形状：``async send(platform, owner_id, action, **params)``
+        —— 即 ``nacho.bridge.gateway.Gateway``）。装配层注入，没接时是 ``None``；``send`` 节点
+        靠它按平台路由发动作（``onebot`` 节点泛化后的路）。
     :param cache: 缓存门面（鸭子形状：``async get(key) -> str | None`` /
         ``async set(key, value, ttl=None)`` —— 即 ``nacho.core.cache.Cache``）。
         **缺省就是进程级那一个**（``nacho.core.cache.cache``，主程序启动时已 ``start()``），
@@ -216,6 +219,7 @@ class NodeExecutionContext:
         owner_id: str = "",
         user_id: str = NO_USER_ID,
         onebot: Any | None = None,
+        gateway: Any | None = None,
         cache: Any | None = None,
     ) -> None:
         self.inputs: dict[str, Any] = {}
@@ -232,6 +236,8 @@ class NodeExecutionContext:
         self.multi_instance: bool = multi_instance
         #: OneBot 服务端（鸭子形状见类文档）；装配层没注入时是 ``None``
         self.onebot: Any | None = onebot
+        #: 平台总线（鸭子形状见类文档）；装配层没注入时是 ``None``，``send`` 节点靠它发动作
+        self.gateway: Any | None = gateway
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
         self.cache: Any = cache if cache is not None else process_cache
         base: BaseLogger | BoundLogger = (
