@@ -44,7 +44,7 @@
   `client.py`（`KookClient`：正向 WS 连接 + `connect`/`close`/`send`/`call` 动作发送 + 事件
   分发 handler 钩子 + 断线重连 + 心跳；**不 import 业务**）。纯「连接 + 协议」层，配单测
   （用 `websockets` 本地测试服务端模拟 Kook 网关）
-- [ ] **P4-2** `bridge/kook.py`：`KookAdapter` 包 `KookClient`，实现 `BotAdapter` 协议
+- [x] **P4-2** `bridge/kook.py`：`KookAdapter` 包 `KookClient`，实现 `BotAdapter` 协议
   （`platform="kook"` / `start` / `stop` / `clients` / `send`）；handler 里把 Kook 事件翻译成
   `PlatformEvent`（Kook 的 channel/author/内容 -> chat/chat_id/user_id/text，身份转字符串）
   后调 `publish`；`send` 把 `owner_id`（Kook 里是机器人自身，暂按 owner=空串或 token 对应的
