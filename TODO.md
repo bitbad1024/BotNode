@@ -43,7 +43,7 @@
 - [x] **P5-3** 前端泛化：导航 `/tokens` -> `/bots`，`tokensApi` -> `botsApi`，「添加机器人」
   弹窗加「底层适配器」下拉（onebot / kook，kook 暂置灰或提示 P6 开放）；OneBot 机器人
   走旧流程。配前端联调。
-- [ ] **P5-4** 兼容与迁移：老 `onebot_tokens` 数据按需迁移成 `bot_credentials`（owner_id
+- [x] **P5-4** 兼容与迁移：老 `onebot_tokens` 数据按需迁移成 `bot_credentials`（owner_id
   主键 -> bot_id）；保留旧 `/api/onebot/*` 兼容期；全量回归。
 - [ ] **P6-1** Kook 凭证行：`bot_credentials` 支持 platform=kook（存 Bot Token，加密）；
   装配层读 Kook 凭证行建 KookAdapter（不再只认 `[kook]` 配置节）。

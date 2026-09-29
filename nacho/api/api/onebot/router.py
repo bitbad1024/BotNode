@@ -61,7 +61,8 @@ def _client_of(item: ClientLike, nickname: str) -> ClientData:
     """把服务端的一行在线记录装成响应模型（归属带上昵称，和令牌列表一个口径）。"""
     return ClientData(
         client_id=item.client_id,
-        id=item.id,
+        id=item.bot_id,
+        owner_id=item.id,  # 连接上的 id 是归属（owner_id）
         nickname=nickname,
         account=item.account,
         self_id=item.self_id,
@@ -98,6 +99,8 @@ def _token_of(
     """
     return TokenData(
         id=record.id,
+        platform=getattr(record, "platform", "onebot"),
+        owner_id=record.owner_id,
         account=record.account,
         enabled=record.enabled,
         remark=record.remark,
@@ -118,7 +121,7 @@ async def _fetch_token(server: OneBotLike, users: UserStore, token_id: str) -> T
     record = await registry.get_by_id(token_id)
     if record is None:
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
-    nickname = await _nickname_of(users, record.id)
+    nickname = await _nickname_of(users, record.owner_id)
     clients = server.roster(id=record.id)
     return _token_of(record, nickname, online=bool(clients), clients=clients)
 
@@ -138,7 +141,7 @@ async def _ensure_token_in_scope(user: CurrentUser, server: OneBotLike, token_id
             status_code=status.HTTP_404_NOT_FOUND,
         )
     record = await registry.get_by_id(token_id)
-    if record is None or not may_touch(user, record.id):
+    if record is None or not may_touch(user, record.owner_id):
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个令牌", status_code=status.HTTP_404_NOT_FOUND)
     return record
 
@@ -251,14 +254,14 @@ async def list_tokens(
         )
     # 范围过滤下推到注册表：非管理员只查自己那条，别人的行根本不读
     records = await registry.list_records(owner_id=None if is_admin(user) else user.user.id)
-    # 昵称一次查齐（别一条一次查询）：查不到的 id 回落空串
-    names = await _nicknames_of(users, [record.id for record in records])
-    # 在线状态是派生态：每条令牌聚合一下服务端在线列表（走 _by_owner 的 hash 索引，
+    # 昵称一次查齐（别一条一次查询）：查不到的 owner_id 回落空串
+    names = await _nicknames_of(users, [record.owner_id for record in records])
+    # 在线状态是派生态：每条机器人聚合一下服务端在线列表（走 _by_owner 的 hash 索引，
     # 只查自己那格，不扫全集），把它连着的客户端也一并带在响应里
     data: list[TokenData] = []
     for record in records:
-        nickname = names.get(record.id, "")
-        clients = server.roster(id=record.id)
+        nickname = names.get(record.owner_id, "")
+        clients = server.roster(id=record.owner_id)
         data.append(_token_of(record, nickname, online=bool(clients), clients=clients))
     return ApiResponse[list[TokenData]](data=data, trace_id=trace_id)
 
@@ -301,7 +304,7 @@ async def issue_token(
     issued = await registry.issue(user.user.id, account=payload.account, remark=payload.remark)
     _audit(
         "WS 令牌已签发",
-        owner_id=issued.record.id,
+        owner_id=issued.record.owner_id,
         token_id=issued.record.id,
         account=issued.record.account,
         actor=user.user.id,
@@ -309,7 +312,7 @@ async def issue_token(
     )
     return ApiResponse[IssuedTokenData](
         data=IssuedTokenData(
-            record=_token_of(issued.record, await _nickname_of(users, issued.record.id)),
+            record=_token_of(issued.record, await _nickname_of(users, issued.record.owner_id)),
             token=issued.token,
         ),
         trace_id=trace_id,
@@ -347,7 +350,7 @@ async def set_token_enabled(
         )
     _audit(
         "WS 令牌已启用" if payload.enabled else "WS 令牌已停用",
-        owner_id=record.id,
+        owner_id=record.owner_id,
         token_id=token_id,
         account=record.account,
         actor=user.user.id,
@@ -386,7 +389,7 @@ async def revoke_token(
         )
     _audit(
         "WS 令牌已吊销",
-        owner_id=record.id,
+        owner_id=record.owner_id,
         token_id=token_id,
         account=record.account,
         actor=user.user.id,

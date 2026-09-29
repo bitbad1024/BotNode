@@ -63,12 +63,12 @@ async def test_remove_and_set_enabled(store: SqlBotStore) -> None:
     """删 / 停用 / 启用；id 不存在返回 False。"""
     issued = await store.issue("u-admin")
     assert await store.set_enabled(issued.record.bot_id, False) is True
-    assert (await store.get_by_bot_id(issued.record.bot_id)).enabled is False  # type: ignore[union-attr]
+    assert (await store.get_by_id(issued.record.bot_id)).enabled is False  # type: ignore[union-attr]
     assert await store.set_enabled("不存在", True) is False
 
-    assert await store.remove_by_bot_id(issued.record.bot_id) is True
-    assert await store.get_by_bot_id(issued.record.bot_id) is None
-    assert await store.remove_by_bot_id(issued.record.bot_id) is False
+    assert await store.remove_by_id(issued.record.bot_id) is True
+    assert await store.get_by_id(issued.record.bot_id) is None
+    assert await store.remove_by_id(issued.record.bot_id) is False
 
 
 async def test_issue_rejects_empty_token(store: SqlBotStore) -> None:

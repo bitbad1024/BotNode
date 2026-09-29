@@ -1,7 +1,7 @@
 """OneBot 反向 WS 的测试：令牌定归属（谁的）、在线列表、踢人与吊销，以及管理用的 HTTP 接口。
 
 跑在 127.0.0.1 的空闲端口上（每个用例自己挑一个），WS 客户端用 ``websockets``；
-令牌注册表统一走 :class:`~nacho.onebot.SqlTokenRegistry`，每个用例挂在一块内存 sqlite
+机器人凭证统一走 :class:`~nacho.bots.SqlBotStore`，每个用例挂在一块内存 sqlite
 上（见 :func:`memory_registry`），不再单养一份内存实现。需要 ``websockets``
 （``pip install "nacho[onebot]"``），没装就整文件跳过。
 """
@@ -39,12 +39,11 @@ from nacho.api import (  # noqa: E402
     TokenData,
     create_app,
 )
+from nacho.bots import SqlBotStore  # noqa: E402
 from nacho.onebot import (  # noqa: E402
     OneBotOptions,
     OneBotServer,
-    SqlTokenRegistry,
 )
-from nacho.onebot import tokens as tokens_module  # noqa: E402
 
 #: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）：id 就是 ``u-admin`` / ``u-robot``
 ADMIN = {"account": "admin", "password": "nacho-admin"}
@@ -95,14 +94,14 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 3.0) -> boo
 _MEMORY_ENGINES: list[AsyncEngine] = []
 
 
-async def memory_registry() -> SqlTokenRegistry:
-    """一份挂在内存 sqlite 上的注册表（表已建好）。
+async def memory_registry() -> SqlBotStore:
+    """一份挂在内存 sqlite 上的机器人凭证存储（表已建好）。
 
-    不再单养一份「内存仓库」：内存场景 = :class:`SqlTokenRegistry` + 内存库，逻辑只有一份。
+    多实例后统一走 :class:`SqlBotStore`（bot_credentials 表，一个用户多个机器人）。
     """
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     _MEMORY_ENGINES.append(engine)
-    registry = SqlTokenRegistry(engine)
+    registry = SqlBotStore(engine)
     await registry.ensure_schema()
     return registry
 
@@ -117,7 +116,7 @@ async def _dispose_memory_engines() -> AsyncGenerator[None, None]:
 
 @asynccontextmanager
 async def opened_server(
-    registry: SqlTokenRegistry | None = None,
+    registry: SqlBotStore | None = None,
 ) -> AsyncGenerator[OneBotServer]:
     """起一个临时服务端（随机端口）；退出时停服并断开所有客户端。"""
     server = OneBotServer(
@@ -179,15 +178,16 @@ async def issue_via_api(
     return ApiResponse[IssuedTokenData].model_validate(made.json()).data
 
 
-# --------------------------------------------------------------------------- 令牌注册表
+# --------------------------------------------------------------------------- 机器人凭证（多实例）
 async def test_registry_issue_resolve_and_revoke() -> None:
-    """签发 -> 认领 -> 列出 -> 吊销：令牌不存在 / 吊销后都认不出来。"""
+    """签发 -> 认领 -> 列出 -> 吊销：多实例后 id 是 bot_id、归属另看 owner_id。"""
     registry = await memory_registry()
     await registry.ensure_schema()  # 幂等：再建一次不报错
     issued = await registry.issue("alice", account="机器人一号", remark="主号")
 
     found = await registry.resolve(issued.token)
-    assert found is not None and found.id == "alice"  # 归属就是签进去的那个 id
+    assert found is not None and found.owner_id == "alice"  # 归属是签进去的那个 owner_id
+    assert found.id == issued.record.id  # 主键是 bot_id（随机），不再等于归属
     assert found.account == "机器人一号" and found.remark == "主号"
     assert await registry.resolve("nbo_不存在") is None
     assert len(await registry.list_records()) == 1
@@ -197,49 +197,18 @@ async def test_registry_issue_resolve_and_revoke() -> None:
     assert await registry.remove_by_id(issued.record.id) is False  # 再删一次：没有了
 
 
-async def test_registry_reissue_replaces_the_key() -> None:
-    """一个归属一条：同一个 id 再签 = 换一把钥匙，旧令牌立刻失效。"""
+async def test_registry_reissue_creates_another_bot() -> None:
+    """多实例：同一个归属再签 = 一个新机器人（新 bot_id），旧令牌仍然有效。"""
     registry = await memory_registry()
     first = await registry.issue("alice", account="旧的", remark="旧备注")
 
     second = await registry.issue("alice", account="新的")
 
-    assert await registry.resolve(first.token) is None  # 旧钥匙作废
+    assert await registry.resolve(first.token) is not None  # 旧机器人还在（不再换钥匙）
     assert (await registry.resolve(second.token)) is not None
-    rows = await registry.list_records()
-    assert len(rows) == 1  # 还是那一条，只是换了钥匙
-    assert rows[0].account == "新的" and rows[0].remark == ""
-
-
-async def test_issue_retries_when_digest_collides(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """摘要撞上**别人**的记录：换一个令牌再来（把生成器钉死，碰撞就能确定性地造出来）。"""
-    registry = await memory_registry()
-    first = await registry.issue("alice")
-
-    # 给 bob 签时先吐出 alice 那把钥匙（必撞），第二次给一个新的：应当重试后成功
-    generated = iter([first.token, "nbo_fresh"])
-    monkeypatch.setattr(tokens_module, "generate_token", lambda: next(generated))
-
-    second = await registry.issue("bob")
-    assert second.token == "nbo_fresh"
-    assert await registry.resolve(first.token) is not None  # alice 那条没被碰
-    assert await registry.resolve("nbo_fresh") is not None
-
-
-async def test_issue_gives_up_after_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """一直撞：试满上限就把错抛出来——绝不退回一个跟别人一样的令牌。"""
-    registry = await memory_registry()
-    first = await registry.issue("alice")
-    monkeypatch.setattr(tokens_module, "generate_token", lambda: first.token)
-
-    with pytest.raises(IntegrityError):
-        await registry.issue("bob")  # 每次都生成 alice 那把钥匙 → 一直撞
-    rows = await registry.list_records()
-    assert [row.id for row in rows] == ["alice"]  # 没留下 bob 的半条记录
+    rows = await registry.list_records(owner_id="alice")
+    assert len(rows) == 2  # 现在是两个机器人
+    assert first.record.id != second.record.id  # 各自独立的 bot_id
 
 
 # --------------------------------------------------------------------------- 握手：令牌定归属
@@ -466,8 +435,8 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
             assert issued.status_code == 200, issued.text
             # 用项目自己的响应壳解析：类型化的 data，顺带断言了响应协议形状
             issued_data = ApiResponse[IssuedTokenData].model_validate(issued.json()).data
-            assert issued_data.record.id == "u-admin"  # 归属 = 当前登录用户的 id
-            assert issued_data.record.nickname == "管理员"  # 昵称按 id 去用户表查
+            assert issued_data.record.owner_id == "u-admin"  # 归属 = 当前登录用户的 id
+            assert issued_data.record.nickname == "管理员"  # 昵称按 owner_id 去用户表查
             assert issued_data.record.account == "机器人一号"
             assert issued_data.token.startswith("nbo_")  # 明文只在这一次露出来
 
@@ -475,7 +444,7 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
             tokens = await client.get("/api/onebot/tokens", headers=headers)
             assert tokens.status_code == 200, tokens.text
             records = ApiResponse[list[TokenData]].model_validate(tokens.json()).data
-            assert [item.id for item in records] == ["u-admin"]
+            assert [item.owner_id for item in records] == ["u-admin"]
             assert "token" not in TokenData.model_fields
             # 刚签发、还没连接：派生态 online 是 False（不落库，接口层实时聚合）
             assert records[0].online is False
@@ -494,7 +463,7 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
                 )
                 assert clients.status_code == 200, clients.text
                 rows = ApiResponse[list[ClientData]].model_validate(clients.json()).data
-                assert len(rows) == 1 and rows[0].id == "u-admin"
+                assert len(rows) == 1 and rows[0].owner_id == "u-admin"
                 assert rows[0].nickname == "管理员"  # 归属昵称：和令牌列表一个口径
                 assert rows[0].account == "机器人一号"  # 令牌里带的机器人账号
                 assert rows[0].self_id == 10001
@@ -505,7 +474,7 @@ async def test_management_lists_clients_and_manages_tokens() -> None:
                 live = ApiResponse[list[TokenData]].model_validate(tokens_live.json()).data
                 assert live[0].online is True
                 assert len(live[0].clients) == 1
-                assert live[0].clients[0].id == "u-admin"
+                assert live[0].clients[0].owner_id == "u-admin"
                 assert live[0].clients[0].self_id == 10001
                 assert live[0].clients[0].remote  # 对端地址也带上了
 
@@ -608,7 +577,7 @@ async def test_scope_admin_sees_every_owner() -> None:
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
     # 归属就是各自的 user id；account 是各自填的机器人账号
-    assert {row.id for row in rows} == {"u-admin", "u-robot"}
+    assert {row.owner_id for row in rows} == {"u-admin", "u-robot"}
     assert {row.account for row in rows} == {"管理员的机器人", "巡检机器人"}
 
 
@@ -626,8 +595,8 @@ async def test_scope_normal_user_only_sees_own_token() -> None:
             assert listed.status_code == 200, listed.text
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
-        assert [row.id for row in rows] == ["u-robot"]  # 管理员那条看不到
-        assert [row.nickname for row in rows] == ["巡检机器人"]  # 昵称按 id 查出来的
+        assert [row.owner_id for row in rows] == ["u-robot"]  # 管理员那条看不到
+        assert [row.nickname for row in rows] == ["巡检机器人"]  # 昵称按 owner_id 查出来的
 
 
 async def test_issue_always_belongs_to_the_caller() -> None:
@@ -641,14 +610,14 @@ async def test_issue_always_belongs_to_the_caller() -> None:
         async with api_client(app) as client:
             robot_headers = {"Authorization": f"Bearer {await login(client, ROBOT)}"}
             issued = await issue_via_api(client, robot_headers, "随便叫什么都行")
-            assert issued.record.id == "u-robot"  # 归属还是自己
+            assert issued.record.owner_id == "u-robot"  # 归属还是自己
             assert issued.record.account == "随便叫什么都行"  # 那个字段只是展示用的机器人账号
 
             admin_headers = {"Authorization": f"Bearer {await login(client)}"}
             listed = await client.get("/api/onebot/tokens", headers=admin_headers)
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
-        assert [(row.id, row.account) for row in rows] == [("u-robot", "随便叫什么都行")]
+        assert [(row.owner_id, row.account) for row in rows] == [("u-robot", "随便叫什么都行")]
 
 
 async def test_scope_normal_user_cannot_touch_another_owners_token() -> None:
@@ -674,7 +643,7 @@ async def test_scope_normal_user_cannot_touch_another_owners_token() -> None:
             rows = ApiResponse[list[TokenData]].model_validate(listed.json()).data
 
         # **真没动过**：还在、还是启用
-        assert [(row.id, row.enabled) for row in rows] == [("u-admin", True)]
+        assert [(row.owner_id, row.enabled) for row in rows] == [("u-admin", True)]
 
 
 async def test_scope_client_list_is_scoped() -> None:
@@ -698,7 +667,7 @@ async def test_scope_client_list_is_scoped() -> None:
             mine = await client.get("/api/onebot/clients", headers=robot_headers)
             assert mine.status_code == 200, mine.text
             rows = ApiResponse[list[ClientData]].model_validate(mine.json()).data
-            assert [row.id for row in rows] == ["u-robot"]  # 不写参数就按自己的范围收窄
+            assert [row.owner_id for row in rows] == ["u-robot"]  # 不写参数就按自己的范围收窄
 
             denied = await client.get(
                 "/api/onebot/clients", headers=robot_headers, params={"id": "u-admin"}
@@ -707,7 +676,7 @@ async def test_scope_client_list_is_scoped() -> None:
 
             every = await client.get("/api/onebot/clients", headers=admin_headers)
             assert {
-                row.id
+                row.owner_id
                 for row in ApiResponse[list[ClientData]].model_validate(every.json()).data
             } == {"u-admin", "u-robot"}
 
@@ -734,7 +703,7 @@ async def test_bots_list_and_add_onebot() -> None:
             assert added.status_code == 200, added.text
             data = added.json()["data"]
             assert data["record"]["platform"] == "onebot"
-            assert data["record"]["id"] == "u-admin"  # 归属 = 当前登录用户
+            assert data["record"]["owner_id"] == "u-admin"  # 归属 = 当前登录用户
             assert data["token"].startswith("nbo_")  # 明文只露这一次
 
             # 列表里出现

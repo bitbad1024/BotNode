@@ -47,3 +47,8 @@ class BotCredential:
     enabled: bool = True
     remark: str = ""
     created_at: float = 0.0
+
+    @property
+    def id(self) -> str:
+        """记录主键（= bot_id）：兼容旧 ``TokenLike.id`` 的主键语义，但归属另看 ``owner_id``。"""
+        return self.bot_id

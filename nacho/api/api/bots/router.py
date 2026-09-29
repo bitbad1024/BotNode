@@ -46,10 +46,11 @@ async def _nickname_of(users, owner_id: str) -> str:  # type: ignore[no-untyped-
 
 
 def _bot_of(record: TokenLike, nickname: str, *, online: bool, clients) -> BotData:  # type: ignore[no-untyped-def]
-    """一条令牌记录 -> 机器人响应（补 platform=onebot）。"""
+    """一条令牌记录 -> 机器人响应（补 platform=onebot + owner_id）。"""
     return BotData(
         id=record.id,
         platform="onebot",  # 过渡期：底层只有 onebot，platform 恒 onebot
+        owner_id=record.owner_id,
         account=record.account,
         enabled=record.enabled,
         remark=record.remark,

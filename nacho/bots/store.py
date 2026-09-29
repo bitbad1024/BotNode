@@ -156,14 +156,14 @@ class SqlBotStore:
             result = await session.exec(statement)
             return [_to_record(row) for row in result.all()]
 
-    async def get_by_bot_id(self, bot_id: str) -> BotCredential | None:
-        """按 bot_id 取一条；没有返回 None。"""
+    async def get_by_id(self, bot_id: str) -> BotCredential | None:
+        """按主键（bot_id）取一条；没有返回 None（对齐 TokenRegistry.get_by_id）。"""
         async with self._sessions() as session:
             row = await session.get(BotCredentialTable, bot_id)
         return None if row is None else _to_record(row)
 
-    async def remove_by_bot_id(self, bot_id: str) -> bool:
-        """按 bot_id 删一条；删掉了返回 True。"""
+    async def remove_by_id(self, bot_id: str) -> bool:
+        """按主键（bot_id）删一条；删掉了返回 True（对齐 TokenRegistry.remove_by_id）。"""
         async with self._sessions() as session:
             row = await session.get(BotCredentialTable, bot_id)
             if row is None:

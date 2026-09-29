@@ -16,10 +16,12 @@ class BotData(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    #: 这一行的 id（过渡期沿用 OneBot 的「归属 id」语义；多实例后是 bot_id）
+    #: 这一行的主键（bot_id）
     id: str
     #: 底层适配器：onebot / kook（缺省 onebot）
     platform: str = Field(default="onebot", description="底层适配器（onebot / kook）")
+    #: 归属用户（谁的）
+    owner_id: str = Field(default="", description="归属用户（谁的）")
     #: 机器人账号（OneBot 是接入 WS 的机器人号）
     account: str = Field(default="", description="机器人账号")
     enabled: bool = True
