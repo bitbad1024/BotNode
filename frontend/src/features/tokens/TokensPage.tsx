@@ -12,13 +12,13 @@
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
-  fetchTokens,
-  issueToken,
-  revokeToken,
-  setTokenEnabled,
-  type IssuedToken,
-  type OneBotToken,
-} from './tokensApi'
+  fetchBots,
+  addBot,
+  deleteBot,
+  setBotEnabled,
+  type IssuedBot,
+  type Bot,
+} from './botsApi'
 import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
@@ -70,16 +70,17 @@ function describe(err: unknown): string {
 export default function TokensPage() {
   const { pushToast } = useToast()
 
-  const [tokens, setTokens] = useState<OneBotToken[]>([])
+  const [tokens, setTokens] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
   const [failure, setFailure] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const [platform, setPlatform] = useState('onebot')
   const [account, setAccount] = useState('')
   const [remark, setRemark] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [issued, setIssued] = useState<IssuedToken | null>(null)
+  const [issued, setIssued] = useState<IssuedBot | null>(null)
   // 「添加机器人」弹窗是否打开（签发表单从顶部面板移到了弹窗里）
   const [issueOpen, setIssueOpen] = useState(false)
   // 正在看详情的机器人（点卡片上的「详细」打开）；打开时每秒拨一次时钟算在线时长
@@ -90,7 +91,7 @@ export default function TokensPage() {
     setLoading(true)
     setFailure('')
     try {
-      const { data } = await fetchTokens()
+      const { data } = await fetchBots()
       setTokens(data)
     } catch (err) {
       setFailure(describe(err))
@@ -125,10 +126,10 @@ export default function TokensPage() {
     }
   }
 
-  /** 确认弹窗里点「确认」：吊销令牌。 */
+  /** 确认弹窗里点「确认」：删除机器人（吊销令牌）。 */
   function confirmPending() {
     if (!pending) return
-    void run(() => revokeToken(pending.id), '令牌已吊销')
+    void run(() => deleteBot(pending.id), '机器人已删除')
   }
 
   /** 弹窗正文里点名的对象：吊销的那张令牌（找不到就退回「这个令牌」）。 */
@@ -141,11 +142,11 @@ export default function TokensPage() {
     event.preventDefault()
     setSubmitting(true)
     try {
-      const { data } = await issueToken(account.trim(), remark.trim())
+      const { data } = await addBot(platform, account.trim(), remark.trim())
       setIssued(data)
       setAccount('')
       setRemark('')
-      pushToast('success', '令牌已签发，请立即保存明文')
+      pushToast('success', '机器人已添加，请立即保存明文')
       await load()
     } catch (err) {
       pushToast('error', describe(err))
@@ -256,8 +257,8 @@ export default function TokensPage() {
                         disabled={busy}
                         onClick={() =>
                           void run(
-                            () => setTokenEnabled(t.id, !t.enabled),
-                            t.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
+                            () => setBotEnabled(t.id, !t.enabled),
+                            t.enabled ? '机器人已停用，客户端已断开' : '机器人已启用',
                           )
                         }
                       >
@@ -305,6 +306,22 @@ export default function TokensPage() {
       {issueOpen && (
         <Modal title="添加机器人" onClose={() => setIssueOpen(false)}>
           <form className={styles.form} onSubmit={submit}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="bot-platform">
+                底层适配器
+              </label>
+              <select
+                id="bot-platform"
+                className={styles.input}
+                value={platform}
+                onChange={(e) => setPlatform(e.target.value)}
+              >
+                <option value="onebot">OneBot（反向 WS）</option>
+                <option value="kook" disabled>
+                  Kook（正向 WS，即将开放）
+                </option>
+              </select>
+            </div>
             <div className={styles.field}>
               <label className={styles.label} htmlFor="token-account">
                 机器人账号（可选）
@@ -450,8 +467,8 @@ export default function TokensPage() {
                 disabled={busy}
                 onClick={() =>
                   void run(
-                    () => setTokenEnabled(detailToken.id, !detailToken.enabled),
-                    detailToken.enabled ? '令牌已停用，客户端已断开' : '令牌已启用',
+                    () => setBotEnabled(detailToken.id, !detailToken.enabled),
+                    detailToken.enabled ? '机器人已停用，客户端已断开' : '机器人已启用',
                   )
                 }
               >

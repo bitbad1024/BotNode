@@ -51,13 +51,6 @@ from .options import (
     OneBotOptions,
 )
 from .server import ClientEntry, EventHandler, OneBotConnection, OneBotServer
-from .tokens import (
-    IssuedToken,
-    SqlTokenRegistry,
-    TokenRecord,
-    generate_token,
-    hash_token,
-)
 
 __all__ = [
     # 装配
@@ -67,12 +60,6 @@ __all__ = [
     "EventHandler",
     # 在线列表
     "ClientEntry",
-    # 令牌注册表
-    "TokenRecord",
-    "IssuedToken",
-    "SqlTokenRegistry",
-    "generate_token",
-    "hash_token",
     # 选项默认值
     "DEFAULT_HOST",
     "DEFAULT_PORT",

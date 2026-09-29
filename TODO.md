@@ -9,54 +9,45 @@
 - [x] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
 - [x] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
 - [x] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
+- [ ] **P5** 通用机器人基础设施：`/api/onebot/*` 泛化成 `/api/bots/*`；令牌表泛化成「机器人行」
+  （一条一个机器人，platform + owner_id + bot_id）；OneBot 兼容（旧客户端用旧令牌仍能连）
+- [ ] **P6** Kook 接入管理面：Kook 机器人也走 `/api/bots/*`（添 Bot Token 时填 platform=kook）；
+  前端「机器人」页改成「添加机器人选底层适配器（onebot / kook）」
 
-## P4 拆分
+设计基调：
 
-设计基调（与 P2 / P3 同路数：每步独立可验证、全量测试始终绿；关键差异先讲清）：
+- **「机器人」= 一行凭证**：用户「添加机器人」时选**底层适配器**（onebot / kook），生成的
+  是一行「凭证行」（``platform`` + ``owner_id``（归属用户）+ ``bot_id``（这一行的主键，
+  不再是 owner_id 主键））。一个用户可有多个机器人（多实例），身份从「owner_id 主键」
+  升级为「(platform, bot_id) 复合键」。
+- **OneBot 兼容面（不破坏现有）**：旧客户端用旧令牌（``nbo_``）仍能连 —— 反向 WS 握手
+  按 token 解析时，**带 platform 列的旧表行被当成 platform=onebot**；新签的 OneBot 机器人
+  生成新 id，旧行（owner_id 主键）按需迁移成 bot_id 主键。**接口层 OneBotLike 管理面
+  不破坏**（P2 验收线之一）。
+- **Kook 的「机器人」= 一个 Bot Token**：Kook 不是「签令牌连反向 WS」，是「填 Bot Token
+  连正向网关」。所以 Kook 的「凭证行」存的是**用户填的 Bot Token**（敏感，需加密存储或
+  只存摘要 + 用户回填），owner_id 是归属用户，bot_id 是这一行。
+- **接口泛化，语义不硬套**：`/api/bots/*` 是通用入口；OneBot 的「踢客户端 / 吊销令牌」
+  语义套不到 Kook（Kook 单 bot 无「多归属客户端」概念），Kook 的管理面在 P6 按「启用 /
+  停用 / 删」做，不硬套 OneBot 的「踢 / revoke」。
+- **前端名字泛化**：导航 `/tokens` -> `/bots`，页面标题「机器人」；`tokensApi` ->
+  `botsApi`（类型 `BotToken` / `BotClient` 不再带 onebot 前缀）；接口路径 `/api/bots/*`。
 
-- **连接方向相反**：OneBot 是**反向 WS**（框架当服务端，等实现连进来，令牌在握手时鉴权）；
-  Kook 是**正向 WebSocket**（框架当客户端，主动连 Kook 网关，用 **Bot Token** 鉴权）。所以
-  `nacho/kook/` 的核心是「正向 WS 客户端 + 断线重连 + 心跳 + 事件分发」，跟 `OneBotServer`
-  的服务端模型不是一个东西 —— 这恰恰是验证 `BotAdapter` 协议是否「真通用」的关键点。
-- **令牌形态不同**：OneBot 的令牌是「反向 WS 握手鉴权」，落在 `onebot_tokens` 表、走
-  `TokenRegistry` 的 `resolve`/`issue`；Kook 的凭证是「Bot Token」（Kook 开放平台签发，用户
-  填进配置 / 库里），**不能**套 `TokenRegistry` 那套 `resolve`/`issue` 语义。Kook 的凭证形态
-  在本阶段定义为「配置里带（`[kook] token=...`）」，不落库、不进接口层令牌列表 —— 接口层
-  `OneBotLike` 管理面是 onebot 专属，Kook 不硬套。
-- **依赖方向不破**：`nacho/bridge/kook.py` 是 bridge 里**第二个**允许 import 平台包的地方；
-  `nacho/kook/` 只依赖 `nacho.core`（logger）与 `websockets`（正向客户端也要它）；`nacho/kook/`
-  不 import `nacho.api` / `nacho.workflow`。
-- **规范化口径复用**：Kook 事件的 `PlatformEvent` 翻译、`BotClient`、`ActionResult` 都走
-  P2 定的那套形状（身份一律字符串；翻译不了的挂 `raw`）；发送走 `gateway.send("kook",
-  owner_id, action, ...)`。
-- **Kook 新增一组动作（不复用 OneBot 动作）**：OneBot 那套（`send_msg` / `send_group_msg` /
-  `send_private_msg` / `delete_msg`，号转整数）是 OneBot 专属契约，Kook 的 channel_id 是
-  **字符串**、且发消息走「频道消息 / 私聊消息」两类。Kook 独立一组动作（候选）：
-  `send_channel_msg`（channel_id 字符串 + message）、`send_dm_msg`（user_id 字符串 +
-  message）、`delete_msg`（message_id 字符串）。动作参数**不转整数**（Kook 的 id 是字符串）。
-  `send` 节点按 `platform` 决定「用哪组动作 / 怎么转参数」——这是节点层的平台分派，不是
-  改 bridge。
-- **可选依赖**：`nacho[kook]` 复用 `websockets`（正向客户端也要），`pyproject.toml` 加
-  `kook = ["websockets>=13"]`；`nacho/kook/__init__.py` 不强制任何额外依赖。
-
-- [x] **P4-1** `nacho/kook/` 平台包：`options.py`（`KookOptions`：网关地址 / Bot Token /
-  心跳间隔 / 动作超时）、`models.py`（Kook 事件模型：消息 / 系统事件 / 心跳等，`extra=allow`）、
-  `client.py`（`KookClient`：正向 WS 连接 + `connect`/`close`/`send`/`call` 动作发送 + 事件
-  分发 handler 钩子 + 断线重连 + 心跳；**不 import 业务**）。纯「连接 + 协议」层，配单测
-  （用 `websockets` 本地测试服务端模拟 Kook 网关）
-- [x] **P4-2** `bridge/kook.py`：`KookAdapter` 包 `KookClient`，实现 `BotAdapter` 协议
-  （`platform="kook"` / `start` / `stop` / `clients` / `send`）；handler 里把 Kook 事件翻译成
-  `PlatformEvent`（Kook 的 channel/author/内容 -> chat/chat_id/user_id/text，身份转字符串）
-  后调 `publish`；`send` 把 `owner_id`（Kook 里是机器人自身，暂按 owner=空串或 token 对应的
-  bot id）路由到 `KookClient.call`；配单测（FakeClient 走翻译 + 透传）
-- [x] **P4-3** `send` 节点支持 Kook 动作组：`nodes/send.py` 按 `platform` 分派动作组与参数
-  语义 —— onebot 走 `SEND_ACTION_ORDER`（号转整数），kook 走 `KOOK_ACTION_ORDER`
-  （`send_channel_msg` / `send_dm_msg` / `delete_msg`，channel_id / user_id / message_id 都是
-  **字符串不转整数**）；校验器同样按 platform 判动作枚举；配单测（platform=kook 时动作组 /
-  参数语义切换，platform=onebot 行为不变）
-- [x] **P4-4** 装配 `bootstrap.py`：读 `[kook]` 配置 -> 建 `KookClient` -> 包成
-  `KookAdapter` -> `gateway.register`；`serve_forever` 的退出条件把 Kook 客户端算上
-  （P2 已留了「只等一个会没人守另一个」的口子）；配单测（装配切换）
-- [x] **P4-5** 收尾：`bridge/__init__.py` 文档更新（「适配器怎么写第二个」补上「正向连接
-  平台」的差异）；`pyproject.toml` 加 `kook` 可选依赖；全量回归对齐基线（全绿才算完）；
-  勾掉 P4-1~P4-5 与总览 P4
+- [x] **P5-1** 模型与存储：新增通用「机器人行」模型（platform / owner_id / bot_id /
+  加密 token / enabled / account / remark / created_at），`bot_credentials` 表；兼容
+  旧 `onebot_tokens`（读时按 platform=onebot 兜底，老客户端握手仍认）。配单测（表结构 /
+  加密 / 读旧行）。
+- [x] **P5-2** 接口层泛化：`/api/onebot/*` 改挂 `/api/bots/*`（旧路径保留转发或标记废弃）；
+  `OneBotLike` 协议泛化成 `BotLike`（按 platform 路由到对应适配器）；签发改成「按 platform
+  生成凭证行」。配单测（接口路径 / 签发分平台）。
+- [x] **P5-3** 前端泛化：导航 `/tokens` -> `/bots`，`tokensApi` -> `botsApi`，「添加机器人」
+  弹窗加「底层适配器」下拉（onebot / kook，kook 暂置灰或提示 P6 开放）；OneBot 机器人
+  走旧流程。配前端联调。
+- [x] **P5-4** 兼容与迁移：老 `onebot_tokens` 数据按需迁移成 `bot_credentials`（owner_id
+  主键 -> bot_id）；保留旧 `/api/onebot/*` 兼容期；全量回归。
+- [ ] **P6-1** Kook 凭证行：`bot_credentials` 支持 platform=kook（存 Bot Token，加密）；
+  装配层读 Kook 凭证行建 KookAdapter（不再只认 `[kook]` 配置节）。
+- [ ] **P6-2** Kook 管理面：`/api/bots/*` 支持 Kook 机器人的「添加 / 启用 / 停用 / 删」
+  （不硬套 OneBot 的踢/revoke）；前端「添加机器人」开放 kook 选项。
+- [ ] **P6-3** 收尾：`bridge/__init__.py` / MODULES.md 文档同步（「凭证行」概念、platform
+  复合键）；全量回归；勾掉 P5 / P6。

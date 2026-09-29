@@ -27,7 +27,12 @@ class ClientLike(Protocol):
 
     @property
     def id(self) -> str:
-        """这条连接属于谁（握手时由令牌定下来；语义本层不管）。"""
+        """这条连接属于谁（归属 owner_id；握手时由令牌定下来）。"""
+        ...
+
+    @property
+    def bot_id(self) -> str:
+        """这个机器人那一行的主键（多实例后与归属 owner_id 分开）。"""
         ...
 
     @property
@@ -52,16 +57,30 @@ class ClientLike(Protocol):
 
 
 class TokenLike(Protocol):
-    """一条令牌记录（对应 :class:`nacho.onebot.TokenRecord`，**不含明文**）。"""
+    """一条机器人凭证记录（对应 :class:`nacho.bots.BotCredential`，**不含明文**）。
+
+    P5 泛化：``id`` 是**这一行机器人的主键（bot_id）**，归属另看 ``owner_id`` —— 一个
+    用户可有多个机器人（多实例），身份从「owner_id 主键」升级为「(platform, bot_id)」。
+    """
 
     @property
     def id(self) -> str:
-        """**归属标识（谁的）**，也是记录主键（吊销时按它定位；语义本层不管）。"""
+        """记录主键（bot_id）：吊销 / 停用按它定位。"""
+        ...
+
+    @property
+    def owner_id(self) -> str:
+        """归属用户（谁的）：查昵称、判范围用它。"""
+        ...
+
+    @property
+    def platform(self) -> str:
+        """底层适配器（onebot / kook）。"""
         ...
 
     @property
     def account(self) -> str:
-        """接入 WS 的那个 OneBot 机器人账号（用户自由填，只用来展示）。"""
+        """机器人账号（OneBot 是接入 WS 的机器人号；展示用）。"""
         ...
 
     @property
@@ -113,8 +132,10 @@ class TokenRegistry(Protocol):
         """
         ...
 
-    async def issue(self, owner_id: str, *, account: str = "", remark: str = "") -> IssuedLike:
-        """给 ``owner_id``（谁的）签一个令牌；**一个归属一条**，再签就是换一把钥匙。"""
+    async def issue(
+        self, owner_id: str, *, account: str = "", remark: str = "", platform: str = "onebot"
+    ) -> IssuedLike:
+        """给 ``owner_id``（谁的）签一个机器人；**多实例**，每次新 bot_id（不再换钥匙）。"""
         ...
 
     async def list_records(self, *, owner_id: str | None = None) -> tuple[TokenLike, ...]:

@@ -43,7 +43,7 @@ from nacho.core.logger import BaseLogger
 from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
-from .api import auth_router, log_router, onebot_router, profile_router, workflow_router
+from .api import auth_router, bots_router, log_router, onebot_router, profile_router, workflow_router
 from .api.onebot.protocols import OneBotLike
 from .api.workflow.protocols import WorkflowStoreLike, WorkflowTriggerLike
 from .services.auth import AuthService
@@ -192,6 +192,7 @@ def create_app(
     app.include_router(auth_router, prefix=chosen.prefix)
     app.include_router(profile_router, prefix=chosen.prefix)
     app.include_router(onebot_router, prefix=chosen.prefix)
+    app.include_router(bots_router, prefix=chosen.prefix)
     app.include_router(log_router, prefix=chosen.prefix)
     app.include_router(workflow_router, prefix=chosen.prefix)
 

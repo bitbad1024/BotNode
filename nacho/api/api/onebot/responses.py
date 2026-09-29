@@ -17,10 +17,12 @@ class ClientData(BaseModel):
 
     #: 这条连接自己的编号：``DELETE /onebot/clients/{client_id}`` 用这个踢人
     client_id: str
-    #: 这条连接属于谁（握手时由令牌定下来）
-    id: str = Field(description="归属标识（谁的）")
-    #: 归属那个 ``id`` 在用户表里的昵称（查不到就空串；本层不解释 id 的语义）
-    nickname: str = Field(default="", description="归属的昵称（按 id 去用户表查）")
+    #: 这个机器人那一行的主键（bot_id）：多实例后与归属 owner_id 分开
+    id: str = Field(description="机器人主键（bot_id）")
+    #: 归属用户（谁的）：查昵称 / 判范围用它
+    owner_id: str = Field(default="", description="归属用户（谁的）")
+    #: 归属那个 ``owner_id`` 在用户表里的昵称（查不到就空串）
+    nickname: str = Field(default="", description="归属的昵称（按 owner_id 去用户表查）")
     #: 接入 WS 的那个 OneBot 机器人账号
     account: str = Field(default="", description="OneBot 机器人账号")
     #: 机器人号；还没收到事件时是 ``null``
@@ -32,24 +34,28 @@ class ClientData(BaseModel):
 
 
 class TokenData(BaseModel):
-    """一条令牌记录（**不含明文**）。"""
+    """一条机器人凭证记录（**不含明文**）。"""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    #: 归属标识（谁的），也是记录主键：``DELETE /onebot/tokens/{id}`` 用这个吊销
+    #: 记录主键（bot_id）：``DELETE /onebot/tokens/{id}`` 用这个吊销
     id: str
+    #: 底层适配器：onebot / kook
+    platform: str = Field(default="onebot", description="底层适配器（onebot / kook）")
+    #: 归属用户（谁的）
+    owner_id: str = Field(default="", description="归属用户（谁的）")
     #: 接入 WS 的那个 OneBot 机器人账号
     account: str = Field(default="", description="OneBot 机器人账号")
     enabled: bool = True
     remark: str = ""
     created_at: float = 0.0
-    #: 归属那个 ``id`` 在用户表里的昵称（查不到就空串；本层不解释 id 的语义）
-    nickname: str = Field(default="", description="归属的昵称（按 id 去用户表查）")
+    #: 归属那个 ``owner_id`` 在用户表里的昵称（查不到就空串）
+    nickname: str = Field(default="", description="归属的昵称（按 owner_id 去用户表查）")
     #: **派生态**：此刻有没有正用它连着的在线客户端。不落库、不持久，
     #: 是接口层在组装响应时从服务端在线列表聚合出来的实时快照。
     online: bool = Field(default=False, description="此刻有没有用它连着的在线客户端")
     #: **派生态**：正用它连着的在线客户端快照（``online`` 为真时的详情）。
-    #: 一个令牌可能同时挂着多条连接（同一归属多开），这里逐条列出来。
+    #: 一个机器人可能同时挂着多条连接，这里逐条列出来。
     clients: list[ClientData] = Field(
         default_factory=list, description="正用它连着的在线客户端（快照）"
     )

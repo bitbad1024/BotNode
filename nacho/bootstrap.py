@@ -29,6 +29,7 @@ from .api import (
     SqlUserStore,
     create_app,
 )
+from .bots import SqlBotStore
 from .bridge import Gateway, PlatformEvent
 from .bridge.kook import KookAdapter
 from .bridge.onebot import OneBotAdapter
@@ -36,7 +37,7 @@ from .core.cache import CacheOptions, cache
 from .core.logger import BaseLogger, get_logger, manager
 from .core.scheduler import scheduler
 from .kook import KookOptions
-from .onebot import OneBotOptions, SqlTokenRegistry
+from .onebot import OneBotOptions
 from .workflow import SqlWorkflowStore
 from .workflow.runtime import (
     MessageRouter,
@@ -71,14 +72,14 @@ class _NoSignalServer(uvicorn.Server):
 # --------------------------------------------------------------------------- 落库
 async def _prepare_stores(
     db: AsyncEngine, log: BaseLogger
-) -> tuple[SqlTokenRegistry, SqlUserStore, SqlSessionStore, SqlWorkflowStore]:
+) -> tuple[SqlBotStore, SqlUserStore, SqlSessionStore, SqlWorkflowStore]:
     """建表 + 种演示账号（幂等）：各份落库存储都挂同一个 ``db``。
 
     放在**启动阶段**而不是等 lifespan：接口服务是 ``create_task`` 起的，启动阶段抛的异常没人
     await、会被静默吞掉，于是「没建成」只在第一个请求时才炸成 1146（表不存在），离真正的原因
     很远。放这里：失败就是启动失败，当场看得见。（lifespan 里那次留着兜底，幂等。）
     """
-    tokens = SqlTokenRegistry(db)
+    tokens = SqlBotStore(db)
     await tokens.ensure_schema()
     users = SqlUserStore(db)  # hasher 默认 PBKDF2，只有 seed_demo 用
     await users.ensure_schema()
@@ -90,7 +91,7 @@ async def _prepare_stores(
     log.info(
         "数据表就绪",
         tables=[
-            "onebot_tokens",
+            "bot_credentials",
             "users",
             "auth_sessions",
             "workflow_definitions",
