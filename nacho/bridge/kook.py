@@ -135,26 +135,24 @@ class KookAdapter:
         await self._client.serve_forever()
 
     def clients(self, *, owner_id: str | None = None) -> tuple[BotClient, ...]:
-        """在线列表快照：连上了就一行（机器人自身），没连上是空。"""
+        """在线列表快照：连上了就一行（机器人自身），没连上是空。
+
+        「连没连」由客户端自己交代（``connected``），不靠 self_id —— 机器人刚连上、
+        还没收到第一条事件（self_id 未学到）时，连接也是活的，该列出来。
+        """
+        if not self._client.connected:
+            return ()
         self_id = self._client.self_id
-        if not self_id and owner_id is None:
-            # 还没连上 / 还没学到 self_id：在线列表是空
-            if not self._connected():
-                return ()
         row = {
             "client_id": self_id or "kook",
             "owner_id": self_id or "",
             "self_id": self_id,
             "remote": "",
-            "connected_at": 0.0,
+            "connected_at": self._client.connected_at,
         }
         if owner_id is not None and row["owner_id"] != owner_id:
             return ()
         return (_client(row),)
-
-    def _connected(self) -> bool:
-        """有没有连着（客户端内部是否持有连接）。"""
-        return self._client._ws is not None  # noqa: SLF001 — 适配器与客户端同一层，可下探
 
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         """给机器人发一个动作（走 REST），回执翻译成 ``ActionResult``。

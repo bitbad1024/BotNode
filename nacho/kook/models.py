@@ -15,7 +15,7 @@ Kook 网关的报文是 ``{"s": <signal>, "d": {...}}``：
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, ClassVar, Literal, TypeAlias
+from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -59,13 +59,7 @@ EVENT_CHANNEL: int = 9
 EVENT_SYSTEM: int = 255
 
 
-#: signal 0 的完整报文：``{"s": 0, "d": {...}}``
-_KookSignal: TypeAlias = Annotated[
-    KookEvent,
-    Field(discriminator="type"),
-]
-
-#: 事件解析适配器（按 ``type`` 判别的联合里只有一种形状，这里直接解析 ``d``）
+#: 事件解析适配器：Kook 事件就一种形状（字段全带默认值兜底），直接解析 ``d``
 _EVENT_ADAPTER: TypeAdapter[KookEvent] = TypeAdapter(KookEvent)
 
 

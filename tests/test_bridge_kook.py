@@ -70,13 +70,16 @@ def test_translate_unknown_channel_type_is_other() -> None:
 class _FakeClient:
     """假的 Kook 客户端：记下动作调用，按给定回应回执。"""
 
-    def __init__(self, *, self_id: str = "bot-1", ok: bool = True) -> None:
+    def __init__(self, *, self_id: str = "bot-1", ok: bool = True, connected: bool = True) -> None:
         self.self_id = self_id
         self._ok = ok
+        self._connected = connected
+        self.connected_at = 1_700_000_000.0 if connected else 0.0
         self.calls: list[tuple[str, dict[str, object]]] = []
-        self._ws: object | None = "connected" if self_id else None
-        self._handler = None
-        self._publish = None
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
 
     async def call(self, action: str, /, **params: object) -> Any:
         self.calls.append((action, dict(params)))
@@ -141,17 +144,24 @@ async def test_adapter_publishes_translated_event() -> None:
 
 
 async def test_adapter_clients_reports_single_bot() -> None:
-    """在线列表：连上（self_id 学到）就是一行，没连上是空。"""
+    """在线列表：连上就是一行（机器人自身），连接时刻也转述，不再硬编码 0。"""
     client = _FakeClient(self_id="bot-1")
     adapter = _make_adapter(client)
     rows = adapter.clients()
     assert len(rows) == 1
     assert rows[0].owner_id == "bot-1" and rows[0].self_id == "bot-1"
+    assert rows[0].connected_at == 1_700_000_000.0
+
+    # 连上了但还没学到 self_id：仍该列一行（client_id 兜底成 "kook"）
+    fresh = _FakeClient(self_id="")
+    adapter = _make_adapter(fresh)
+    rows = adapter.clients()
+    assert len(rows) == 1
+    assert rows[0].self_id == "" and rows[0].client_id == "kook"
 
 
 async def test_adapter_clients_empty_when_not_connected() -> None:
-    """没连上（self_id 空、连接空）：在线列表是空。"""
-    client = _FakeClient(self_id="")
-    client._ws = None  # noqa: SLF001
+    """没连上（connected=False）：在线列表是空。"""
+    client = _FakeClient(self_id="", connected=False)
     adapter = _make_adapter(client)
     assert adapter.clients() == ()

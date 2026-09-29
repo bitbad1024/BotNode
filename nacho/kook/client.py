@@ -81,16 +81,28 @@ class KookClient:
         self._ws: object | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
+        #: 事件收报 -> handler 之间的有界队列：收报文这条腿只往里面塞，另起 worker 按序取，
+        #: 保证「一条处理完再下一条」并给上游背压（对齐 OneBot 的 _consume 语义）
+        self._inbox: asyncio.Queue[KookEvent] = asyncio.Queue()
+        #: 按序消费 inbox 的 worker；连上时起、断开时收
+        self._consume_task: asyncio.Task[None] | None = None
         self._stopping: bool = False
         #: 最近一次 hello / pong 里的 sn（心跳 ping 要带上）
         self._sn: int = 0
         #: 连上后从事件里学到的机器人自身 id；没学到是空串
         self.self_id: str = ""
+        #: 最近一次连上的时刻（Unix 秒）；没连过是 0
+        self.connected_at: float = 0.0
 
     @property
     def options(self) -> KookOptions:
         """当前生效的选项。"""
         return self._options
+
+    @property
+    def connected(self) -> bool:
+        """当前有没有连着网关（持有连接）。"""
+        return self._ws is not None
 
     # ------------------------------------------------------------------ 连接
     async def start(self) -> None:
@@ -152,19 +164,28 @@ class KookClient:
             logger=None,
         ) as ws:
             self._ws = ws
+            self.connected_at = time.time()
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat(), name="kook-heartbeat"
+            )
+            self._consume_task = asyncio.create_task(
+                self._consume(), name="kook-events"
             )
             self._log.info("kook 已连接网关", gateway=gateway)
             try:
                 async for raw in ws:
-                    self._handle_raw(cast("str | bytes", raw))
+                    await self._handle_raw(cast("str | bytes", raw))
             finally:
                 if self._heartbeat_task is not None:
                     self._heartbeat_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await self._heartbeat_task
                     self._heartbeat_task = None
+                if self._consume_task is not None:
+                    self._consume_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await self._consume_task
+                    self._consume_task = None
                 self._ws = None
 
     async def _heartbeat(self) -> None:
@@ -180,8 +201,8 @@ class KookClient:
             except Exception as exc:  # noqa: BLE001 — 心跳失败由收报文循环兜底
                 self._log.debug("kook 心跳发送失败", error=str(exc))
 
-    def _handle_raw(self, raw: str | bytes) -> None:
-        """一条原始报文：解 JSON -> signal 1/3 更新 sn、signal 0 交给 handler。"""
+    async def _handle_raw(self, raw: str | bytes) -> None:
+        """一条原始报文：解 JSON -> signal 1/3 更新 sn、signal 0 入队交给 worker。"""
         text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
         try:
             loaded = cast(object, json.loads(text))
@@ -209,23 +230,20 @@ class KookClient:
             return
         if event.self_id and not self.self_id:
             self.self_id = event.self_id
-        if self._handler is None:
-            self._log.debug("kook 未注册事件处理器，事件已丢弃", type=event.type)
-            return
-        try:
-            # handler 是 async；_handle_raw 是同步的，得安排进事件循环
-            asyncio.get_running_loop().create_task(self._emit(event))
-        except Exception:  # noqa: BLE001
-            self._log.exception("kook 事件处理器抛出异常", type=event.type)
+        # 入队（有界，满了会阻塞收报文这条腿 = 背压）；worker 按序取出来交给 handler
+        await self._inbox.put(event)
 
-    async def _emit(self, event: KookEvent) -> None:
-        """把事件交给业务钩子；handler 抛异常只记日志。"""
-        if self._handler is None:
-            return
-        try:
-            await self._handler(event)
-        except Exception:
-            self._log.exception("kook 事件处理器抛出异常", type=event.type)
+    async def _consume(self) -> None:
+        """worker：按序把事件交给 handler（一条处理完再下一条，业务不用自己排队）。"""
+        while True:
+            event = await self._inbox.get()
+            if self._handler is None:
+                self._log.debug("kook 未注册事件处理器，事件已丢弃", type=event.type)
+                continue
+            try:
+                await self._handler(event)
+            except Exception:
+                self._log.exception("kook 事件处理器抛出异常", type=event.type)
 
     def _ping_now(self) -> None:
         """立即发一次 ping（hello 之后）。"""
