@@ -1630,80 +1630,82 @@ class _FakeActionResponse:
         return self.status == "ok" and self.retcode == 0
 
 
-class _FakeConnection:
-    """假的 OneBot 连接：记下每次 ``call`` 的动作与参数，按给定回应回执。
+class _FakeGateway:
+    """假的平台总线：``send(platform, owner_id, action, **params)`` 返回**规范化回执**。
 
-    不 import ``nacho.onebot``（``server.py`` 顶层要 websockets，是可选的）—— 节点只认
-    鸭子形状，假对象照着那个形状写即可。
+    与生产一致：``send`` / ``onebot`` 节点读 ``ok`` / ``data``，``onebot`` 别名还下探 ``raw``
+    取 retcode —— 所以这里把 ``_FakeActionResponse`` 包成 ``ActionResult``（``raw`` = 那条假回执）。
     """
 
-    def __init__(
-        self,
-        id: str = "",
-        *,
-        connected_at: float = 0.0,
-        response: _FakeActionResponse | None = None,
-    ) -> None:
-        self.id = id
-        self.account = "bot"
-        self.connected_at = connected_at
-        self.calls: list[tuple[str, dict[str, object]]] = []
+    def __init__(self, response: _FakeActionResponse | None = None) -> None:
+        self.calls: list[tuple[str, str, str, dict[str, object]]] = []
         self._response = response if response is not None else _FakeActionResponse()
 
-    async def call(self, action: str, /, **params: object) -> _FakeActionResponse:
-        self.calls.append((action, dict(params)))
-        return self._response
+    async def send(
+        self, platform: str, owner_id: str, action: str, /, **params: object
+    ) -> Any:
+        from nacho.bridge.models import ActionResult
 
-
-class _FakeOneBotServer:
-    """假的 OneBot 服务端：节点只用 ``connections`` 属性（鸭子形状见 onebot.py 模块文档）。"""
-
-    def __init__(self, connections: list[_FakeConnection]) -> None:
-        self.connections: tuple[_FakeConnection, ...] = tuple(connections)
+        self.calls.append((platform, owner_id, action, dict(params)))
+        resp = self._response
+        return ActionResult(
+            ok=resp.ok,
+            message="" if resp.ok else f"retcode={resp.retcode}",
+            data=resp.data,
+            raw=resp,
+        )
 
 
 @pytest.mark.asyncio
 async def test_onebot_sends_via_owned_connection_and_shows_receipt() -> None:
-    """对「归属的」连接发动作：群发 / 私聊 / 撤回的参数按动作组装，回执从两个输出端口送下去。"""
-    conn = _FakeConnection(id="u-admin", response=_FakeActionResponse(data={"message_id": 7}))
-    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+    """onebot 别名走 ``ctx.gateway``（platform 锁死 onebot）：参数按动作组装，回执转老端口名。"""
+    gateway = _FakeGateway(response=_FakeActionResponse(data={"message_id": 7}))
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
 
     async def run(action: str, **inputs: str) -> dict[str, Any]:
-        conn.calls.clear()
+        gateway.calls.clear()
         node_ = WorkflowNode(id="ob1", type="onebot", config={"action": action})
         ctx_.inputs = dict(inputs)
         return await exec_onebot(node_, ctx_)
 
     result = await run("send_group_msg", message="开播了", group_id="123456")
-    assert conn.calls == [("send_group_msg", {"group_id": 123456, "message": "开播了"})]
+    assert gateway.calls == [
+        ("onebot", "u-admin", "send_group_msg", {"group_id": 123456, "message": "开播了"})
+    ]
     assert result["onebot_retcode"] == 0
     assert result["onebot_data"] == '{"message_id":7}'  # 回执数据：紧凑 JSON
     assert any("[onebot] ob1: send_group_msg -> retcode 0" in line for line in ctx_.log)
 
     await run("send_private_msg", message="悄悄话", user_id="10001")
-    assert conn.calls == [("send_private_msg", {"user_id": 10001, "message": "悄悄话"})]
+    assert gateway.calls == [
+        ("onebot", "u-admin", "send_private_msg", {"user_id": 10001, "message": "悄悄话"})
+    ]
 
     await run("delete_msg", message_id="42")
-    assert conn.calls == [("delete_msg", {"message_id": 42})]  # 号类参数转成整数
+    assert gateway.calls == [("onebot", "u-admin", "delete_msg", {"message_id": 42})]  # 号转整数
 
 
 @pytest.mark.asyncio
 async def test_onebot_send_msg_prefers_group_then_private() -> None:
     """send_msg 智能分流：填了群号发群，群号空则发私聊；两样都没给当场抛。"""
-    conn = _FakeConnection(id="u-admin")
-    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
 
     async def run(**inputs: str) -> None:
-        conn.calls.clear()
+        gateway.calls.clear()
         node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_msg"})
         ctx_.inputs = dict(inputs)
         await exec_onebot(node_, ctx_)
 
     await run(message="hi", group_id="9", user_id="7")
-    assert conn.calls == [("send_msg", {"message_type": "group", "group_id": 9, "message": "hi"})]
+    assert gateway.calls == [
+        ("onebot", "u-admin", "send_msg", {"message_type": "group", "group_id": 9, "message": "hi"})
+    ]
 
     await run(message="hi", user_id="7")
-    assert conn.calls == [("send_msg", {"message_type": "private", "user_id": 7, "message": "hi"})]
+    assert gateway.calls == [
+        ("onebot", "u-admin", "send_msg", {"message_type": "private", "user_id": 7, "message": "hi"})
+    ]
 
     with pytest.raises(ValueError, match="至少要给"):
         await run(message="hi")
@@ -1712,46 +1714,38 @@ async def test_onebot_send_msg_prefers_group_then_private() -> None:
 @pytest.mark.asyncio
 async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
     """对方收下了但回执不成功（status / retcode 非成功）：不抛，回执原样送下游自己判断。"""
-    conn = _FakeConnection(
-        id="u-admin",
-        response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"}),
+    gateway = _FakeGateway(
+        response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"})
     )
-    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
     node_ = WorkflowNode(
         id="ob1", type="onebot", config={"action": "send_group_msg", "group_id": "1"}
     )
     ctx_.inputs = {"message": "hi"}
     result = await exec_onebot(node_, ctx_)  # 不抛
 
-    assert result["onebot_retcode"] == 1200
+    assert result["onebot_retcode"] == 1200  # retcode 从回执 raw 下探出来
     assert "账号被禁言" in result["onebot_data"]
     assert any("[onebot] ob1: send_group_msg -> retcode 1200" in line for line in ctx_.log)
 
 
 @pytest.mark.asyncio
-async def test_onebot_raises_when_service_or_connection_missing() -> None:
-    """环境问题当场抛：没注入 OneBot 服务 / 归属下没有在线连接（提示里带上在线的是谁）。"""
+async def test_onebot_raises_when_gateway_missing() -> None:
+    """环境问题当场抛：没注入平台总线（ctx.gateway 是 None）。"""
     node_ = WorkflowNode(
         id="ob1", type="onebot", config={"action": "send_group_msg", "group_id": "1"}
     )
-    ctx_ = NodeExecutionContext(owner_id="u-admin")  # 装配层没接 OneBot
+    ctx_ = NodeExecutionContext(owner_id="u-admin")  # 装配层没接总线
     ctx_.inputs = {"message": "hi"}
-    with pytest.raises(ConnectionError, match="需要 OneBot 服务"):
+    with pytest.raises(ConnectionError, match="需要平台总线"):
         await exec_onebot(node_, ctx_)
-
-    other = _FakeConnection(id="u-robot")  # 在线的是别人家的
-    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([other]))
-    ctx_.inputs = {"message": "hi"}
-    with pytest.raises(ConnectionError, match="u-admin"):
-        await exec_onebot(node_, ctx_)
-    assert other.calls == []  # 没乱发
 
 
 @pytest.mark.asyncio
-async def test_onebot_rejects_bad_params_and_picks_newest_connection() -> None:
-    """配置问题当场抛：参数没给 / 号不是整数；同一归属多条连接取最近连上的那条。"""
-    conn = _FakeConnection(id="u-admin")
-    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([conn]))
+async def test_onebot_rejects_bad_params() -> None:
+    """配置问题当场抛：参数没给 / 号不是整数。"""
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
 
     ctx_.inputs = {"message": "hi"}  # 群号没接线也没手填
     node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_group_msg"})
@@ -1762,15 +1756,6 @@ async def test_onebot_rejects_bad_params_and_picks_newest_connection() -> None:
     node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "delete_msg"})
     with pytest.raises(ValueError, match="不是整数"):
         await exec_onebot(node_, ctx_)
-
-    old = _FakeConnection(id="u-admin", connected_at=1.0)
-    new = _FakeConnection(id="u-admin", connected_at=2.0)
-    ctx_ = NodeExecutionContext(owner_id="u-admin", onebot=_FakeOneBotServer([old, new]))
-    node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_private_msg"})
-    ctx_.inputs = {"message": "hi", "user_id": "7"}
-    await exec_onebot(node_, ctx_)
-    assert new.calls == [("send_private_msg", {"user_id": 7, "message": "hi"})]
-    assert old.calls == []  # 取了最近连上的那条
 
 
 def test_onebot_action_is_validated() -> None:
@@ -1794,20 +1779,6 @@ def test_onebot_action_is_validated() -> None:
 
 
 # ------------------------------------------------------------- ④-F send 节点（P3 泛化）
-class _FakeGateway:
-    """假的平台总线：只实现 ``send(platform, owner_id, action, **params)``（send 节点用到的面）。"""
-
-    def __init__(self, response: _FakeActionResponse | None = None) -> None:
-        self.calls: list[tuple[str, str, str, dict[str, object]]] = []
-        self._response = response if response is not None else _FakeActionResponse()
-
-    async def send(
-        self, platform: str, owner_id: str, action: str, /, **params: object
-    ) -> _FakeActionResponse:
-        self.calls.append((platform, owner_id, action, dict(params)))
-        return self._response
-
-
 @pytest.mark.asyncio
 async def test_send_routes_via_gateway_by_platform() -> None:
     """send 节点走 ``ctx.gateway`` 按平台路由发动作：参数按动作组装，回执从 send_ok / send_data 送下去。"""
@@ -3282,10 +3253,11 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
         await engine.dispose()
 
 
-async def test_make_trigger_injects_onebot_into_the_workflow_context() -> None:
-    """到点直接执行这条路：``make_trigger(onebot=...)`` 透传到 ctx（含归属 owner_id）。
+async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
+    """到点直接执行这条路：``make_trigger(gateway=...)`` 透传到 ctx（含归属 owner_id）。
 
-    ``onebot`` 服务端在这一层就得带上 —— 调度器到点执行的是登记时构造的闭包本身。
+    ``gateway``（平台总线）在这一层就得带上 —— 调度器到点执行的是登记时构造的闭包本身，
+    send 节点到点那一趟也要能拿得到它发动作。
     """
     from nacho.core.scheduler import TaskManager
     from nacho.workflow.runtime import make_trigger
@@ -3297,10 +3269,10 @@ async def test_make_trigger_injects_onebot_into_the_workflow_context() -> None:
     graph = {
         "nodes": [
             node("s", "start"),
-            node("ob", "onebot", action="send_private_msg", user_id="10001", message="到点提醒"),
+            node("snd", "send", action="send_private_msg", user_id="10001", message="到点提醒"),
             node("e", "end"),
         ],
-        "edges": [edge("s", "ob"), edge("ob", "e")],
+        "edges": [edge("s", "snd"), edge("snd", "e")],
     }
     definition = await store.create("u-admin", "发私聊的流")
     await store.add_version(
@@ -3310,22 +3282,22 @@ async def test_make_trigger_injects_onebot_into_the_workflow_context() -> None:
     )
     assert await store.publish(definition.id, 1) is not None
 
-    conn = _FakeConnection(id="u-admin")  # 归属对上定义表里的 owner_id
+    gateway = _FakeGateway()  # 归属（owner_id）由 ctx 带来，对上定义表里的 owner_id
     scheduler = TaskManager()
-    trigger = make_trigger(
-        definition.id, 1, store, scheduler, onebot=_FakeOneBotServer([conn])
-    )
+    trigger = make_trigger(definition.id, 1, store, scheduler, gateway=gateway)
     try:
         await trigger()
-        assert conn.calls == [("send_private_msg", {"user_id": 10001, "message": "到点提醒"})]
+        assert gateway.calls == [
+            ("onebot", "u-admin", "send_private_msg", {"user_id": 10001, "message": "到点提醒"})
+        ]
     finally:
         await engine.dispose()
 
 
-async def test_registered_cron_carries_onebot_through_to_the_connection() -> None:
-    """登记链路：带上的 OneBot 服务端跟着到点闭包走到连接上（到点执行的是登记时那个闭包）。
+async def test_registered_cron_carries_gateway_through_to_the_connection() -> None:
+    """登记链路：带上的平台总线跟着到点闭包走到连接上（到点执行的是登记时那个闭包）。
 
-    调度器到点执行的是**登记那一趟构造的闭包**（任务的 ``func``）—— 服务端必须从
+    调度器到点执行的是**登记那一趟构造的闭包**（任务的 ``func``）—— 总线必须从
     ``register_published_workflow`` 就传下去；这里手动调 ``func`` 模拟「到点」。
     """
     from nacho.core.scheduler import TaskManager
@@ -3338,10 +3310,10 @@ async def test_registered_cron_carries_onebot_through_to_the_connection() -> Non
     graph = {
         "nodes": [
             node("s", "start", trigger="time", cron="*/5 * * * *"),
-            node("ob", "onebot", action="send_group_msg", group_id="9", message="到点了"),
+            node("snd", "send", action="send_group_msg", group_id="9", message="到点了"),
             node("e", "end"),
         ],
-        "edges": [edge("s", "ob"), edge("ob", "e")],
+        "edges": [edge("s", "snd"), edge("snd", "e")],
     }
     definition = await store.create("u-admin", "定时播报流")
     await store.add_version(
@@ -3351,19 +3323,21 @@ async def test_registered_cron_carries_onebot_through_to_the_connection() -> Non
     )
     assert await store.publish(definition.id, 1) is not None
 
-    conn = _FakeConnection(id="u-admin")
+    gateway = _FakeGateway()
     scheduler = TaskManager()
     try:
         primed = await register_published_workflow(
-            definition.id, 1, store, scheduler, onebot=_FakeOneBotServer([conn])
+            definition.id, 1, store, scheduler, gateway=gateway
         )
         assert primed == 1
-        assert conn.calls == []  # 登记只给 start 点名，不碰连接
+        assert gateway.calls == []  # 登记只给 start 点名，不碰连接
 
         # 模拟「到点」：调度器到点执行的就是登记那一趟构造的闭包（Task.func 是协程）
         func: Any = scheduler.get(f"wf-{definition.id}-s").func
         await func()
-        assert conn.calls == [("send_group_msg", {"group_id": 9, "message": "到点了"})]
+        assert gateway.calls == [
+            ("onebot", "u-admin", "send_group_msg", {"group_id": 9, "message": "到点了"})
+        ]
     finally:
         await engine.dispose()
 

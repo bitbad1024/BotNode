@@ -50,7 +50,7 @@
   发送改走 `ctx.gateway`（`gateway.send(platform, owner_id, action, **params)`），回执从
   `ActionResult` 泛化成 `send_ok` / `send_data` 送下游（失败回执照常送、不打断流程，
   环境问题当场抛，口径不变）
-- [ ] **P3-5** 透传 gateway + onebot 别名：`NodeExecutionContext` 加 `gateway` 注入点；
+- [x] **P3-5** 透传 gateway + onebot 别名：`NodeExecutionContext` 加 `gateway` 注入点；
   `runtime.py` / `bootstrap.py` 全链路透传（登记闭包带上）；旧图 `onebot` 类型注册为
   `send` 的别名（platform 恒 onebot），库里已存的 onebot 节点照跑
 - [ ] **P3-6** 收尾：前端颜色表 `onebot` -> `send`（面板项 / 中文名 / 端口 / 表单全从后端

@@ -184,7 +184,13 @@ async def run(
     _message_router = MessageRouter()
     _message_router.attach(
         lambda workflow_id, version, **kw: run_published_workflow(
-            workflow_id, version, workflows, scheduler, onebot=_onebot_adapter, **kw
+            workflow_id,
+            version,
+            workflows,
+            scheduler,
+            onebot=_onebot_adapter,
+            gateway=_gateway,
+            **kw,
         )
     )
 
@@ -207,6 +213,7 @@ async def run(
                     workflows,
                     scheduler,
                     onebot=_onebot_adapter,
+                    gateway=_gateway,
                     message_router=_message_router,
                 ),
                 workflow_store=workflows,
@@ -227,7 +234,11 @@ async def run(
     # 运行期拨开关走接口层那个即时启停。带上 OneBot 适配器：onebot 节点要按工作流归属给在线
     # 连接发动作（登记构造的到点闭包也带）。
     await load_published_workflows(
-        workflows, scheduler, onebot=_onebot_adapter, message_router=_message_router
+        workflows,
+        scheduler,
+        onebot=_onebot_adapter,
+        gateway=_gateway,
+        message_router=_message_router,
     )
 
 

@@ -135,18 +135,21 @@ def _dump(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
-async def _send_action(
+async def send_response(
     node: WorkflowNode, ctx: NodeExecutionContext, action: str, params: dict[str, object]
-) -> tuple[bool, str]:
-    """按平台路由发动作，返回 ``(ok, data_dump)``；环境问题当场抛。"""
+) -> Any:
+    """按平台路由发动作，返回**平台回执**（``ActionResult``）；环境问题当场抛。
+
+    这是 ``send`` 节点与 ``onebot`` 别名共用的发送口：``onebot`` 节点借它发、再按老端口
+    （``onebot_retcode`` / ``onebot_data``）转述回执。
+    """
     gateway = ctx.gateway
     if gateway is None:
         raise ConnectionError(
             f"[send:{node.id}] 需要平台总线：装配时把 Gateway 交给工作流运行时（ctx.gateway）"
         )
     platform = _platform_of(node)
-    response = await gateway.send(platform, ctx.owner_id, action, **params)
-    return response.ok, _dump(response.data)
+    return await gateway.send(platform, ctx.owner_id, action, **params)
 
 
 @register_node(
@@ -189,7 +192,9 @@ async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
 
     platform = _platform_of(node)
     params = _params_of(action, node, ctx)
-    ok, data = await _send_action(node, ctx, action, params)
+    response = await send_response(node, ctx, action, params)
+    ok = bool(response.ok)
+    data = _dump(response.data)
 
     # 回执不成功只是「对方的回答」：记 warning 照常往下走（连不上 / 没连接那种才抛，见模块文档）
     report = ctx.logger.info if ok else ctx.logger.warning
