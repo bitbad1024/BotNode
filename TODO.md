@@ -8,7 +8,7 @@
   - 说明：`online` 是**派生态**（内存实时态），不落库；接口层 `list_tokens` 时聚合各适配器的在线连接。
 - [x] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
 - [x] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
-- [ ] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
+- [x] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
 
 ## P4 拆分
 
@@ -57,6 +57,6 @@
 - [x] **P4-4** 装配 `bootstrap.py`：读 `[kook]` 配置 -> 建 `KookClient` -> 包成
   `KookAdapter` -> `gateway.register`；`serve_forever` 的退出条件把 Kook 客户端算上
   （P2 已留了「只等一个会没人守另一个」的口子）；配单测（装配切换）
-- [ ] **P4-5** 收尾：`bridge/__init__.py` 文档更新（「适配器怎么写第二个」补上「正向连接
+- [x] **P4-5** 收尾：`bridge/__init__.py` 文档更新（「适配器怎么写第二个」补上「正向连接
   平台」的差异）；`pyproject.toml` 加 `kook` 可选依赖；全量回归对齐基线（全绿才算完）；
   勾掉 P4-1~P4-5 与总览 P4

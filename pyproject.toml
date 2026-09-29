@@ -21,6 +21,8 @@ redis = ["redis>=5"]
 api = ["fastapi>=0.110", "uvicorn>=0.27", "sqlmodel>=0.0.22", "aiosqlite>=0.20"]
 # OneBot 反向 WS 接入层（websockets 提供 WS 服务端）；不装也不影响核心层 / api 层
 onebot = ["websockets>=13"]
+# Kook 正向 WS 接入层（websockets 提供 WS 客户端；REST 动作发送走标准库，无额外依赖）
+kook = ["websockets>=13"]
 # 工作流包的 http 节点用它发请求（httpx）；不装只影响 http 节点，其它节点照跑
 workflow = ["httpx>=0.27"]
 
