@@ -54,7 +54,7 @@
   （`send_channel_msg` / `send_dm_msg` / `delete_msg`，channel_id / user_id / message_id 都是
   **字符串不转整数**）；校验器同样按 platform 判动作枚举；配单测（platform=kook 时动作组 /
   参数语义切换，platform=onebot 行为不变）
-- [ ] **P4-4** 装配 `bootstrap.py`：读 `[kook]` 配置 -> 建 `KookClient` -> 包成
+- [x] **P4-4** 装配 `bootstrap.py`：读 `[kook]` 配置 -> 建 `KookClient` -> 包成
   `KookAdapter` -> `gateway.register`；`serve_forever` 的退出条件把 Kook 客户端算上
   （P2 已留了「只等一个会没人守另一个」的口子）；配单测（装配切换）
 - [ ] **P4-5** 收尾：`bridge/__init__.py` 文档更新（「适配器怎么写第二个」补上「正向连接
