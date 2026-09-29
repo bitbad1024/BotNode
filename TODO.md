@@ -39,7 +39,7 @@
 - **可选依赖**：`nacho[kook]` 复用 `websockets`（正向客户端也要），`pyproject.toml` 加
   `kook = ["websockets>=13"]`；`nacho/kook/__init__.py` 不强制任何额外依赖。
 
-- [ ] **P4-1** `nacho/kook/` 平台包：`options.py`（`KookOptions`：网关地址 / Bot Token /
+- [x] **P4-1** `nacho/kook/` 平台包：`options.py`（`KookOptions`：网关地址 / Bot Token /
   心跳间隔 / 动作超时）、`models.py`（Kook 事件模型：消息 / 系统事件 / 心跳等，`extra=allow`）、
   `client.py`（`KookClient`：正向 WS 连接 + `connect`/`close`/`send`/`call` 动作发送 + 事件
   分发 handler 钩子 + 断线重连 + 心跳；**不 import 业务**）。纯「连接 + 协议」层，配单测
