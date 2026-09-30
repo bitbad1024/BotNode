@@ -35,7 +35,7 @@
 - [x] `mount_module(name, processor, *, core=None, level=None)`：`level` 透传给 `route`
 
 ### 5. manager.py
-- [ ] `configure` docstring 注明 `processors` 可传 `Target`（携带 `level`）；签名不变
+- [x] `configure` docstring 注明 `processors` 可传 `Target`（携带 `level`）；签名不变
 
 ### 6. __init__.py
 - [ ] 导出 `ChildLogger`，移除 `LevelFilter`

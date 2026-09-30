@@ -62,6 +62,11 @@ class LogManager:
 
         已存在默认核心时不会重建，也不会丢弃参数：``processors`` 中与已挂载通道
         同名的会被替换，其余追加挂载。
+
+        :param processors: 要挂载的处理机；也可以传带出口级最低级别的
+            :class:`~nacho.core.logger.models.Target`（如
+            ``Target(processor, level=LogLevel.WARNING)``），效果等同
+            ``mount(..., level=...)``。
         """
         existing: LogCore | None = current_default_core()
         if existing is not None:
