@@ -66,6 +66,7 @@ from nacho.core.logger import (  # noqa: E402
     manager,
 )
 from nacho.db import SqlLogStore  # noqa: E402
+from nacho.wiring import wire_loggers  # noqa: E402
 
 #: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
 ADMIN = {"account": "admin", "password": "nacho-admin"}
@@ -165,11 +166,13 @@ async def core(tmp_path: Path) -> AsyncIterator[LogCore]:
     manager.reset()
     started: LogCore = configure("nacho", level="DEBUG", console=False, dispatch_timeout=0.05)
     await started.start()
+    wire_loggers(started)  # 槽位指到这份核心：api_logger() 由此落进测试核心
     try:
         yield started
     finally:
         await manager.stop()
         manager.reset()
+        wire_loggers(None)  # 槽位一并清空，避免指向已停止的核心
 
 
 # --------------------------------------------------------------------------- 登录

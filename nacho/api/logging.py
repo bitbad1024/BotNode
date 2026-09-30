@@ -9,6 +9,10 @@
 （登录接口本身、被拒的请求）算**公共所有者**——谁的操作一目了然，见
 :data:`OWNER_ID_STATE`。
 
+核心由装配层经 :func:`set_core` 存进本模块的槽位（组合根 ``nacho.bootstrap`` 或
+:func:`nacho.wiring.wire_loggers` 负责）。``import`` 本模块**零副作用** —— 没装配就调用
+:func:`api_logger` 会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+
 **不单独挂文件出口**：文件出口是整进程**一份**、按天分片的（见
 :class:`~nacho.core.logger.processors.LocalFileLogProcessor`），接口层 / OneBot / 工作流的日志
 都进那一份，靠记录里的 ``logger_name``（``nacho.api`` / ``nacho.api.access``）区分来源 ——
@@ -24,7 +28,9 @@
 """
 from __future__ import annotations
 
-from nacho.core.logger import BaseLogger, default_core
+from typing import cast
+
+from nacho.core.logger import BaseLogger
 
 #: api 层业务日志的名字（**相对核心**：核心名 nacho -> nacho.api）
 API_LOGGER_NAME: str = "api"
@@ -38,15 +44,29 @@ OWNER_ID_STATE: str = "owner_id"
 #: 落库出口的通道名（全局留存出口；名字取自 ``DatabaseLogProcessor.name``）
 DATABASE_CHANNEL_NAME: str = "database"
 
+#: 装配槽位：组合根建好核心后存进来；``None`` = 尚未装配
+_core: BaseLogger | None = None
+
+
+def set_core(core: BaseLogger | None) -> None:
+    """装配日志核心（传 ``None`` 清除槽位，测试收尾用）。"""
+    global _core
+    _core = core
+
 
 def api_logger(name: str = API_LOGGER_NAME) -> BaseLogger:
-    """取接口层的日志实例（没 ``configure`` 过会顺带建一个默认核心）。
+    """取接口层的日志实例；未装配时抛错（见模块文档）。
 
     ``api.access`` 是访问日志：落库那份是审计时间线，一次请求一条的流水进去了只会把它
     淹掉 —— 所以这条路的落库通道**每次取都堵上**（``child`` 挂命名层级、``bind`` 出
     视图、``mute`` 堵库），文件与控制台照常收。
     """
-    node = default_core().child(name)
+    if _core is None:
+        raise RuntimeError(
+            "api_logger 尚未装配：先调 nacho.wiring.wire_loggers(core) 或 "
+            "nacho.api.logging.set_core(core)"
+        )
+    node = cast(BaseLogger, cast(object, _core.child(name)))
     if name == ACCESS_LOGGER_NAME:
         return node.bind().mute(DATABASE_CHANNEL_NAME)
     return node

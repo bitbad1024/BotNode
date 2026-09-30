@@ -34,10 +34,10 @@ if TYPE_CHECKING:
 def _log() -> BaseLogger | BoundLogger:
     """取本模块的日志实例：**用到才取**，不要在模块级取。
 
-    模块级 ``_logger = workflow_logger()`` 是**导入即执行**的：谁先 import 这个模块，
-    谁就顺手把进程默认日志核心按默认参数建出来（那时配置还没读），于是 ``[logging]`` 里的
-    颜色 / 级别被定死之后再也传不进去 —— 入口后面那次 ``configure(console_color=True)`` 只会
-    撞上「已存在核心」被丢掉（见 :mod:`nacho.core.logger.manager`）。用到才取，核心由启动顺序建。
+    模块级 ``_logger = workflow_logger()`` 是**导入即执行**的：谁先 import 这个模块，谁就
+    顺手把进程默认日志核心按默认参数建出来（那时配置还没读），``[logging]`` 里的颜色 / 级别
+    就此定死再也传不进去。核心改由装配层建好后经 :func:`nacho.wiring.wire_loggers` 存进
+    workflow 的日志槽位（:func:`workflow_logger` 未装配即抛错），这里只负责取用。
     """
     return workflow_logger("workflow.runtime")
 

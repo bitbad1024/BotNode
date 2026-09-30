@@ -65,7 +65,7 @@ class MemoryCache:
         self._logger: BaseLogger | None = logger
 
     def _log(self) -> BaseLogger:
-        """业务日志实例：装配注入的优先，没传就取 ``cache`` 便捷函数（默认核心）。"""
+        """业务日志实例：装配注入的优先，没传就取 ``cache`` 便捷函数（装配槽位）。"""
         return self._logger if self._logger is not None else cache_logger()
 
     # ---- 生命周期 ----
