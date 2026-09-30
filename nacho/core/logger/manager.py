@@ -38,10 +38,6 @@ class LogManager:
         """默认核心实例（:attr:`core` 的旧名别名）。"""
         return current_default_core()
 
-    @property
-    def loggers(self) -> dict[str, BaseLogger | BoundLogger]:
-        return dict(self._loggers)
-
     def configure(
         self,
         name: str = "nacho",

@@ -641,11 +641,6 @@ class BaseLogger:
     ) -> bool:
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
 
-    def critical(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
     def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
         """记录一条 ERROR 日志并附带当前异常堆栈。"""
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
@@ -1023,11 +1018,6 @@ class BoundLogger:
     ) -> bool:
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
 
-    def critical(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
     def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
         """记录一条 ERROR 日志并附带当前异常堆栈（默认字段照带）。"""
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
@@ -1202,11 +1192,6 @@ class ChildLogger:
         self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
     ) -> bool:
         return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
-    def critical(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
 
     def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
         """记录一条 ERROR 日志并附带当前异常堆栈。"""

@@ -41,10 +41,6 @@ class LogFilter(abc.ABC):
     def match(self, record: LogRecord) -> bool:
         """这条日志是否允许投给该出口。"""
 
-    def __call__(self, record: LogRecord) -> bool:
-        """让过滤器本身可调用，等价于 :meth:`match`。"""
-        return self.match(record)
-
     @override
     def __repr__(self) -> str:
         return f"<{type(self).__name__}>"
