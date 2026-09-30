@@ -16,10 +16,11 @@ import json
 from collections.abc import Mapping, Sequence
 
 from nacho.core.cache.interfaces import CacheBackend
+from nacho.core.cache.logging import cache_logger
 from nacho.core.cache.memory import MemoryCache
 from nacho.core.cache.models import CacheError, CacheOptions
 from nacho.core.cache.redis import RedisCache
-from nacho.core.logger import default_core
+from nacho.core.logger import BaseLogger
 
 
 class Cache:
@@ -29,12 +30,28 @@ class Cache:
     **不隐式启动**：没 ``start()`` 就调用数据接口会抛
     :class:`~nacho.core.cache.models.CacheError` —— 连不连得上应该在启动阶段就见分晓，
     而不是等到哪一次 ``get`` 才炸。
+
+    日志实例由装配层传入（``logger=``，也可以事后 :meth:`attach_logger`）；没传就用
+    本模块的便捷函数（:func:`nacho.core.cache.logging.cache_logger`），业务代码不直接
+    ``default_core()``。
     """
 
-    def __init__(self, options: CacheOptions | None = None) -> None:
+    def __init__(
+        self, options: CacheOptions | None = None, *, logger: BaseLogger | None = None
+    ) -> None:
         self._options: CacheOptions = options or CacheOptions()
         self._backend: CacheBackend | None = None
         self._degraded: bool = False  # 配了 Redis 但退回了内存
+        self._logger: BaseLogger | None = logger
+
+    # ---- 日志注入 ----
+    def attach_logger(self, logger: BaseLogger) -> None:
+        """注入日志实例（装配层建完核心后调用；单例场景用，构造参数传了就不用再调）。"""
+        self._logger = logger
+
+    def _log(self) -> BaseLogger:
+        """业务日志实例：装配注入的优先，没传就取 ``cache`` 便捷函数（默认核心）。"""
+        return self._logger if self._logger is not None else cache_logger()
 
     # ---- 生命周期 ----
     def configure(self, options: CacheOptions) -> None:
@@ -59,7 +76,7 @@ class Cache:
         options = self._options
         backend: CacheBackend
         if options.backend != "redis":
-            backend = MemoryCache(sweep_interval=options.sweep_interval)
+            backend = MemoryCache(sweep_interval=options.sweep_interval, logger=self._log())
         else:
             redis_backend = RedisCache(options.redis, namespace=options.namespace)
             try:
@@ -68,15 +85,13 @@ class Cache:
                 if not options.fallback_to_memory:
                     raise
                 self._degraded = True
-                default_core().child("cache").warning("Redis 起不来，退回本地缓存", error=str(exc))
-                backend = MemoryCache(sweep_interval=options.sweep_interval)
+                self._log().warning("Redis 起不来，退回本地缓存", error=str(exc))
+                backend = MemoryCache(sweep_interval=options.sweep_interval, logger=self._log())
             else:
                 backend = redis_backend
         await backend.start()  # redis 分支已经起过，这里是空操作
         self._backend = backend
-        default_core().child("cache").info(
-            f"缓存就绪：{self.backend_name}", namespace=options.namespace
-        )
+        self._log().info(f"缓存就绪：{self.backend_name}", namespace=options.namespace)
 
     async def stop(self, timeout: float = 5.0) -> None:
         """停后端（内存后端停清扫任务、Redis 后端断连接池）；重复调用是空操作。

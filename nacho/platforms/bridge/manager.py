@@ -24,9 +24,10 @@ from __future__ import annotations
 from typing import Protocol
 
 from nacho.bots import SqlBotStore
-from nacho.core.logger import BaseLogger, default_core
+from nacho.core.logger import BaseLogger
 
 from .kook import KookAdapter
+from .logging import bridge_logger
 from .models import BotClient
 from .onebot import OneBotAdapter
 
@@ -252,7 +253,7 @@ class BotManager:
     ) -> None:
         self._store: SqlBotStore = store
         self._secret_key: str = secret_key
-        self._log: BaseLogger = logger if logger is not None else default_core().child("bridge")
+        self._log: BaseLogger = logger if logger is not None else bridge_logger()
         #: platform -> 生命周期（没接的适配器也注册一份「只落库」的兜底）
         self._lifecycles: dict[str, BotLifecycle] = {}
         for lifecycle in (

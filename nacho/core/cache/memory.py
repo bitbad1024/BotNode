@@ -18,8 +18,9 @@ from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from typing import NamedTuple, cast
 
+from nacho.core.cache.logging import cache_logger
 from nacho.core.cache.models import CacheError
-from nacho.core.logger import default_core
+from nacho.core.logger import BaseLogger
 
 
 class _Entry(NamedTuple):
@@ -55,10 +56,17 @@ class MemoryCache:
     （没人再访问的过期键只能靠它，否则会一直占着内存）。
     """
 
-    def __init__(self, *, sweep_interval: float = 30.0) -> None:
+    def __init__(
+        self, *, sweep_interval: float = 30.0, logger: BaseLogger | None = None
+    ) -> None:
         self._data: dict[str, _Entry] = {}
         self._sweep_interval: float = sweep_interval
         self._sweeper: asyncio.Task[None] | None = None
+        self._logger: BaseLogger | None = logger
+
+    def _log(self) -> BaseLogger:
+        """业务日志实例：装配注入的优先，没传就取 ``cache`` 便捷函数（默认核心）。"""
+        return self._logger if self._logger is not None else cache_logger()
 
     # ---- 生命周期 ----
     async def start(self) -> None:
@@ -77,7 +85,7 @@ class MemoryCache:
         # 这行 await 自己会抛 CancelledError，正好往上传播（停机信号不能被吞）
         _, pending = await asyncio.wait({sweeper}, timeout=timeout)
         if pending:  # 取消是瞬时的，走到这里说明另有情况，记一笔但不等了
-            default_core().child("cache").warning("内存缓存的清扫任务没在超时内停下")
+            self._log().warning("内存缓存的清扫任务没在超时内停下")
 
     async def ping(self) -> bool:
         """本地缓存永远在线。"""

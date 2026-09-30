@@ -37,9 +37,10 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from nacho.core.cache import cache as process_cache
-from nacho.core.logger import BaseLogger, BoundLogger, ChildLogger, default_core
+from nacho.core.logger import BaseLogger, BoundLogger, ChildLogger
 from nacho.core.scheduler import TaskManager
 
+from ..logging import workflow_logger
 from ..models import ValidationIssue, WorkflowNode
 
 #: 节点执行函数：(节点, 上下文) -> 本节点产出（键 = 已声明的输出端口名）
@@ -241,7 +242,7 @@ class NodeExecutionContext:
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
         self.cache: Any = cache if cache is not None else process_cache
         base: BaseLogger | ChildLogger | BoundLogger = (
-            logger if logger is not None else default_core().child("workflow")
+            logger if logger is not None else workflow_logger()
         )
         # 日志**提前带好默认参数**：这一趟的身份（哪条工作流 / 谁的 / 给谁跑的）在构造上下文
         # 时就定了，之后每个节点写日志都自动带上，不用谁在调用点手抄一遍。三者都能 bind

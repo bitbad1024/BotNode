@@ -18,17 +18,22 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from nacho.core.scheduler.cron import CronExpr
+from nacho.core.logger import BaseLogger
 from nacho.core.scheduler.core import Scheduler
+from nacho.core.scheduler.cron import CronExpr
 from nacho.core.scheduler.models import Task, TaskFunc, new_task_id
 
 
 class TaskManager:
-    """任务登记簿 + 执行核心的门面；改定义的操作都会顺手唤醒循环重排。"""
+    """任务登记簿 + 执行核心的门面；改定义的操作都会顺手唤醒循环重排。
 
-    def __init__(self) -> None:
+    日志实例由装配层传入（``logger=``），原样交给内部的 :class:`Scheduler`；没传就由
+    Scheduler 走本模块的便捷函数（:func:`nacho.core.scheduler.logging.scheduler_logger`）。
+    """
+
+    def __init__(self, *, logger: BaseLogger | None = None) -> None:
         self._tasks: dict[str, Task] = {}  # task_id -> Task，与 Scheduler 共享
-        self._scheduler: Scheduler = Scheduler(self._tasks)
+        self._scheduler: Scheduler = Scheduler(self._tasks, logger=logger)
 
     # ---- 生命周期 ----
     async def start(self) -> None:

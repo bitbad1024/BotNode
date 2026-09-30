@@ -63,6 +63,7 @@
 from __future__ import annotations
 
 from .gateway import EventSubscriber, Gateway
+from .logging import BRIDGE_LOGGER_NAME, bridge_logger
 from .models import ActionResult, BotClient, PlatformEvent
 from .protocols import BotAdapter
 
@@ -76,4 +77,7 @@ __all__ = [
     # 总线
     "Gateway",
     "EventSubscriber",
+    # 日志接入点
+    "BRIDGE_LOGGER_NAME",
+    "bridge_logger",
 ]

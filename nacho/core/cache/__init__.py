@@ -43,12 +43,14 @@ from __future__ import annotations
 
 from nacho.core.cache.core import Cache
 from nacho.core.cache.interfaces import CacheBackend
+from nacho.core.cache.logging import CACHE_LOGGER_NAME, cache_logger
 from nacho.core.cache.manager import cache
 from nacho.core.cache.memory import MemoryCache
 from nacho.core.cache.models import CacheError, CacheOptions, RedisOptions
 from nacho.core.cache.redis import RedisCache
 
 __all__ = [
+    "CACHE_LOGGER_NAME",
     "Cache",
     "CacheBackend",
     "CacheError",
@@ -57,4 +59,5 @@ __all__ = [
     "RedisCache",
     "RedisOptions",
     "cache",
+    "cache_logger",
 ]

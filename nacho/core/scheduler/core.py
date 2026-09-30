@@ -20,16 +20,24 @@ import asyncio
 import inspect
 from datetime import datetime
 
-from nacho.core.logger import default_core
+from nacho.core.logger import BaseLogger
 from nacho.core.scheduler.cron import CronError
+from nacho.core.scheduler.logging import scheduler_logger
 from nacho.core.scheduler.models import Task
 from nacho.core.scheduler.timeline import TaskTimeline
 
 
 class Scheduler:
-    """执行核心；登记簿由 TaskManager 持有并传入，两边共享同一份。"""
+    """执行核心；登记簿由 TaskManager 持有并传入，两边共享同一份。
 
-    def __init__(self, registry: dict[str, Task]) -> None:
+    日志实例由装配层传入（``logger=``，也可以事后 :meth:`attach_logger`）；没传就用
+    本模块的便捷函数（:func:`nacho.core.scheduler.logging.scheduler_logger`），
+    业务代码不直接 ``default_core()``。
+    """
+
+    def __init__(
+        self, registry: dict[str, Task], *, logger: BaseLogger | None = None
+    ) -> None:
         self._registry: dict[str, Task] = registry  # task_id -> Task，与 TaskManager 共享
         self._running: bool = False
         self._loop_task: asyncio.Task[None] | None = None  # 主循环
@@ -38,6 +46,16 @@ class Scheduler:
         #: 排程队列：按 next_run 排序的红黑树 + task_id 哈希表
         self._timeline: TaskTimeline = TaskTimeline()
         self._dirty: bool = True  # 置 True 时循环下一圈先做一次全量对账
+        self._logger: BaseLogger | None = logger
+
+    # ---- 日志注入 ----
+    def attach_logger(self, logger: BaseLogger) -> None:
+        """注入日志实例（装配层建完核心后调用；单例场景用，构造参数传了就不用再调）。"""
+        self._logger = logger
+
+    def _log(self) -> BaseLogger:
+        """业务日志实例：装配注入的优先，没传就取 ``scheduler`` 便捷函数（默认核心）。"""
+        return self._logger if self._logger is not None else scheduler_logger()
 
     # ---- 生命周期 ----
     async def start(self) -> None:
@@ -121,7 +139,7 @@ class Scheduler:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 循环绝不能死
-                default_core().child("scheduler").error(
+                self._log().error(
                     "调度循环出意外，继续运行", error=f"{type(exc).__name__}: {exc}"
                 )
                 await asyncio.sleep(0.1)
@@ -137,7 +155,7 @@ class Scheduler:
         except CronError as exc:
             task.next_run = None
             self._timeline.discard(task.task_id)
-            default_core().child("scheduler").error(f"任务 {task.display_name} 的 cron 排不了程：{exc}")
+            self._log().error(f"任务 {task.display_name} 的 cron 排不了程：{exc}")
             return
         self._timeline.upsert(task)
 
@@ -161,7 +179,7 @@ class Scheduler:
             budget -= 1
             self._timeline.discard(task.task_id)  # 先出队，免得重排后又落回这个过去点
             if task.running and not task.multi_instance:
-                default_core().child("scheduler").warning(
+                self._log().warning(
                     f"任务 {task.display_name} 上一次还没跑完，跳过 {task.next_run} 这次"
                 )
                 self._schedule(task, now)  # 别卡在过去的触发点上
@@ -198,7 +216,7 @@ class Scheduler:
             task.last_ok = False
             task.fail_count += 1
             task.last_error = f"{type(exc).__name__}: {exc}"
-            default_core().child("scheduler").error(
+            self._log().error(
                 f"定时任务 {task.display_name} 执行失败", error=task.last_error
             )
         else:
@@ -213,6 +231,6 @@ class Scheduler:
             return
         _, pending = await asyncio.wait(self._inflight, timeout=timeout)
         if pending:
-            default_core().child("scheduler").warning(
+            self._log().warning(
                 f"停机时还有 {len(pending)} 个任务没跑完，不再等待（不强杀，让它们自然收尾）"
             )
