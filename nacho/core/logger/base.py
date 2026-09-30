@@ -983,22 +983,24 @@ class BoundLogger(_LevelMethodsMixin):
         exc_info: object = False,
         **extra: object,
     ) -> bool:
-        """写一条日志：``extra`` = 默认字段 + 当次字段（当次同名键优先）。"""
+        """写一条日志：构造好「当次」记录后交给 :meth:`write`，默认字段由它并入。
+
+        ``owner_id`` / ``extra`` 是**当次**的；视图绑定的默认字段在 :meth:`write`
+        里合并（当次同名键优先），这条链上的合并只有那一处。
+        """
         parsed_level = LogLevel.parse(level)
         if not self.is_enabled_for(parsed_level):
             return False
-        merged_owner, merged_extra = self._merge(owner_id, extra)
-        return             self._logger.write(
-            self._logger.new_record(
-                parsed_level,
-                message,
-                owner_id=merged_owner,
-                exc_info=exc_info,
-                extra=merged_extra,
-                logger_name=self.name,
-                targets=self._targets,
-            )
+        record = self._logger.new_record(
+            parsed_level,
+            message,
+            owner_id=owner_id,
+            exc_info=exc_info,
+            extra=extra,
+            logger_name=self.name,
+            targets=self._targets,
         )
+        return self.write(record)
 
 
 
@@ -1145,21 +1147,20 @@ class ChildLogger(_LevelMethodsMixin):
         exc_info: object = False,
         **extra: object,
     ) -> bool:
-        """写一条日志：级别 / 目标用本节点**固化**的那一份，只投它。"""
+        """写一条日志：构造好记录后交给 :meth:`write`，由它盖名字 / 目标并入队。"""
         parsed_level = LogLevel.parse(level)
         if not self.is_enabled_for(parsed_level):
             return False
-        return self._root.write(
-            self._root.new_record(
-                parsed_level,
-                message,
-                owner_id=owner_id,
-                exc_info=exc_info,
-                extra=extra,
-                logger_name=self._name,
-                targets=self._targets,
-            )
+        record = self._root.new_record(
+            parsed_level,
+            message,
+            owner_id=owner_id,
+            exc_info=exc_info,
+            extra=extra,
+            logger_name=self._name,
+            targets=self._targets,
         )
+        return self.write(record)
 
     async def flush(self) -> None:
         """刷新所有出口的缓冲区（视图不持有状态，交给 root 做）。"""
