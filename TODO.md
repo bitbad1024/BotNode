@@ -38,8 +38,8 @@
 - [x] `configure` docstring 注明 `processors` 可传 `Target`（携带 `level`）；签名不变
 
 ### 6. __init__.py
-- [ ] 导出 `ChildLogger`，移除 `LevelFilter`
-- [ ] docstring 更新（child 语义一句话）
+- [x] 导出 `ChildLogger`，移除 `LevelFilter`
+- [x] docstring 更新（child 语义一句话）
 
 ### 7. docs/logger.md
 - [ ] 翻案「没有派生实例」相关段落，补 child/bind 分工说明

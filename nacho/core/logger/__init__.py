@@ -1,4 +1,4 @@
-"""异步日志系统：一根 root、按目标扇出、具名路由，业务侧拿 ``bind`` 出来的只读视图。
+"""异步日志系统：一根 root、按目标扇出、具名路由；child 管命名层级，bind 管上下文字段。
 
 快速开始::
 
@@ -7,7 +7,7 @@
     configure(level="INFO")
     get_logger("api.robot").info("收到请求")
 
-设计要点、route / bind / 过滤器 / 内省与检索的完整说明见 ``docs/logger.md``。
+设计要点、child / bind / route / 过滤器 / 内省与检索的完整说明见 ``docs/logger.md``。
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .core import mount_module
 from .manager import configure, get_logger, manager
 
 # ---- 核心与视图 ----
-from .base import BaseLogger, BoundLogger
+from .base import BaseLogger, BoundLogger, ChildLogger
 from .core import LogCore
 
 # ---- 处理器（可挂到核心上）----
@@ -50,6 +50,7 @@ __all__ = [
     "LogCore",
     "BaseLogger",
     "BoundLogger",
+    "ChildLogger",
     # 处理器
     "BaseLogProcessor",
     "ConsoleLogProcessor",
