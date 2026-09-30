@@ -1,51 +1,22 @@
 """异步日志系统：一根 root + 若干绑定视图。
 
-职责划分
+设计哲学
 ========
 
-* :meth:`BaseLogger.write`：**写入方法**。默认把日志推到消息队列（非阻塞），
-  业务侧永远不会因为落盘 / 落库而卡住；
-* :meth:`BaseLogger.bind`：**绑定**。得到一份 :class:`BoundLogger` 视图：名字、出口、
-  级别、默认字段四样都能换，适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
-  不用每个调用点手抄一遍；
-* 内部分发器从队列批量取日志，**照着每条记录自带的目标**扇出给各处理机；
-* :meth:`BaseLogger.flush`：**刷新缓冲区方法**，刷新所有处理机的缓冲区；
-* :meth:`BaseLogger.search`：**检索方法**，聚合各处理机的检索结果。
+* **目标随记录走**：写入那一刻目标钉死在 ``LogRecord.targets`` 上，分发器只照投，
+  不再查任何「名字 -> 实例」表 —— 出口长在 root 身上，``bind`` / ``child`` /
+  ``route`` 只是给它打不同名字 / 字段的视图；
+* **child 是缓存树，创建时固化**：派生那一刻把级别 / 目标解析固化进新节点，同名
+  ``child`` 命中同一对象；父后挂出口、改级别对已派生节点不生效，要新配置就再
+  ``child`` 一层；
+* **过滤挂在目标侧**：一条日志只有通过某目标的过滤器才被投给它，被滤掉的连处理机
+  缓冲区都不进 —— 处理机只负责落地，不含过滤器；
+* **两级缓冲分工**：``AsyncLogQueue`` 只管同步写入与异步分发之间的交接
+  （``dispatch_timeout`` 是交接窗口不是攒批窗口），攒批由各处理机自己的
+  ``buffer_size`` / ``flush_interval`` 决定，互不牵制。
 
-没有派生实例，只有扁平化视图
-============================
-
-曾经有一套「名字 -> 派生实例」的树：``get_logger("a.b")`` 会派生一个子实例，把父级
-的出口复制成「落回配置」（创建即冻结），于是**取实例的先后顺序会影响它能收到什么**
-—— 那个坑连同 ``attach`` / 落回配置一起删了，``child`` 以**扁平化视图**的形态回来：
-:class:`ChildLogger` 只记「父是谁 + 自己的覆盖项」，**不缓存、不复制**，写日志时沿父链
-**现解析**出口与级别。现在：
-
-* **出口长在 root 身上**：构造给（``processors=``）或后来 :meth:`mount` 上去；
-* **要命名层级就用 :meth:`BaseLogger.child`**：父级后挂出口、改级别对已派生节点
-  **立即生效**，「先取实例再挂出口」的顺序坑不复现；
-* **一个模块另一处去处**就 :meth:`route` 发布一条具名路由（一个名字 = 一份绑定好的
-  视图）；不发布就跟着 root 那份走；
-* **目标随记录走**：写入那一刻目标就钉死在 :attr:`~nacho.core.logger.models
-  .LogRecord.targets` 上，分发只是照着投，不再查任何名字表。
-
-过滤器
-======
-
-``log_filter``（:class:`~nacho.core.logger.filters.LogFilter`）挂在**目标**一侧
-（:class:`~nacho.core.logger.models.Target`）：一条日志只有通过某个目标的过滤器才会
-被投递给它，被过滤掉的日志连处理机的缓冲区都不进。过滤器因此不属于处理机——处理机
-只负责落地。
-
-**两级缓冲，分工明确**：
-
-* :class:`~nacho.core.logger.queue.AsyncLogQueue`（**交接**）：同步写入方与异步
-  分发器之间的边界。``dispatch_timeout`` 只决定「一次最多等多久把手上这批取走」，
-  是**交接窗口**而非攒批窗口，所以取小值，让日志尽快交到处理机；
-* :class:`~nacho.core.logger.processors.base.BaseLogProcessor` 的缓冲区（**攒批**）：
-  每个出口自己的批大小与刷盘周期（``buffer_size`` / ``flush_interval``），攒批窗口
-  只由它决定——控制台可以 ``buffer_size=1`` 逐条直写，文件 / 数据库则成批落，
-  互不牵制。
+职责一句话：``write`` 入队（非阻塞）、``bind`` 出视图、``flush`` / ``search`` 聚合
+各出口。完整的使用说明见 ``docs/logger.md``。
 """
 from __future__ import annotations
 
@@ -122,8 +93,8 @@ class BaseLogger:
 
     出口就长在它身上：构造给的那些、后来 :meth:`mount` 上去的那些。业务侧拿到的要么
     是 :meth:`bind` 出来的上下文视图（:class:`BoundLogger`），要么是 :meth:`child`
-    出来的**扁平化命名视图**（:class:`ChildLogger`）—— 没有冻结、没有落回配置：
-    一条日志投给谁，写的时候按解析出的那份目标定了。
+    出来的**缓存树节点**（:class:`ChildLogger`）—— 节点在派生那一刻固化一份配置，
+    之后不再沿父链解析。
 
     想要「某个模块另一个去处」， :meth:`route` 发布一条具名路由就够了：一个名字 =
     一份绑定好的视图，不发布就跟着 root 那份走。
@@ -181,6 +152,8 @@ class BaseLogger:
         self._targets: tuple[Target, ...] = ()
         #: **显式发布的具名路由**：只有 :meth:`publish` / :meth:`route` 过才在里面
         self._routes: dict[str, BoundLogger] = {}
+        #: **命名层级树的子节点缓存**：``child(name)`` 命中返回同一对象
+        self._children: dict[str, ChildLogger] = {}
         if processors:
             self.mount(*processors)
         #: 构造时是否要求了默认控制台输出（看得出「有没有那一路」）
@@ -392,24 +365,33 @@ class BaseLogger:
         level: "LogLevel | str | None" = None,
         targets: "Sequence[Target | BaseLogProcessor] | None" = None,
     ) -> ChildLogger:
-        """沿名字生长一层**扁平化视图**：名字经 :meth:`qualify` 拼接，不缓存、不复制。
+        """沿名字生长一层**缓存树节点**：名字经 :meth:`qualify` 拼接，**缓存命中
+        返回同一对象**。
 
-        返回的 :class:`ChildLogger` 只记「父是谁 + 自己的覆盖项」（``_level`` /
-        ``_targets`` 为 ``None`` 就表示继承父级），写日志时沿父链**现解析**出口与级别
-        —— 所以父级后挂出口、改级别对已派生节点**立即生效**；每次调用都返回一份新
-        视图对象，行为一致，没有「先取实例再挂出口」的顺序坑。
+        派生那一刻就把生效的级别 / 目标**固化**进新节点（:class:`ChildLogger` 的
+        ``_level`` / ``_targets`` 永远是具体值），之后不再沿父链解析——所以父级后挂
+        出口、改级别对**已派生**节点不生效，要新配置就再 ``child`` 一层。
 
         :param name: 相对名字（``"api"``）或完整名字（``"nacho.api"``），经
             :meth:`qualify` 拼接成完整层级名；
-        :param level: 本节点自己的最低级别；``None`` = 继承父级（写时解析）；
-        :param targets: 本节点自己的出口；``None`` = 继承父级（写时解析），都没有则
-            跟随 root 当前默认目标。
+        :param level: 本节点的最低级别；``None`` = 固化父 / root 当前级别；
+        :param targets: 本节点的出口；``None`` = 固化父 / root 当前默认目标。
 
         child 与 bind 的分工：``child`` 换的是**名字与出口**（名字即身份，可继续
         ``child`` 生长）；``bind`` 换的是**默认字段**（给一段执行打上下文标记，产物
         只能 ``bind`` / ``log`` / ``mute``，不能再 ``child``）。
         """
-        return ChildLogger(self, name=self.qualify(name), level=level, targets=targets)
+        cached = self._children.get(name)
+        if cached is not None:
+            return cached
+        node = ChildLogger(
+            self,
+            name=self.qualify(name),
+            level=self.level if level is None else level,
+            targets=self.targets if targets is None else targets,
+        )
+        self._children[name] = node
+        return node
 
 
 
@@ -1029,52 +1011,47 @@ class BoundLogger:
 
 
 class ChildLogger:
-    """**扁平化的命名层级视图**：只记「父是谁 + 自己的覆盖项」，写时沿父链现解析。
+    """**缓存式命名层级树节点**：``child()`` 缓存子节点，创建时固化一份配置。
 
-    与旧版「派生实例」的根本区别：**不缓存、不复制** —— 没有 ``children`` 缓存字典，
-    也不把父级的出口 / 级别拷进自己（``_level`` / ``_targets`` 为 ``None`` = 继承）。
-    于是：
+    与旧版「写时沿父链解析」的区别：派生那一刻就把生效的级别 / 目标**解析并固化**
+    进新节点（``_level`` / ``_targets`` 永远是具体值，没有「继承 / 待解析」），
+    之后读 ``level`` / ``targets`` 不再沿父链向上找。于是：
 
-    * **父级后挂出口、改级别对已派生节点立即生效**：``root.child("a")`` 之后
-      ``root.mount(...)`` / ``root.set_level("DEBUG")``，``a`` 写日志照样按新状态解析，
-      不存在「先取实例再挂出口」的顺序坑；
-    * 每次 :meth:`child` 都返回一份新视图，行为一致，没有缓存要不要失效的烦恼；
-    * 写日志只投**解析出的那一份目标**，不沿父链重复投递（无 propagate）。
+    * 多次 ``child("a")`` 返回**同一个对象**（``children`` 缓存字典，行为一致）；
+    * 父级后挂出口、改级别对**已派生**节点不生效 —— 要新配置就再 ``child`` 一层；
+    * 写日志只投**固化下来的那一份目标**，不沿父链重复投递（无 propagate）。
 
     child 与 bind 的分工：``child`` 换的是**名字与出口**（名字即身份，可继续
     ``child`` 生长）；``bind`` 换的是**默认字段**（给一段执行打上下文标记，产物
     只能 ``bind`` / ``log`` / ``mute``，不能再 ``child``）。
     """
 
-    __slots__: tuple[str, ...] = ("_root", "_parent", "_name", "_level", "_targets")
+    __slots__: tuple[str, ...] = (
+        "_root",
+        "_children",
+        "_name",
+        "_level",
+        "_targets",
+    )
 
     def __init__(
         self,
         root: BaseLogger,
         *,
         name: str,
-        parent: "ChildLogger | None" = None,
-        level: "LogLevel | str | None" = None,
-        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: LogLevel | str,
+        targets: Sequence[Target | BaseLogProcessor],
     ) -> None:
-        #: 共享状态的源：队列 / 接纳清单 / root 默认目标，都在这一份上
         self._root: BaseLogger = root
-        #: 父节点引用；``None`` = 直接挂在 root 下的第一层
-        self._parent: ChildLogger | None = parent
-        #: 完整名字（已含 root 前缀），写进 ``record.logger_name``
+        self._children: dict[str, "ChildLogger"] = {}
         self._name: str = name
-        #: 自己的级别覆盖；``None`` = 沿父链继承
-        self._level: LogLevel | None = None if level is None else LogLevel.parse(level)
-        #: 自己的目标覆盖；``None`` = 沿父链继承
-        self._targets: tuple[Target, ...] | None = None
-        if targets is not None:
-            normalized: list[Target] = [
-                item if isinstance(item, Target) else Target(item) for item in targets
-            ]
-            normalized.sort(key=lambda target: target.priority)
-            self._targets = tuple(normalized)
-            # 只在这份覆盖里出现的处理机也要能被停机 flush、被检索、被统计
-            root.adopt(*(target.processor for target in self._targets))
+        self._level: LogLevel = LogLevel.parse(level)
+        normalized: list[Target] = [
+            item if isinstance(item, Target) else Target(item) for item in targets
+        ]
+        normalized.sort(key=lambda target: target.priority)
+        self._targets: tuple[Target, ...] = tuple(normalized)
+        root.adopt(*(target.processor for target in self._targets))
 
     @property
     def name(self) -> str:
@@ -1082,24 +1059,19 @@ class ChildLogger:
         return self._name
 
     @property
+    def children(self) -> Mapping[str, "ChildLogger"]:
+        """已派生的子节点（只读视图）。"""
+        return MappingProxyType(self._children)
+
+    @property
     def level(self) -> LogLevel:
-        """写时沿父链解析出的生效级别：最近一个显式设置，没有就 root 那份。"""
-        node: ChildLogger | None = self
-        while node is not None:
-            if node._level is not None:
-                return node._level
-            node = node._parent
-        return self._root.level
+        """本节点的生效级别（创建时固化的那份）。"""
+        return self._level
 
     @property
     def targets(self) -> tuple[Target, ...]:
-        """写时沿父链解析出的目标：最近一份显式指定，没有就 root 当前默认目标。"""
-        node: ChildLogger | None = self
-        while node is not None:
-            if node._targets is not None:
-                return node._targets
-            node = node._parent
-        return self._root.targets
+        """本节点的生效目标（创建时固化的那份）。"""
+        return self._targets
 
     def child(
         self,
@@ -1108,15 +1080,26 @@ class ChildLogger:
         level: "LogLevel | str | None" = None,
         targets: "Sequence[Target | BaseLogProcessor] | None" = None,
     ) -> "ChildLogger":
-        """继续沿名字生长一层：名字相对本视图拼接，返回**新视图**（无缓存）。
+        """继续沿名字生长一层：**缓存命中返回同一对象**，未命中按父当前配置固化一份。
 
-        ``root.child("api").child("robot")`` 与 ``root.child("api.robot")`` 行为等价
-        —— 都是写时解析到 root 的当前状态，路径深浅不影响结果。
+        ``root.child("a").child("b")`` 与 ``root.child("a.b")`` 行为等价 —— 都是
+        创建时固化 root 当时的当前状态，路径深浅不影响结果。已派生的名字再次
+        ``child`` 直接返回缓存那一份（不会覆盖原有的覆盖项）。
         """
         full: str = name
         if self._name and name and name != self._name and not name.startswith(self._name + "."):
             full = f"{self._name}.{name}"
-        return ChildLogger(self._root, name=full, parent=self, level=level, targets=targets)
+        cached = self._children.get(name)
+        if cached is not None:
+            return cached
+        node = ChildLogger(
+            self._root,
+            name=full,
+            level=self._level if level is None else level,
+            targets=self._targets if targets is None else targets,
+        )
+        self._children[name] = node
+        return node
 
     def bind(
         self,
@@ -1140,19 +1123,19 @@ class ChildLogger:
         )
 
     def set_level(self, level: "LogLevel | str | None") -> None:
-        """设自己的级别门槛；传 ``None`` 恢复「沿父链继承」。"""
-        self._level = None if level is None else LogLevel.parse(level)
+        """设自己的级别；传 ``None`` 恢复为 root 的级别（固化后「继承」只到 root）。"""
+        self._level = self._root.level if level is None else LogLevel.parse(level)
 
     def is_enabled_for(self, level: LogLevel | str) -> bool:
-        """本条日志是否达到本视图的生效级别（写时沿父链解析）。"""
-        return LogLevel.parse(level) >= self.level
+        """本条日志是否达到本节点的生效级别（创建时固化的那份）。"""
+        return LogLevel.parse(level) >= self._level
 
     def write(self, record: LogRecord) -> bool:
-        """直接写一条记录：名字与目标按本视图**解析出的那一份**盖上。"""
+        """直接写一条记录：名字与目标按本节点**固化的那一份**盖上。"""
         patched: LogRecord = record
         if self._name:
             patched = replace(patched, logger_name=self._name)
-        return self._root.write(replace(patched, targets=self.targets))
+        return self._root.write(replace(patched, targets=self._targets))
 
     def log(
         self,
@@ -1163,7 +1146,7 @@ class ChildLogger:
         exc_info: object = False,
         **extra: object,
     ) -> bool:
-        """写一条日志：级别 / 目标在**写入这一刻**沿父链现解析，只投那一份。"""
+        """写一条日志：级别 / 目标用本节点**固化**的那一份，只投它。"""
         parsed_level = LogLevel.parse(level)
         if not self.is_enabled_for(parsed_level):
             return False
@@ -1175,7 +1158,7 @@ class ChildLogger:
                 exc_info=exc_info,
                 extra=extra,
                 logger_name=self._name,
-                targets=self.targets,
+                targets=self._targets,
             )
         )
 
