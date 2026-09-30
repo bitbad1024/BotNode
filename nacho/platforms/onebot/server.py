@@ -19,7 +19,7 @@
 
 用法::
 
-    from nacho.onebot import OneBotOptions, OneBotServer
+    from nacho.platforms.onebot import OneBotOptions, OneBotServer
 
     server = OneBotServer(OneBotOptions(host="0.0.0.0", port=6700), handler=on_event)
     await server.start()

@@ -196,11 +196,11 @@ class NodeExecutionContext:
         ``owner_id`` 是两回事——``owner_id`` 是**工作流的主人**（账号），``user_id`` 是
         **被服务的对象**；定时触发没有「这个人」，是 :data:`NO_USER_ID`（空串）；
     :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
-        ``connected_at`` / ``call()`` —— 即 ``nacho.onebot.server.OneBotServer``）。装配层
-        注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
+        ``connected_at`` / ``call()`` —— 即 ``nacho.platforms.onebot.server.OneBotServer``）。
+        装配层注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
     :param gateway: 平台总线（鸭子形状：``async send(platform, owner_id, action, **params)``
-        —— 即 ``nacho.bridge.gateway.Gateway``）。装配层注入，没接时是 ``None``；``send`` 节点
-        靠它按平台路由发动作（``onebot`` 节点泛化后的路）。
+        —— 即 ``nacho.platforms.bridge.gateway.Gateway``）。装配层注入，没接时是 ``None``；
+        ``send`` 节点靠它按平台路由发动作（``onebot`` 节点泛化后的路）。
     :param cache: 缓存门面（鸭子形状：``async get(key) -> str | None`` /
         ``async set(key, value, ttl=None)`` —— 即 ``nacho.core.cache.Cache``）。
         **缺省就是进程级那一个**（``nacho.core.cache.cache``，主程序启动时已 ``start()``），

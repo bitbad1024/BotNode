@@ -1,7 +1,7 @@
 """Gateway 总线：适配器的注册处、事件的分发处、发送的路由处。
 
 它自己**不懂任何平台**——事件从适配器来（适配器翻译成
-:class:`~nacho.bridge.models.PlatformEvent` 后调 :meth:`Gateway.publish`），发送按
+:class:`~nacho.platforms.bridge.models.PlatformEvent` 后调 :meth:`Gateway.publish`），发送按
 ``platform`` 路由给对应适配器。本模块只依赖 ``nacho.core``（logger）与同包的模型 /
 协议，满足「bridge 不 import 平台包」的依赖方向。
 
@@ -17,7 +17,7 @@
 
 发送口径（对齐 onebot 节点）：**环境问题当场抛**。没注册这个平台是装配问题，
 :class:`ConnectionError` 带上当前已注册的平台列表，看得见、改得了；「发出去、对方答了
-不成功」才走 :class:`~nacho.bridge.models.ActionResult` 的 ``ok=False``。
+不成功」才走 :class:`~nacho.platforms.bridge.models.ActionResult` 的 ``ok=False``。
 """
 from __future__ import annotations
 

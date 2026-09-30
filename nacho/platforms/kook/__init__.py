@@ -14,7 +14,7 @@
 
 用起来::
 
-    from nacho.kook import KookOptions, KookClient
+    from nacho.platforms.kook import KookOptions, KookClient
 
     async def on_event(event):
         print(event.type, event.target_id, event.content)

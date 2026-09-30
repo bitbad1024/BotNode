@@ -10,7 +10,7 @@ Kook 网关的报文是 ``{"s": <signal>, "d": {...}}``：
 读到），不会因为多了一个键就解析失败。
 
 身份字段在 Kook 里都是**字符串**（channel_id / user_id / msg_id 都是），与 OneBot 的整数
-不同 —— 翻译成 :class:`~nacho.bridge.models.PlatformEvent` 时字符串口径正好对得上。
+不同 —— 翻译成 :class:`~nacho.platforms.bridge.models.PlatformEvent` 时字符串口径正好对得上。
 """
 from __future__ import annotations
 

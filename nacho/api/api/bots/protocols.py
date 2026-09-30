@@ -1,11 +1,11 @@
 """机器人管理的服务协议：跨平台「增 / 启停 / 删」+ 在线聚合（**结构化协议**）。
 
 为什么再绕一层协议：机器人管理跨平台（OneBot 反向 WS / Kook 正向 WS），而「Kook 的
-增」要起正向 WS 客户端、「Kook 的删」要停客户端——这些是平台包（``nacho.kook`` /
-``nacho.bridge.kook``）的活，接口层（``nacho.api``，可独立 ``pip install "nacho[api]"``）
-不能 import 它们。所以接口层只声明「机器人管理要用到哪些能力」，由装配层注入的实现
-（:class:`nacho.bridge.manager.BotManager`）**结构化满足**——同一套路子见
-:mod:`nacho.api.api.onebot.protocols`。
+增」要起正向 WS 客户端、「Kook 的删」要停客户端——这些是平台包（``nacho.platforms.kook`` /
+``nacho.platforms.bridge.kook``）的活，接口层（``nacho.api``，可独立 ``pip install
+"nacho[api]"``）不能 import 它们。所以接口层只声明「机器人管理要用到哪些能力」，由
+装配层注入的实现（:class:`nacho.platforms.bridge.manager.BotManager`）**结构化满足**——
+同一套路子见 :mod:`nacho.api.api.onebot.protocols`。
 
 记录形状复用 :class:`~nacho.api.api.onebot.protocols.TokenLike` /
 :class:`~nacho.api.api.onebot.protocols.IssuedLike`：一条凭证「不含明文」是跨平台的，
@@ -20,7 +20,7 @@ from ..onebot.protocols import IssuedLike, TokenLike
 
 
 class OnlineBot(Protocol):
-    """在线客户端快照里的**那一格**（跨平台归一口径，对应 :class:`nacho.bridge.models.BotClient`）。
+    """在线客户端快照里的**那一格**（跨平台归一口径，对应 :class:`nacho.platforms.bridge.models.BotClient`）。
 
     ``self_id`` 统一是字符串（OneBot 的整数号在适配器里已转字符串；Kook 本来就是字符串），
     没学到机器人号时是空串。

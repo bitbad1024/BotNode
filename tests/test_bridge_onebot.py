@@ -19,10 +19,10 @@ pytest.importorskip("websockets", reason="OneBot 接入层要装 websockets：pi
 
 from websockets.asyncio.client import connect
 
-from nacho.bridge import Gateway
-from nacho.bridge.models import PlatformEvent
-from nacho.bridge.onebot import OneBotAdapter
-from nacho.onebot import OneBotOptions
+from nacho.platforms.bridge import Gateway
+from nacho.platforms.bridge.models import PlatformEvent
+from nacho.platforms.bridge.onebot import OneBotAdapter
+from nacho.platforms.onebot import OneBotOptions
 
 #: 一条私聊消息事件（同 test_onebot.py 的形状）
 PRIVATE_MESSAGE: dict[str, object] = {
@@ -281,7 +281,7 @@ class _StubConn:
 
 def test_translate_unknown_event_type_raises() -> None:
     """翻译穷举不了的事件类型：当场 TypeError，绝不静默归成 meta（-O 下 assert 会被剥）。"""
-    from nacho.bridge.onebot import _translate
+    from nacho.platforms.bridge.onebot import _translate
 
     with pytest.raises(TypeError, match="未认识"):
         _translate(_StubConn(), _UnknownEvent())  # type: ignore[arg-type]

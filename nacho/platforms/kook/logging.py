@@ -3,7 +3,7 @@
 接的是 ``nacho.core.logger`` 那套进程门面，用名字 ``kook``（相对核心 ``nacho`` ->
 ``nacho.kook``）::
 
-    from nacho.kook import kook_logger
+    from nacho.platforms.kook import kook_logger
 
     kook_logger().info("已连接网关", gateway="wss://www.kookapp.cn/gateway")
 

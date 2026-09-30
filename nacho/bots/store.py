@@ -37,7 +37,7 @@ from .models import BotCredential, BotPlatform
 def hash_token(token: str) -> str:
     """令牌 / Bot Token 摘要（sha256 十六进制）：**库里只存这个**。
 
-    同 :func:`nacho.onebot.tokens.hash_token`：令牌是随机串、熵足够高，不用慢哈希；
+    同 :func:`nacho.platforms.onebot.tokens.hash_token`：令牌是随机串、熵足够高，不用慢哈希；
     sha256 确定性，能 ``WHERE token_hash = ?`` 命中唯一索引。
     """
     return hashlib.sha256(token.encode("utf-8")).hexdigest()

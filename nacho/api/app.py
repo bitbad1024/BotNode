@@ -15,12 +15,12 @@
 不传 ``hasher`` 就走默认实现；没传 ``db`` 时给它们挂一块**内存 sqlite**（启动时建表 +
 空表种演示账号），所以 **不接数据库也能直接跑起来**。
 
-``onebot`` 同样是可选的：主程序把 :class:`nacho.onebot.OneBotServer` 传进来，
+``onebot`` 同样是可选的：主程序把 :class:`nacho.platforms.onebot.OneBotServer` 传进来，
 ``<prefix>/onebot/*`` 那组管理接口才有用；没传就回 503（「没接入」和「出错了」分开报）。
 这里按 :class:`~nacho.api.api.onebot.protocols.OneBotLike` 协议接收，所以 **接口层不 import
-``nacho.onebot``** —— 只装 ``nacho[api]`` 也能跑起来（具体说明见那个模块）。
+``nacho.platforms.onebot``** —— 只装 ``nacho[api]`` 也能跑起来（具体说明见那个模块）。
 
-``bots`` 同样是可选的：主程序把 :class:`nacho.bridge.manager.BotManager` 传进来，
+``bots`` 同样是可选的：主程序把 :class:`nacho.platforms.bridge.manager.BotManager` 传进来，
 ``<prefix>/bots/*`` 那组管理接口（跨平台增 / 启停 / 删）才有用；没传就回 503。这里按
 :class:`~nacho.api.api.bots.protocols.BotsService` 协议接收，所以接口层不 import 任何平台包。
 
@@ -91,12 +91,12 @@ def create_app(
     :param workflow_store: 工作流存储（默认实现 ``nacho.workflow.SqlWorkflowStore``，这里只认
         :class:`~nacho.api.api.workflow.protocols.WorkflowStoreLike` 那份能力协议）；传了
         ``<prefix>/workflows/*`` 那组接口才可用，没传时这些接口回 503；
-    :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``，只认 ``OneBotLike`` 协议）；
-        传了 ``<prefix>/onebot/*`` 那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，
+    :param onebot: OneBot 服务端（``nacho.platforms.onebot.OneBotServer``，只认 ``OneBotLike``
+        协议）；传了 ``<prefix>/onebot/*`` 那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，
         没传时这些接口回 503；
-    :param bots: 机器人管理服务（``nacho.bridge.manager.BotManager``，只认 ``BotsService``
-        协议）；传了 ``<prefix>/bots/*`` 那组管理接口（跨平台增 / 启停 / 删）才可用，
-        没传时这些接口回 503；
+    :param bots: 机器人管理服务（``nacho.platforms.bridge.manager.BotManager``，只认
+        ``BotsService`` 协议）；传了 ``<prefix>/bots/*`` 那组管理接口（跨平台增 / 启停 / 删）
+        才可用，没传时这些接口回 503；
     :param workflow_triggers: 工作流的运行时触发器（只认
         :class:`~nacho.api.api.workflow.protocols.WorkflowTriggerLike`）；传了以后拨运行开关
         **即时启停**，没传时开关只落库、效果等下次启动载入（主程序会传，见 ``nacho.bootstrap``）；

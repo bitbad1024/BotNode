@@ -1,6 +1,6 @@
-"""Kook 适配器：把 :class:`~nacho.kook.KookClient` 包成第二个 ``BotAdapter``（**多客户端**）。
+"""Kook 适配器：把 :class:`~nacho.platforms.kook.KookClient` 包成第二个 ``BotAdapter``（**多客户端**）。
 
-这是 bridge 里**第二个**允许 import 平台包的地方（第一个是 :mod:`nacho.bridge.onebot`），
+这是 bridge 里**第二个**允许 import 平台包的地方（第一个是 :mod:`nacho.platforms.bridge.onebot`），
 用来验证 P2 定的 ``BotAdapter`` 协议是不是「真通用」——OneBot 是反向 WS（框架当服务端），
 Kook 是正向 WS（框架当客户端），方向相反，但两边都要能塞进同一个 :class:`Gateway`。
 
@@ -14,17 +14,17 @@ Kook 是正向 WS（框架当客户端），方向相反，但两边都要能塞
   的 ``chat``，``target_id`` -> ``chat_id``，``author_id`` -> ``user_id``，``content`` ->
   ``text``，身份全是字符串（与 OneBot 的整数不同，但规范化后字符串口径正好统一）；
 * **能力转述**：``clients()`` 列出各在线机器人（一行一个），``send`` 走 REST
-  （:meth:`KookClient.call`），回执翻译成 :class:`~nacho.bridge.models.ActionResult`。
+  （:meth:`KookClient.call`），回执翻译成 :class:`~nacho.platforms.bridge.models.ActionResult`。
 
-不 import ``nacho.onebot`` / ``nacho.api`` / ``nacho.workflow`` —— 只依赖 ``nacho.core``
-（logger）与 ``nacho.kook`` 平台包。
+不 import ``nacho.platforms.onebot`` / ``nacho.api`` / ``nacho.workflow`` —— 只依赖
+``nacho.core``（logger）与 ``nacho.platforms.kook`` 平台包。
 """
 from __future__ import annotations
 
 import asyncio
 
 from nacho.core.logger import BaseLogger, get_logger
-from nacho.kook import KookActionResponse, KookClient, KookEvent, KookOptions
+from nacho.platforms.kook import KookActionResponse, KookClient, KookEvent, KookOptions
 
 from .gateway import EventSubscriber
 from .models import ActionResult, BotClient, PlatformEvent

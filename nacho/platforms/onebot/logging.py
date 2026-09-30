@@ -2,7 +2,7 @@
 
 接的是 ``nacho.core.logger`` 那套进程门面，用名字 ``onebot``（相对核心 ``nacho`` -> ``nacho.onebot``）::
 
-    from nacho.onebot import onebot_logger
+    from nacho.platforms.onebot import onebot_logger
 
     onebot_logger().info("收到事件", post_type="message")
 
