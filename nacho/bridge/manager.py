@@ -148,4 +148,6 @@ class BotManager:
             raise ValueError(
                 f"Kook 机器人 {bot_id} 的 Bot Token 解不出来（secret_key 对不对？）"
             )
-        self._kook.add_bot(bot_id, token)
+        record = await self._store.get_by_id(bot_id)
+        owner_id = record.owner_id if record is not None else ""
+        self._kook.add_bot(bot_id, token, owner_id=owner_id)

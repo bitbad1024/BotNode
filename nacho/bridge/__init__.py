@@ -48,7 +48,7 @@
     gateway.register(OneBotAdapter(options, publish=gateway.publish, tokens=store))  # store: SqlBotStore（凭证行）
     kook = KookAdapter(kook_options, publish=gateway.publish)
     for cred in await store.list_platform("kook", enabled_only=True):   # 读 Kook 凭证行
-        kook.add_bot(cred.bot_id, await store.decrypt_token(cred.bot_id, secret_key))
+        kook.add_bot(cred.bot_id, await store.decrypt_token(cred.bot_id, secret_key), owner_id=cred.owner_id)
     gateway.register(kook)
     manager = BotManager(store, onebot=onebot, kook=kook, secret_key=secret_key)  # /api/bots/* 的 BotsService
     gateway.subscribe(on_platform_event)   # 业务只认规范化事件，不认平台

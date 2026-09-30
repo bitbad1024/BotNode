@@ -33,8 +33,12 @@ from .models import ActionResult, BotClient, PlatformEvent
 PLATFORM = "kook"
 
 
-def _translate(event: KookEvent) -> PlatformEvent:
-    """一条 Kook 事件 -> 规范化事件（身份转字符串，翻译不了的字段挂 ``raw`` 兜底）。"""
+def _translate(event: KookEvent, *, owner_id: str = "") -> PlatformEvent:
+    """一条 Kook 事件 -> 规范化事件（身份转字符串，翻译不了的字段挂 ``raw`` 兜底）。
+
+    ``owner_id`` 由适配器按 bot 的归属（凭证行 ``owner_id``）注入：这是「谁的机器人」，
+    与 OneBot 的口径一致（框架归属用户 id）；``self_id`` 才是机器人平台账号。两者语义分开。
+    """
     # Kook 的 channel_type：GROUP / PERSON / BROADCAST；只有前两者有明确会话指向
     channel_type = (event.channel_type or "").upper()
     if channel_type == "GROUP":
@@ -49,7 +53,7 @@ def _translate(event: KookEvent) -> PlatformEvent:
 
     return PlatformEvent(
         platform=PLATFORM,
-        owner_id=event.self_id or "",  # 归属 = 机器人自身（Kook 无「多归属」概念）
+        owner_id=owner_id,  # 归属 = 框架用户（凭证行 owner_id，与 OneBot 同口径）
         self_id=event.self_id or "",
         kind="message",
         chat=chat,
@@ -103,6 +107,8 @@ class KookAdapter:
         self._started: set[str] = set()
         #: 机器人号 -> bot_id 反查，供 ``send`` 在「按 self_id 路由」时定位客户端
         self._by_self: dict[str, str] = {}
+        #: bot_id -> 归属用户（凭证行 owner_id）：事件 / 在线列表的 owner 口径
+        self._owners: dict[str, str] = {}
         #: 收尾标志（serve_forever 的退出条件）
         self._stopping: bool = False
 
@@ -114,10 +120,11 @@ class KookAdapter:
         """这个机器人有没有客户端登记在册。"""
         return bot_id in self._clients
 
-    def add_bot(self, bot_id: str, token: str) -> None:
+    def add_bot(self, bot_id: str, token: str, *, owner_id: str = "") -> None:
         """登记一个机器人（建 ``KookClient``），**不**连接；连接走 ``start_bot`` / ``start``。
 
-        幂等：已经登记过就什么都不做。
+        ``owner_id`` 是这个机器人属于哪个框架用户（凭证行 owner_id）；没凭证行的兼容路径
+        传空串。幂等：已经登记过就什么都不做。
         """
         if bot_id in self._clients:
             return
@@ -127,6 +134,7 @@ class KookAdapter:
             logger=self._log,
         )
         self._clients[bot_id] = client
+        self._owners[bot_id] = owner_id
 
     async def start_bot(self, bot_id: str) -> None:
         """起一个机器人的连接（幂等：起过的跳过）。"""
@@ -148,6 +156,7 @@ class KookAdapter:
         client = self._clients.pop(bot_id, None)
         self._started.discard(bot_id)
         self._by_self = {self_id: bid for self_id, bid in self._by_self.items() if bid != bot_id}
+        self._owners.pop(bot_id, None)
         if client is not None:
             await client.stop()
 
@@ -173,7 +182,7 @@ class KookAdapter:
                 target_id=event.target_id,
             )
             return
-        await publish(_translate(event))
+        await publish(_translate(event, owner_id=self._owners.get(bot_id, "")))
 
     # ------------------------------------------------------------------ BotAdapter 协议
     async def start(self) -> None:
@@ -196,7 +205,7 @@ class KookAdapter:
             await asyncio.sleep(0.1)
 
     def clients(self, *, owner_id: str | None = None) -> tuple[BotClient, ...]:
-        """在线列表快照：每个连上的机器人一行（归属 = bot_id），没连上是空。
+        """在线列表快照：每个连上的机器人一行（归属 = 框架用户），没连上是空。
 
         「连没连」由客户端自己交代（``connected``），不靠 self_id —— 机器人刚连上、
         还没收到第一条事件（self_id 未学到）时，连接也是活的，该列出来。
@@ -210,7 +219,7 @@ class KookAdapter:
             rows.append(
                 BotClient(
                     client_id=client.self_id or bot_id,
-                    owner_id=bot_id,
+                    owner_id=self._owners.get(bot_id, ""),
                     account="",
                     self_id=client.self_id,
                     remote="",

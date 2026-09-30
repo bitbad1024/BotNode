@@ -212,10 +212,11 @@ async def run(
             if not bot_token:
                 log.warning("Kook 凭证行解密失败，跳过登记", bot_id=cred.bot_id)
                 continue
-            _kook_adapter.add_bot(cred.bot_id, bot_token)
+            _kook_adapter.add_bot(cred.bot_id, bot_token, owner_id=cred.owner_id)
         # 兼容路径：[kook].token 配了但没走凭证行（旧部署）时，仍按原样接一个
         if kook_options.token and not kook_credentials:
-            _kook_adapter.add_bot("kook:config", kook_options.token)
+            # 兼容路径无凭证行 -> 无归属（owner_id 留空串）：事件 owner 为空，消息触发不路由
+            _kook_adapter.add_bot("kook:config", kook_options.token, owner_id="")
         _gateway.register(_kook_adapter)
 
     # 机器人管理服务：跨平台统一「增 / 启停 / 删」，凭证落库 + 适配器生命周期一起封在
