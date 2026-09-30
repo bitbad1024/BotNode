@@ -468,6 +468,9 @@ class KookSettings(_Region):
     heartbeat_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     reconnect_interval: float = Field(default=3.0, gt=0, description="大于 0 的秒数")
+    reconnect_max_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    rest_min_interval: float = Field(default=0.2, gt=0, description="大于 0 的秒数")
+    rest_max_retries: int = Field(default=3, ge=0, description="不小于 0 的次数")
 
 
 # --------------------------------------------------------------------------- 整份设置

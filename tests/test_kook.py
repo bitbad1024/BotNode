@@ -27,7 +27,7 @@ from nacho.kook import (  # noqa: E402
     parse_action_response,
     parse_event,
 )
-from nacho.kook.client import _action_path  # noqa: E402
+from nacho.kook.client import _action_path, _reconnect_delay  # noqa: E402
 
 
 def free_port() -> int:
@@ -48,12 +48,74 @@ async def wait_until(predicate, timeout: float = 3.0) -> bool:  # type: ignore[n
     return predicate()
 
 
+class _FakeResponse:
+    """假的 http.client 响应：有 status / read() / close()。"""
+
+    def __init__(self, status: int, payload: object) -> None:
+        self.status = status
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeConnection:
+    """假的 ``http.client.HTTPSConnection``：记录请求，按共享计数给脚本响应。
+
+    ``script`` 收 ``(n, ...)`` -> ``(status, payload)``：n 是共享计数里的第几次请求
+    （跨重试共享，因为 429 / 连接错误会丢连接重建，计数不能挂在单条连接上）。
+    """
+
+    def __init__(
+        self,
+        host: str,
+        *,
+        timeout: float,
+        script=None,
+        captured: dict[str, object] | None = None,
+        counter: dict[str, int] | None = None,
+    ) -> None:
+        self._host = host
+        self._timeout = timeout
+        self._script = script or (
+            lambda n: (200, {"code": 0, "message": "success", "data": {}})
+        )
+        self._captured = captured
+        self._counter = counter
+
+    def request(self, method: str, url: str, body: object = None, headers: object = None) -> None:
+        if self._captured is not None:
+            self._captured["host"] = self._host
+            self._captured["timeout"] = self._timeout
+            self._captured["method"] = method
+            self._captured["target"] = url
+            self._captured["headers"] = dict(headers or {})
+            if body is not None:
+                self._captured["body"] = json.loads((body or b"").decode("utf-8"))
+        if self._counter is not None:
+            self._counter["n"] = self._counter.get("n", 0) + 1
+
+    def getresponse(self) -> _FakeResponse:
+        n = self._counter.get("n", 1) if self._counter is not None else 1
+        status, payload = self._script(n)
+        return _FakeResponse(status, payload)
+
+    def close(self) -> None:
+        pass
+
+
 # --------------------------------------------------------------------------- 选项
 def test_options_defaults_and_from_mapping() -> None:
     """缺省值齐全；from_mapping 认的键填进去、多余的键忽略。"""
     options = KookOptions()
     assert options.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
     assert options.token == ""
+    assert options.reconnect_max_interval == 30.0
+    assert options.rest_min_interval == 0.2
+    assert options.rest_max_retries == 3
 
     options = KookOptions.from_mapping(
         {"gateway": "wss://x/y", "token": "abc", "heartbeat_interval": 10, "不认的键": 1}
@@ -62,6 +124,7 @@ def test_options_defaults_and_from_mapping() -> None:
     assert options.token == "abc"
     assert options.heartbeat_interval == 10
     assert options.action_timeout == 30.0  # 没给的回默认
+    assert options.reconnect_max_interval == 30.0  # 新字段没给也回默认
 
 
 # --------------------------------------------------------------------------- 事件解析
@@ -81,8 +144,8 @@ def test_parse_event_and_action_response() -> None:
     assert isinstance(event, KookEvent)
     assert event.target_id == "ch-123" and event.author_id == "u-456"
     assert event.content == "你好"
-    # 额外字段照单收下（extra="allow"）
-    assert "extra" in event.model_extra or "extra" in event.model_fields_set
+    # 额外字段照单收下（extra="allow"）：extra 没声明，原样进 model_extra
+    assert event.model_extra["extra"] == {"k": "v"}
 
     ok = parse_action_response({"code": 0, "message": "success", "data": {"msg_id": "m1"}})
     assert ok.ok is True
@@ -181,36 +244,17 @@ async def test_client_call_posts_to_rest(monkeypatch: pytest.MonkeyPatch) -> Non
     client = KookClient(KookOptions(token="abc"))
     captured: dict[str, object] = {}
 
-    class _FakeResp:
-        """假的 urlopen 响应：支持上下文管理器 + read()。"""
+    def fake_conn(host: str, *, timeout: float) -> _FakeConnection:
+        return _FakeConnection(host, timeout=timeout, captured=captured)
 
-        def __init__(self, payload: object) -> None:
-            self._payload = json.dumps(payload).encode("utf-8")
-
-        def __enter__(self) -> _FakeResp:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        def read(self) -> bytes:
-            return self._payload
-
-    def fake_post(req, timeout: float) -> _FakeResp:
-        captured["url"] = req.full_url
-        captured["method"] = req.method
-        captured["timeout"] = timeout
-        captured["headers"] = dict(req.headers)
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        return _FakeResp({"code": 0, "message": "success", "data": {"msg_id": "m-1"}})
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_post)
+    monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
 
     response: KookActionResponse = await client.call(
         "send_channel_msg", target_id="ch-1", content="你好"
     )
     assert response.ok is True
     assert captured["method"] == "POST"
+    assert captured["host"] == "www.kookapp.cn"
     assert captured["headers"]["Authorization"] == "Bot abc"
     assert captured["body"] == {"target_id": "ch-1", "content": "你好"}
 
@@ -220,32 +264,139 @@ async def test_client_discovers_gateway_via_index(monkeypatch: pytest.MonkeyPatc
     client = KookClient(KookOptions(token="abc"))
     captured: dict[str, object] = {}
 
-    class _FakeResp:
-        def __init__(self, payload: object) -> None:
-            self._payload = json.dumps(payload).encode("utf-8")
-
-        def __enter__(self) -> _FakeResp:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        def read(self) -> bytes:
-            return self._payload
-
-    def fake_get(req, timeout: float) -> _FakeResp:  # type: ignore[no-untyped-def]
-        captured["url"] = req.full_url
-        captured["method"] = req.method
-        captured["headers"] = dict(req.headers)
-        captured["timeout"] = timeout
-        return _FakeResp(
-            {"code": 0, "message": "操作成功", "data": {"url": "wss://gw/kook?token=abc&compress=0"}}
+    def fake_conn(host: str, *, timeout: float) -> _FakeConnection:
+        return _FakeConnection(
+            host,
+            timeout=timeout,
+            captured=captured,
+            script=lambda n: (
+                200,
+                {
+                    "code": 0,
+                    "message": "操作成功",
+                    "data": {"url": "wss://gw/kook?token=abc&compress=0"},
+                },
+            ),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_get)
+    monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
 
     url = await client._discover_gateway()
     assert url == "wss://gw/kook?token=abc&compress=0"
     assert captured["method"] == "GET"
-    assert "gateway/index" in str(captured["url"])
+    assert "gateway/index" in str(captured["target"])
     assert captured["headers"]["Authorization"] == "Bot abc"
+
+async def test_stop_returns_serve_forever_quickly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """stop() 用 Event 唤醒 serve_forever：不等 0.1s 轮询间隔。"""
+
+    async def fake_connect(self) -> None:  # type: ignore[no-untyped-def]
+        await asyncio.sleep(3600)  # 一直"连接中"，直到被 stop 取消
+
+    monkeypatch.setattr(KookClient, "_connect_once", fake_connect)
+    client = KookClient(KookOptions(token="abc"))
+    task = asyncio.create_task(client.serve_forever())
+    await asyncio.sleep(0.05)  # 让 serve_forever 先跑起来
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await client.stop()
+    await task
+    elapsed = loop.time() - t0
+    assert elapsed < 0.1  # 远小于原来的轮询间隔 0.1s
+
+
+def test_reconnect_delay_grows_and_caps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重连退避：连续失败指数增长、封顶上限；计数清零回到基准。"""
+    monkeypatch.setattr("nacho.kook.client._jitter", lambda: 1.0)  # 去掉抖动便于断言
+    options = KookOptions(reconnect_interval=3.0, reconnect_max_interval=30.0)
+    assert _reconnect_delay(options, 0) == 3.0  # 重置 / 刚断开
+    assert _reconnect_delay(options, 1) == 3.0
+    assert _reconnect_delay(options, 2) == 6.0
+    assert _reconnect_delay(options, 3) == 12.0
+    assert _reconnect_delay(options, 5) == 30.0  # 封顶
+    assert _reconnect_delay(options, 10) == 30.0
+
+
+async def test_client_rest_reuses_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连接复用：同一 host 连续请求复用一条连接（不再新开）。"""
+    client = KookClient(KookOptions(token="abc", rest_min_interval=0.0))
+    created: dict[str, int] = {"n": 0}
+
+    def fake_conn(host: str, *, timeout: float) -> _FakeConnection:
+        created["n"] += 1
+        return _FakeConnection(
+            host,
+            timeout=timeout,
+            script=lambda n: (
+                200,
+                {"code": 0, "message": "success", "data": {"msg_id": "m"}},
+            ),
+        )
+
+    monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
+    await client.call("send_channel_msg", target_id="ch-1", content="a")
+    await client.call("send_channel_msg", target_id="ch-1", content="b")
+    assert created["n"] == 1  # 只建了一条连接
+
+
+async def test_client_rest_retries_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    """429 瞬时失败按退避重试，最后成功；重试耗尽按环境问题抛。"""
+    client = KookClient(KookOptions(token="abc", rest_max_retries=2, rest_min_interval=0.0))
+    monkeypatch.setattr("nacho.kook.client._rest_backoff", lambda attempt: 0.0)  # 别真等退避
+    count: dict[str, int] = {"n": 0}
+
+    def script(n: int):
+        if n == 1:
+            return 429, {"code": 40004, "message": "rate limited"}
+        return 200, {"code": 0, "message": "success", "data": {"msg_id": "m-1"}}
+
+    def fake_conn(host: str, *, timeout: float) -> _FakeConnection:
+        return _FakeConnection(host, timeout=timeout, counter=count, script=script)
+
+    monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
+
+    response = await client.call("send_channel_msg", target_id="ch-1", content="hi")
+    assert response.ok is True
+    assert count["n"] == 2  # 第一次 429，第二次成功
+
+    # 全 429：1 次原始 + rest_max_retries 次重试全失败
+    def all_429(n: int):
+        return 429, {"code": 40004, "message": "rate limited"}
+
+    count["n"] = 0
+    monkeypatch.setattr(
+        "http.client.HTTPSConnection",
+        lambda host, *, timeout: _FakeConnection(
+            host, timeout=timeout, counter=count, script=all_429
+        ),
+    )
+    client2 = KookClient(KookOptions(token="abc", rest_max_retries=2, rest_min_interval=0.0))
+    with pytest.raises(ConnectionError, match="多次失败"):
+        await client2.call("send_channel_msg", target_id="ch-1", content="hi")
+    assert count["n"] == 3  # 原始 1 次 + 重试 2 次
+
+
+async def test_client_rest_rate_limits_burst(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连发多个 REST 请求时按最小间隔限流（两次请求至少隔 rest_min_interval）。"""
+    client = KookClient(KookOptions(token="abc", rest_min_interval=0.3))
+    count: dict[str, int] = {"n": 0}
+
+    def fake_conn(host: str, *, timeout: float) -> _FakeConnection:
+        return _FakeConnection(
+            host,
+            timeout=timeout,
+            counter=count,
+            script=lambda n: (200, {"code": 0, "message": "success", "data": {"msg_id": f"m-{n}"}}),
+        )
+
+    monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    results = await asyncio.gather(
+        *[client.call("send_channel_msg", target_id="ch-1", content="hi") for _ in range(3)]
+    )
+    elapsed = loop.time() - t0
+    assert all(r.ok for r in results)
+    assert count["n"] == 3
+    assert elapsed >= 0.6  # 3 次请求至少隔 2 个最小间隔（0.3s * 2）
+

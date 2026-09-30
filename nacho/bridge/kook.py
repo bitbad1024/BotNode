@@ -75,6 +75,9 @@ def _bot_options(template: KookOptions, token: str) -> KookOptions:
         heartbeat_interval=template.heartbeat_interval,
         action_timeout=template.action_timeout,
         reconnect_interval=template.reconnect_interval,
+        reconnect_max_interval=template.reconnect_max_interval,
+        rest_min_interval=template.rest_min_interval,
+        rest_max_retries=template.rest_max_retries,
     )
 
 
@@ -111,6 +114,8 @@ class KookAdapter:
         self._owners: dict[str, str] = {}
         #: 收尾标志（serve_forever 的退出条件）
         self._stopping: bool = False
+        #: 停下来的通知事件（serve_forever 等它，不再轮询）
+        self._stopped: asyncio.Event = asyncio.Event()
 
     #: 平台标识（BotAdapter 协议的路由键）
     platform: str = PLATFORM
@@ -188,12 +193,14 @@ class KookAdapter:
     async def start(self) -> None:
         """起所有已登记机器人的连接（幂等）。"""
         self._stopping = False
+        self._stopped.clear()
         for bot_id in tuple(self._clients):
             await self.start_bot(bot_id)
 
     async def stop(self) -> None:
         """停所有客户端：断开连接、停心跳（幂等）。"""
         self._stopping = True
+        self._stopped.set()
         self._started.clear()
         for client in self._clients.values():
             await client.stop()
@@ -201,8 +208,7 @@ class KookAdapter:
     async def serve_forever(self) -> None:
         """起连接并一直等到被停（bootstrap 主协程的退出条件之一）。"""
         await self.start()
-        while not self._stopping:
-            await asyncio.sleep(0.1)
+        await self._stopped.wait()
 
     def clients(self, *, owner_id: str | None = None) -> tuple[BotClient, ...]:
         """在线列表快照：每个连上的机器人一行（归属 = 框架用户），没连上是空。

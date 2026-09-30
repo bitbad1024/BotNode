@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 
 class _Base(BaseModel):
@@ -48,8 +48,8 @@ class KookEvent(_Base):
     msg_timestamp: int = 0
     #: 机器人自身 id（部分事件带）
     self_id: str = ""
-    #: 事件附带的结构化字段（extra 里的，翻译时要用到就下探这里 / model_extra）
-    extra: Mapping[str, object] = Field(default_factory=dict)
+    #: 事件附带的结构化字段（Kook 报文的 ``extra`` 对象）：没在这里声明，extra="allow"
+    #: 下原样收进 ``model_extra``（键就叫 ``extra``），翻译要用时从 ``model_extra["extra"]`` 下探
 
 
 #: Kook 事件里 `d.type` 的关键取值（文字 / 图片 / 频道消息 / 系统事件）
