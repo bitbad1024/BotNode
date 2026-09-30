@@ -91,11 +91,26 @@ def test_parse_event_and_action_response() -> None:
 
 
 def test_action_path_maps_actions() -> None:
-    """动作名 -> REST 端点路径。"""
+    """动作名 -> REST 端点路径（能力表查出来的，不再兜底到 create）。"""
     assert _action_path("send_channel_msg") == "/message/create"
     assert _action_path("send_dm_msg") == "/message/create"
     assert _action_path("delete_msg") == "/message/delete"
-    assert _action_path("未知动作") == "/message/create"  # 兜底走 create
+    with pytest.raises(ValueError, match="不在注册表"):
+        _action_path("未知动作")  # 拼错动作名当场抛，不兜底
+
+
+async def test_client_call_rejects_bad_action_and_params() -> None:
+    """动作层不裸传：动作名拼错 / 缺必填 / 多传未知参数都当场抛（能力表拦下）。"""
+    client = KookClient(KookOptions(token="abc"))
+
+    with pytest.raises(ValueError, match="不在注册表"):
+        await client.call("send_channel_msg_tpyo", target_id="ch-1", content="hi")
+
+    with pytest.raises(ValueError, match="缺必填参数"):
+        await client.call("send_channel_msg", target_id="ch-1")  # 缺 content
+
+    with pytest.raises(ValueError, match="不认识的参数"):
+        await client.call("send_channel_msg", target_id="ch-1", content="hi", extra="x")
 
 
 # --------------------------------------------------------------------------- 连网关收事件

@@ -303,12 +303,21 @@ class KookClient:
         ``action`` 是 Kook 的 REST 动作名（如 ``send_channel_msg``），由适配器映射到具体端点；
         本层只负责「带凭证 POST 到 REST、把回应解析成 :class:`KookActionResponse`」。
 
+        :raises ValueError: 动作不在注册表 / 缺必填参数 / 有不认识的参数（能力表拦下）；
         :raises ConnectionError: 没配 Token / 网络失败等环境问题。
         """
         token = self._options.token
         if not token:
             raise ConnectionError("[kook] 未配置 Bot Token，无法发动作")
-        path = _action_path(action)
+        # 动作级校验：先查能力表（动作名拼错当场炸），再验参数（必填缺失 / 未知参数都拦下）
+        spec = _action_spec(action)
+        missing = [name for name in spec.required if name not in params]
+        if missing:
+            raise ValueError(f"[kook] 动作 {action!r} 缺必填参数：{'、'.join(missing)}")
+        unknown = [name for name in params if name not in spec.required and name not in spec.optional]
+        if unknown:
+            raise ValueError(f"[kook] 动作 {action!r} 有不认识的参数：{'、'.join(unknown)}")
+        path = spec.endpoint
         url = _api_url(self._options, path)
         body = json.dumps(params, ensure_ascii=False).encode("utf-8")
         headers = {
@@ -328,10 +337,48 @@ class KookClient:
         return parse_action_response(payload)
 
 
+class KookAction:
+    """一个 Kook REST 动作的「能力表面」：端点 + 参数契约。
+
+    端点（``endpoint``）是发到 Kook REST 的路径；参数分**必填**（``required``，缺了
+    当场抛）与**可选**（``optional``，预留：Kook 的 create 端点还有 target_type / type
+    一类可选字段，将来要用就在这里声明）。加动作 = 在这里加一行，``call`` / ``_action_path``
+    都不用改。
+    """
+
+    __slots__ = ("name", "endpoint", "required", "optional")
+
+    def __init__(
+        self,
+        name: str,
+        endpoint: str,
+        required: tuple[str, ...],
+        optional: tuple[str, ...] = (),
+    ) -> None:
+        self.name: str = name
+        self.endpoint: str = endpoint
+        self.required: tuple[str, ...] = required
+        self.optional: tuple[str, ...] = optional
+
+
+#: 动作注册表（能力表面）：动作名 -> 端点 + 参数契约
+KOOK_ACTIONS: dict[str, KookAction] = {
+    "send_channel_msg": KookAction("send_channel_msg", "/message/create", ("target_id", "content")),
+    "send_dm_msg": KookAction("send_dm_msg", "/message/create", ("target_id", "content")),
+    "delete_msg": KookAction("delete_msg", "/message/delete", ("msg_id",)),
+}
+
+
+def _action_spec(action: str) -> KookAction:
+    """按动作名取能力表；不认识的动作**当场抛**（拼错动作名调用时就炸，不兜底到 create）。"""
+    spec = KOOK_ACTIONS.get(action)
+    if spec is None:
+        raise ValueError(
+            f"[kook] 动作 {action!r} 不在注册表里（可选：{'、'.join(KOOK_ACTIONS)}）"
+        )
+    return spec
+
+
 def _action_path(action: str) -> str:
-    """动作名 -> Kook REST 端点路径（发消息类都走 message/create，删除走 message/delete）。"""
-    return {
-        "send_channel_msg": "/message/create",
-        "send_dm_msg": "/message/create",
-        "delete_msg": "/message/delete",
-    }.get(action, "/message/create")
+    """动作名 -> Kook REST 端点路径（查能力表；不认识的动作当场抛）。"""
+    return _action_spec(action).endpoint
