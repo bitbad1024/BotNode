@@ -40,7 +40,7 @@
 from __future__ import annotations
 
 from .base import BaseLogger
-from .models import Target
+from .models import LogLevel, Target
 from .processors.base import BaseLogProcessor
 
 #: 进程默认核心实例，由 :func:`default_core` 懒创建
@@ -83,6 +83,7 @@ def mount_module(
     processor: "Target | BaseLogProcessor",
     *,
     core: LogCore | None = None,
+    level: "LogLevel | str | None" = None,
 ) -> None:
     """给一个模块单独定去处：发布一条具名路由（名字**相对默认核心**）。
 
@@ -92,6 +93,12 @@ def mount_module(
     :param name: 模块名字，``"module_a"`` 即 ``"nacho.module_a"``（写全名也行）。
     :param processor: 这条路的出口。
     :param core: 挂到哪个核心；默认进程默认核心，见 :func:`default_core`。
+    :param level: 出口级最低级别（落在 ``Target.level``，与 :meth:`mount` 同语义），
+        低于它的记录直接跳过；``None`` = 全收。已传 :class:`Target` 则用自己的
+        ``level``。
     """
     target: LogCore = core if core is not None else default_core()
-    target.route(name, targets=[processor])
+    outlet: Target = (
+        processor if isinstance(processor, Target) else Target(processor, level=level)
+    )
+    target.route(name, targets=[outlet])

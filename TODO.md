@@ -32,7 +32,7 @@
 - [x] `BoundLogger` 保持无 `child`（类型分离，现有已满足，仅文档确认）
 
 ### 4. core.py
-- [ ] `mount_module(name, processor, *, core=None, level=None)`：`level` 透传给 `route`
+- [x] `mount_module(name, processor, *, core=None, level=None)`：`level` 透传给 `route`
 
 ### 5. manager.py
 - [ ] `configure` docstring 注明 `processors` 可传 `Target`（携带 `level`）；签名不变
