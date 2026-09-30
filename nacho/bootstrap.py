@@ -32,6 +32,7 @@ from .api import (
 from .bots import SqlBotStore
 from .bridge import Gateway, PlatformEvent
 from .bridge.kook import KookAdapter
+from .bridge.manager import BotManager
 from .bridge.onebot import OneBotAdapter
 from .core.cache import CacheOptions, cache
 from .core.logger import BaseLogger, get_logger, manager
@@ -56,7 +57,7 @@ _db_engine: AsyncEngine | None = None
 _gateway: Gateway | None = None
 #: OneBot 适配器（包着反向 WS 服务端）；主协程停在它的 serve_forever 上
 _onebot_adapter: OneBotAdapter | None = None
-#: Kook 适配器（包着正向 WS 客户端）；配了 [kook].token 才建，否则 None
+#: Kook 适配器（包着正向 WS 客户端）；配了 [kook].secret_key 或 [kook].token 才建，否则 None
 _kook_adapter: KookAdapter | None = None
 #: 消息路由（trigger=message 工作流的登记处 / 消息分发处）；载入时一并登记
 _message_router: MessageRouter | None = None
@@ -190,13 +191,51 @@ async def run(
     )
     _gateway.register(_onebot_adapter)
 
-    # Kook 适配器（正向 WS 客户端）：配了 Bot Token 才接入 —— 第二个适配器，验证
-    # BotAdapter 协议对「方向相反」的平台也通用。没配 token 就跳过（不建适配器）。
-    if kook is not None:
-        kook_options = KookOptions.from_mapping(kook)
-        if kook_options.token:
-            _kook_adapter = KookAdapter(kook_options, publish=_gateway.publish)
-            _gateway.register(_kook_adapter)
+    # Kook 适配器（正向 WS 客户端，**多客户端**）：**一个**适配器管多个机器人
+    # （dict[bot_id, client]），Gateway 里 Kook 只占一个 platform 槽位，之后经 /api/bots
+    # 增删 Kook 机器人也不会撞「同平台重复注册」的限制。凭证行来自 bot_credentials
+    # （platform=kook 且启用），Bot Token 从 token_secret 解密出来逐个 ``add_bot``；
+    # [kook].token 配了且没入库（旧部署）则作为**兼容路径**追加一个合成机器人。
+    # secret_key 配了就算「接入了 Kook」，适配器照建（哪怕此刻一个机器人都没有）——
+    # 这样之后经接口新增 Kook 机器人能立刻拉起连接。
+    kook_options = KookOptions.from_mapping(kook) if kook is not None else KookOptions()
+    secret_key: str = kook_options.secret_key
+    _kook_adapter = None
+    if secret_key or kook_options.token:
+        _kook_adapter = KookAdapter(kook_options, publish=_gateway.publish)
+        kook_credentials = await tokens.list_platform("kook", enabled_only=True)
+        for cred in kook_credentials:
+            if not secret_key:
+                log.warning("Kook 凭证行存在但没配 secret_key，跳过登记", bot_id=cred.bot_id)
+                continue
+            try:
+                bot_token = await tokens.decrypt_token(cred.bot_id, secret_key)
+            except ValueError as exc:
+                # 有密文但解不开：几乎都是 secret_key 配错——明说，别让用户只看到「机器人起不来」
+                log.error(
+                    "Kook 凭证行解不开（secret_key 不对或密文损坏），跳过登记",
+                    bot_id=cred.bot_id,
+                    error=str(exc),
+                )
+                continue
+            if not bot_token:
+                log.warning("Kook 凭证行没有密文，跳过登记", bot_id=cred.bot_id)
+                continue
+            _kook_adapter.add_bot(cred.bot_id, bot_token, owner_id=cred.owner_id)
+        # 兼容路径：[kook].token 配了但没走凭证行（旧部署）时，仍按原样接一个
+        if kook_options.token and not kook_credentials:
+            # 兼容路径无凭证行 -> 无归属（owner_id 留空串）：事件 owner 为空，消息触发不路由
+            _kook_adapter.add_bot("kook:config", kook_options.token, owner_id="")
+        _gateway.register(_kook_adapter)
+
+    # 机器人管理服务：跨平台统一「增 / 启停 / 删」，凭证落库 + 适配器生命周期一起封在
+    # BotManager 里，接口层只认 BotsService 协议（platform 差异不进接口层）。
+    bot_manager = BotManager(
+        tokens,
+        onebot=_onebot_adapter,
+        kook=_kook_adapter,
+        secret_key=secret_key,
+    )
 
     # 消息路由：trigger=message 工作流的登记处 + 消息分发处。它不 import bridge，只认普通
     # 数据；「跑整条流程」的回调在这里把 run_published_workflow 连同 store / scheduler 闭包
@@ -227,6 +266,8 @@ async def run(
                 # 注入的是适配器（兼容面满足接口层的 OneBotLike 协议：roster / kick /
                 # revoke / tokens 都透传给被包的服务端），<prefix>/onebot/* 那组管理接口零改动
                 onebot=_onebot_adapter,
+                # 机器人管理服务（跨平台增 / 启停 / 删）：<prefix>/bots/* 那组接口用它
+                bots=bot_manager,
                 # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）；
                 # 带上 OneBot 适配器：onebot 节点要对归属连接发动作（登记构造的到点闭包也带）
                 workflow_triggers=WorkflowTriggers(

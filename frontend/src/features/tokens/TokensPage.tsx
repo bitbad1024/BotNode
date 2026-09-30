@@ -60,8 +60,8 @@ function formatDuration(seconds: number): string {
 
 function describe(err: unknown): string {
   if (err instanceof ApiRequestError) {
-    // 503 = 主程序没把 OneBot 服务传给 create_app；说清楚比甩一个状态码有用
-    if (err.status === 503) return 'OneBot 未接入（主程序没有传入服务）'
+    // 503 的成因不唯一：可能是机器人管理没接入（main 没传 bots 服务），也可能
+    // 是 Kook 没配 secret_key 这类「服务端没就绪」——具体是哪一种交给后端说，别写死。
     return err.message
   }
   return '请求失败'
@@ -79,6 +79,7 @@ export default function TokensPage() {
   const [platform, setPlatform] = useState('onebot')
   const [account, setAccount] = useState('')
   const [remark, setRemark] = useState('')
+  const [token, setToken] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [issued, setIssued] = useState<IssuedBot | null>(null)
   // 「添加机器人」弹窗是否打开（签发表单从顶部面板移到了弹窗里）
@@ -142,11 +143,12 @@ export default function TokensPage() {
     event.preventDefault()
     setSubmitting(true)
     try {
-      const { data } = await addBot(platform, account.trim(), remark.trim())
+      const { data } = await addBot(platform, account.trim(), remark.trim(), token.trim())
       setIssued(data)
       setAccount('')
       setRemark('')
-      pushToast('success', '机器人已添加，请立即保存明文')
+      setToken('')
+      pushToast('success', platform === 'kook' ? 'Kook 机器人已添加' : '机器人已添加，请立即保存明文')
       await load()
     } catch (err) {
       pushToast('error', describe(err))
@@ -317,11 +319,25 @@ export default function TokensPage() {
                 onChange={(e) => setPlatform(e.target.value)}
               >
                 <option value="onebot">OneBot（反向 WS）</option>
-                <option value="kook" disabled>
-                  Kook（正向 WS，即将开放）
-                </option>
+                <option value="kook">Kook（正向 WS）</option>
               </select>
             </div>
+            {platform === 'kook' && (
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="kook-token">
+                  Bot Token
+                </label>
+                <input
+                  id="kook-token"
+                  className={styles.input}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="Kook 开放平台签发的 Bot Token（连接鉴权用）"
+                  maxLength={255}
+                  autoFocus
+                />
+              </div>
+            )}
             <div className={styles.field}>
               <label className={styles.label} htmlFor="token-account">
                 机器人账号（可选）
@@ -331,9 +347,13 @@ export default function TokensPage() {
                 className={styles.input}
                 value={account}
                 onChange={(e) => setAccount(e.target.value)}
-                placeholder="接入 WS 的那个 OneBot 账号（只用来展示）"
+                placeholder={
+                  platform === 'kook'
+                    ? 'Bot 名（只用来展示）'
+                    : '接入 WS 的那个 OneBot 账号（只用来展示）'
+                }
                 maxLength={64}
-                autoFocus
+                autoFocus={platform !== 'kook'}
               />
             </div>
             <div className={styles.field}>
@@ -351,25 +371,30 @@ export default function TokensPage() {
             </div>
             <button className="btn btn-primary" type="submit" disabled={submitting}>
               <IconPlus size={15} />
-              {submitting ? '签发中…' : '签发'}
+              {submitting ? '处理中…' : platform === 'kook' ? '添加' : '签发'}
             </button>
           </form>
           {issued && (
             <div className={styles.issued}>
               <div className={styles.issuedHead}>
                 <IconKey size={16} />
-                令牌已签发给「{issued.record.nickname || issued.record.id}」——明文只显示这一次
+                {issued.record.platform === 'kook'
+                  ? `Kook 机器人「${issued.record.nickname || issued.record.id}」已添加`
+                  : `令牌已签发给「${issued.record.nickname || issued.record.id}」——明文只显示这一次`}
               </div>
-              <div className={styles.issuedRow}>
-                <code className={styles.issuedText}>{issued.token}</code>
-                <button className="btn" onClick={() => void copy(issued.token)}>
-                  <IconCopy size={15} />
-                  复制
-                </button>
-              </div>
+              {issued.record.platform !== 'kook' && (
+                <div className={styles.issuedRow}>
+                  <code className={styles.issuedText}>{issued.token}</code>
+                  <button className="btn" onClick={() => void copy(issued.token)}>
+                    <IconCopy size={15} />
+                    复制
+                  </button>
+                </div>
+              )}
               <div className={styles.issuedHint}>
-                关掉这条提示就拿不回来了（库里只存摘要）。把明文配到 OneBot 实现的反向 WS
-                地址上，它连进来就归到这个账号下。
+                {issued.record.platform === 'kook'
+                  ? 'Bot Token 已加密保存，机器人会立刻连上 Kook 网关。'
+                  : '关掉这条提示就拿不回来了（库里只存摘要）。把明文配到 OneBot 实现的反向 WS 地址上，它连进来就归到这个账号下。'}
               </div>
             </div>
           )}

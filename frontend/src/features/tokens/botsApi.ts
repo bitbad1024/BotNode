@@ -11,9 +11,9 @@ export interface BotClient {
   nickname: string
   /** 接入 WS 的那个机器人账号 */
   account: string
-  /** 机器人号；还没收到事件时是 null */
-  self_id: number | null
-  /** 对端地址 */
+  /** 机器人号；还没收到事件时是空串（多平台后统一字符串口径） */
+  self_id: string
+  /** 对端地址（Kook 正向 WS 没有，空串） */
   remote: string
   /** 连上的时刻（Unix 秒） */
   connected_at: number
@@ -53,11 +53,17 @@ export function fetchBots() {
  * POST /bots：添加一个机器人（选底层适配器），明文只在这一次返回。
  *
  * 归属（谁的）不用填——后端永远签给当前登录用户；account 是机器人账号。
+ * token 是 Kook 的 Bot Token（platform=kook 时必填；OneBot 自动签发、传空串即可）。
  */
-export function addBot(platform = 'onebot', account = '', remark = '') {
-  return http.post<IssuedBot, { platform: string; account: string; remark: string }>(
+export function addBot(
+  platform = 'onebot',
+  account = '',
+  remark = '',
+  token = '',
+) {
+  return http.post<IssuedBot, { platform: string; account: string; remark: string; token: string }>(
     '/bots',
-    { platform, account, remark },
+    { platform, account, remark, token },
   )
 }
 

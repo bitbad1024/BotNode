@@ -3,11 +3,12 @@
     GET    <prefix>/bots          机器人列表（带归属昵称 + 在线状态）
     POST   <prefix>/bots          添加机器人（选 platform：onebot / kook）
     PATCH  <prefix>/bots/{id}     启用 / 停用
-    DELETE <prefix>/bots/{id}     删除（吊销令牌 / 撤销凭证）
+    DELETE <prefix>/bots/{id}     删除（OneBot 吊销令牌 / Kook 停并注销客户端）
 
-P5 过渡：这是 `/api/onebot/*` 的**泛化壳** —— 路径 / 名字 / ``platform`` 字段先立起来，
-底层仍复用 OneBot 的令牌注册表（``OneBotLike``），OneBot 语义不变；Kook 的「添加」
-在 P6 才真正可用（现在 platform=kook 回 501）。多实例 / 换到新表在 P5-4 统一切。
+这里认的是 :class:`~nacho.api.api.bots.protocols.BotsService` 协议（装配层注入
+:class:`nacho.bridge.manager.BotManager`，平台差异封在实现里）：接口层不 import 任何平台包，
+「Kook 的启停要 start / stop 正向 WS 客户端」这类细节在这里不存在。OneBot 的语义不再硬套给
+Kook —— 接口统一成「增 / 启停 / 删」，底层按平台分派。
 
 安全口径与 onebot 完全一致：都要登录；签发永远归当前登录用户；管理员不限、其余人只看
 自己；按 id 找东西越界回 404（不泄露存在性）。
@@ -21,13 +22,13 @@ from ...common.errors import ApiError, ErrorCode
 from ...common.models import ApiResponse, ErrorResponse
 from ..onebot.dependencies import (
     CurrentUserDep,
-    OneBotDep,
     UserStoreDep,
-    ensure_can_touch,
     is_admin,
     may_touch,
 )
-from ..onebot.protocols import OneBotLike, TokenLike
+from ..onebot.protocols import TokenLike
+from .dependencies import BotsDep
+from .protocols import BotsService
 from .requests import AddBotRequest, SetBotEnabledRequest
 from .responses import BotData, IssuedBotData
 
@@ -46,7 +47,7 @@ async def _nickname_of(users, owner_id: str) -> str:  # type: ignore[no-untyped-
 
 
 def _bot_of(record: TokenLike, nickname: str, *, online: bool, clients) -> BotData:  # type: ignore[no-untyped-def]
-    """一条令牌记录 -> 机器人响应（补 platform=onebot + owner_id）。"""
+    """一条机器人记录 -> 机器人响应（补 platform + owner_id）。"""
     return BotData(
         id=record.id,
         platform=record.platform,
@@ -61,14 +62,9 @@ def _bot_of(record: TokenLike, nickname: str, *, online: bool, clients) -> BotDa
     )
 
 
-async def _ensure_in_scope(user, server: OneBotLike, bot_id: str) -> TokenLike:  # type: ignore[no-untyped-def]
+async def _ensure_in_scope(user, service: BotsService, bot_id: str) -> TokenLike:  # type: ignore[no-untyped-def]
     """按 id 找机器人、确认在范围内；找不到 / 不是自己的走同一个 404。"""
-    registry = server.tokens
-    if registry is None:
-        raise ApiError(
-            ErrorCode.HTTP_ERROR, "没配令牌注册表", status_code=status.HTTP_404_NOT_FOUND
-        )
-    record = await registry.get_by_id(bot_id)
+    record = await service.get_by_id(bot_id)
     if record is None or not may_touch(user, record.owner_id):
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个机器人", status_code=status.HTTP_404_NOT_FOUND)
     return record
@@ -83,24 +79,17 @@ async def _ensure_in_scope(user, server: OneBotLike, bot_id: str) -> TokenLike: 
 async def list_bots(
     request: Request,
     user: CurrentUserDep,
-    server: OneBotDep,
+    service: BotsDep,
     users: UserStoreDep,
 ) -> ApiResponse[list[BotData]]:
     """机器人列表（**只有记录，明文拿不回来**）：非管理员只看得到自己那条。"""
     trace_id: str = trace_id_of(request)
-    registry = server.tokens
-    if registry is None:
-        raise ApiError(
-            ErrorCode.HTTP_ERROR,
-            "没配令牌注册表",
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    records = await registry.list_records(owner_id=None if is_admin(user) else user.user.id)
+    records = await service.list_records(owner_id=None if is_admin(user) else user.user.id)
     names = await _nicknames_of(users, [record.owner_id for record in records])
     data: list[BotData] = []
     for record in records:
         nickname = names.get(record.owner_id, "")
-        clients = server.roster(id=record.owner_id)
+        clients = service.online_clients(record)
         data.append(_bot_of(record, nickname, online=bool(clients), clients=clients))
     return ApiResponse[list[BotData]](data=data, trace_id=trace_id)
 
@@ -112,34 +101,35 @@ async def list_bots(
     summary="添加机器人",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录"},
-        status.HTTP_501_NOT_IMPLEMENTED: {"model": ErrorResponse, "description": "该平台暂未支持"},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse, "description": "kook 没填 Bot Token"},
     },
 )
 async def add_bot(
     payload: AddBotRequest,
     request: Request,
     user: CurrentUserDep,
-    server: OneBotDep,
+    service: BotsDep,
     users: UserStoreDep,
 ) -> ApiResponse[IssuedBotData]:
     """给当前用户添加一个机器人；明文令牌只在这一次响应里出现。
 
-    platform=onebot：走现有令牌签发（一个归属一条，多实例在 P5-4 统一切）；
-    platform=kook：P6 才接入，现在回 501。
+    platform=onebot：随机签发令牌（不用填 token）；platform=kook：用自填的 Bot Token
+    （可逆加密落库，正向 WS 客户端立刻拉起）。
     """
     trace_id: str = trace_id_of(request)
-    if payload.platform != "onebot":
-        raise ApiError(
-            ErrorCode.HTTP_ERROR,
-            f"平台 {payload.platform} 暂未接入（P6 开放）",
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+    try:
+        issued = await service.issue(
+            user.user.id,
+            platform=payload.platform,
+            account=payload.account,
+            remark=payload.remark,
+            token=payload.token or None,
         )
-    registry = server.tokens
-    if registry is None:
+    except ValueError as exc:
+        # Kook 没配加密密钥这类「服务端没就绪」的问题：说清楚，别让 ValueError 一路滑到 500
         raise ApiError(
-            ErrorCode.HTTP_ERROR, "没配令牌注册表", status_code=status.HTTP_404_NOT_FOUND
-        )
-    issued = await registry.issue(user.user.id, account=payload.account, remark=payload.remark)
+            ErrorCode.HTTP_ERROR, str(exc), status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        ) from exc
     nickname = await _nickname_of(users, issued.record.owner_id)
     return ApiResponse[IssuedBotData](
         data=IssuedBotData(
@@ -164,17 +154,17 @@ async def set_bot_enabled(
     payload: SetBotEnabledRequest,
     request: Request,
     user: CurrentUserDep,
-    server: OneBotDep,
+    service: BotsDep,
     users: UserStoreDep,
 ) -> ApiResponse[BotData]:
-    """启用 / 停用一个机器人；停用会断开它连着的客户端。"""
+    """启用 / 停用一个机器人；停用会断开 / 停掉它连着的客户端。"""
     trace_id: str = trace_id_of(request)
-    record = await _ensure_in_scope(user, server, bot_id)
-    changed = await server.set_token_enabled(bot_id, payload.enabled)
+    record = await _ensure_in_scope(user, service, bot_id)
+    changed = await service.set_enabled(bot_id, payload.enabled)
     if not changed:
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个机器人", status_code=status.HTTP_404_NOT_FOUND)
     nickname = await _nickname_of(users, record.owner_id)
-    clients = server.roster(id=record.owner_id)
+    clients = service.online_clients(record)
     return ApiResponse[BotData](
         data=_bot_of(record, nickname, online=bool(clients), clients=clients),
         trace_id=trace_id,
@@ -194,12 +184,12 @@ async def delete_bot(
     bot_id: str,
     request: Request,
     user: CurrentUserDep,
-    server: OneBotDep,
+    service: BotsDep,
 ) -> ApiResponse[dict[str, bool]]:
-    """删除机器人：吊销令牌并把正用它连着的客户端断开。"""
+    """删除机器人：吊销令牌（OneBot）/ 停并注销客户端（Kook），并把正用着的连接断开。"""
     trace_id: str = trace_id_of(request)
-    await _ensure_in_scope(user, server, bot_id)
-    removed = await server.revoke_by_id(bot_id)
+    await _ensure_in_scope(user, service, bot_id)
+    removed = await service.remove_by_id(bot_id)
     if not removed:
         raise ApiError(ErrorCode.HTTP_ERROR, "没有这个机器人", status_code=status.HTTP_404_NOT_FOUND)
     return ApiResponse[dict[str, bool]](data={"removed": True}, trace_id=trace_id)

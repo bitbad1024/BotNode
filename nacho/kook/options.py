@@ -14,8 +14,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
 from typing import cast
 
-#: 默认网关地址（Kook 开发者中心的 WebSocket 网关）
-DEFAULT_GATEWAY: str = "wss://www.kookapp.cn/gateway"
+#: 网关地址默认留空：Kook 的网关是**动态分发**的，连接前要走 gateway/index 拿真实地址
+#: （返回的 url 已带 token / compress 参数）。留空 = 自动获取；显式填一个则直连（测试 / 自建网关）。
+DEFAULT_GATEWAY: str = ""
 #: 默认 Bot Token（用户从 Kook 开放平台签发；空串 = 没配，连接会失败）
 DEFAULT_TOKEN: str = ""
 #: 默认心跳间隔（秒）：Kook 网关要求客户端定期发心跳，超时会被断开
@@ -24,6 +25,12 @@ DEFAULT_HEARTBEAT_INTERVAL: float = 30.0
 DEFAULT_ACTION_TIMEOUT: float = 30.0
 #: 默认断线重连间隔（秒）：连接断开后等这么久再重连
 DEFAULT_RECONNECT_INTERVAL: float = 3.0
+#: 默认重连退避上限（秒）：指数退避封顶，避免无限拉长
+DEFAULT_RECONNECT_MAX_INTERVAL: float = 30.0
+#: 默认两次 REST 请求的最小间隔（秒）：限流，别一上来就撞 429
+DEFAULT_REST_MIN_INTERVAL: float = 0.2
+#: 默认 REST 瞬时失败重试次数（429 / 5xx / 网络抖动）
+DEFAULT_REST_MAX_RETRIES: int = 3
 
 
 def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, object]:
@@ -39,16 +46,25 @@ def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, objec
 class KookOptions:
     """Kook 正向 WS 选项（对应 ``[kook]`` 一节）。"""
 
-    #: 网关地址（框架当客户端，主动连过去）
+    #: 网关地址：留空（默认）连接前走 gateway/index 动态获取真实地址（推荐）；
+    #: 显式填一个则直连这个地址（测试 / 自建网关用）。
     gateway: str = DEFAULT_GATEWAY
     #: Bot Token（Kook 开放平台签发，连接时鉴权用；空串 = 没配）
     token: str = DEFAULT_TOKEN
+    #: Bot Token 落库加密的密钥（kook 凭证行加解密用；[kook].token 直连时用不到）
+    secret_key: str = ""
     #: 心跳间隔（秒）
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL
     #: 单个动作等回应的超时（秒）
     action_timeout: float = DEFAULT_ACTION_TIMEOUT
     #: 断线后重连的间隔（秒）
     reconnect_interval: float = DEFAULT_RECONNECT_INTERVAL
+    #: 重连退避上限（秒）：指数退避封顶，避免无限拉长
+    reconnect_max_interval: float = DEFAULT_RECONNECT_MAX_INTERVAL
+    #: 两次 REST 请求的最小间隔（秒）：限流，别一上来就撞 429
+    rest_min_interval: float = DEFAULT_REST_MIN_INTERVAL
+    #: REST 瞬时失败重试次数（429 / 5xx / 网络抖动）
+    rest_max_retries: int = DEFAULT_REST_MAX_RETRIES
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> KookOptions:
@@ -58,11 +74,21 @@ class KookOptions:
         return cls(
             gateway=cast(str, picked.get("gateway", DEFAULT_GATEWAY)),
             token=cast(str, picked.get("token", DEFAULT_TOKEN)),
+            secret_key=cast(str, picked.get("secret_key", "")),
             heartbeat_interval=cast(
                 float, picked.get("heartbeat_interval", DEFAULT_HEARTBEAT_INTERVAL)
             ),
             action_timeout=cast(float, picked.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
             reconnect_interval=cast(
                 float, picked.get("reconnect_interval", DEFAULT_RECONNECT_INTERVAL)
+            ),
+            reconnect_max_interval=cast(
+                float, picked.get("reconnect_max_interval", DEFAULT_RECONNECT_MAX_INTERVAL)
+            ),
+            rest_min_interval=cast(
+                float, picked.get("rest_min_interval", DEFAULT_REST_MIN_INTERVAL)
+            ),
+            rest_max_retries=cast(
+                int, picked.get("rest_max_retries", DEFAULT_REST_MAX_RETRIES)
             ),
         )

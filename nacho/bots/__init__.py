@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+from .crypto import decrypt_token, derive_key, encrypt_token
 from .models import BotCredential, BotPlatform
 from .store import BotCredentialTable, IssuedBotCredential, SqlBotStore, hash_token
 
@@ -26,4 +27,7 @@ __all__ = [
     "IssuedBotCredential",
     "SqlBotStore",
     "hash_token",
+    "derive_key",
+    "encrypt_token",
+    "decrypt_token",
 ]

@@ -462,11 +462,15 @@ class KookSettings(_Region):
     ``token`` 留空 = 没配，不接入 Kook（装配层据此跳过建适配器）。
     """
 
-    gateway: str = "wss://www.kookapp.cn/gateway"  # Kook 网关地址
+    gateway: str = ""  # 网关地址：留空 = 连接前走 gateway/index 动态获取（推荐）
     token: str = ""  # Bot Token（Kook 开放平台签发；留空 = 不接入）
+    secret_key: str = ""  # Bot Token 落库加密的密钥（kook 凭证行加密用；留空则无法存 kook 凭证）
     heartbeat_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     reconnect_interval: float = Field(default=3.0, gt=0, description="大于 0 的秒数")
+    reconnect_max_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    rest_min_interval: float = Field(default=0.2, gt=0, description="大于 0 的秒数")
+    rest_max_retries: int = Field(default=3, ge=0, description="不小于 0 的次数")
 
 
 # --------------------------------------------------------------------------- 整份设置

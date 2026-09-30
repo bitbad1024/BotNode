@@ -29,12 +29,14 @@ Kook 的正向 WS **只推事件，不能发消息**；发消息走 **REST API**
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
+import random
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import TypeAlias, cast
-from urllib import request as urlreq
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 from websockets.asyncio.client import connect as ws_connect
@@ -51,11 +53,40 @@ EventHandler: TypeAlias = Callable[[KookEvent], Awaitable[None]]
 
 #: REST API 基地址（发消息等动作走这里，不是 WS）
 _DEFAULT_API: str = "https://www.kookapp.cn/api/v3"
+#: 网关分发接口：Kook 的网关地址是动态下发的，连接前要 GET 这里拿真实 wss 地址
+_GATEWAY_INDEX: str = f"{_DEFAULT_API}/gateway/index"
 
 
 def _api_url(options: KookOptions, path: str) -> str:
     """拼 REST 端点的完整地址。"""
     return f"{_DEFAULT_API}{path}"
+
+
+#: REST API 的 host（从基地址拆出来；连接复用按 host 建持久连接）
+_DEFAULT_API_HOST: str = cast(str, urlsplit(_DEFAULT_API).hostname)
+#: REST 瞬时失败值得重试的状态码：429（限流）与常见 5xx（服务端抖动）
+_REST_RETRYABLE_STATUS: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+
+class _RestRetryable(Exception):
+    """REST 瞬时失败（429 / 5xx / 连接错误）：值得按退避重试。"""
+
+
+def _jitter() -> float:
+    """重连 / 重试退避的抖动系数：[0.8, 1.2)，避免多个客户端同时重试（thundering herd）。"""
+    return random.uniform(0.8, 1.2)
+
+
+def _reconnect_delay(options: KookOptions, attempts: int) -> float:
+    """第 ``attempts`` 次重连前的等待：指数退避（基准 * 2^(attempts-1)）封顶 + 抖动。"""
+    exponent = max(0, attempts - 1)
+    base = min(options.reconnect_interval * (2 ** exponent), options.reconnect_max_interval)
+    return base * _jitter()
+
+
+def _rest_backoff(attempt: int) -> float:
+    """REST 第 ``attempt`` 次重试前的等待：0.2s 指数退避封顶 1s，带抖动。"""
+    return min(0.2 * (2 ** attempt), 1.0) * _jitter()
 
 
 class KookClient:
@@ -87,12 +118,20 @@ class KookClient:
         #: 按序消费 inbox 的 worker；连上时起、断开时收
         self._consume_task: asyncio.Task[None] | None = None
         self._stopping: bool = False
+        #: 停下来的通知事件（serve_forever / _wait_until_stopped 等它，不再轮询）
+        self._stopped: asyncio.Event = asyncio.Event()
         #: 最近一次 hello / pong 里的 sn（心跳 ping 要带上）
         self._sn: int = 0
         #: 连上后从事件里学到的机器人自身 id；没学到是空串
         self.self_id: str = ""
         #: 最近一次连上的时刻（Unix 秒）；没连过是 0
         self.connected_at: float = 0.0
+        #: REST 限流 + 连接复用的锁（同一时刻只发一个请求，持久连接才安全）
+        self._rest_lock: asyncio.Lock = asyncio.Lock()
+        #: 上一次 REST 请求完成的时刻（monotonic 秒），用于最小间隔限流
+        self._last_rest: float = 0.0
+        #: 懒建的持久 HTTP(S) 连接（同一 host 复用；瞬时失败即丢）
+        self._rest_conn: http.client.HTTPConnection | None = None
 
     @property
     def options(self) -> KookOptions:
@@ -110,6 +149,7 @@ class KookClient:
         if self._ws is not None:
             return
         self._stopping = False
+        self._stopped.clear()
         self._reconnect_task = asyncio.create_task(self._run_loop(), name="kook-connect")
 
     async def serve_forever(self) -> None:
@@ -119,12 +159,12 @@ class KookClient:
 
     async def _wait_until_stopped(self) -> None:
         """挂起直到 ``stop()`` 被调用；用于 serve_forever 的退出条件。"""
-        while not self._stopping:
-            await asyncio.sleep(0.1)
+        await self._stopped.wait()
 
     async def stop(self) -> None:
         """停客户端：关连接、停心跳、停重连（幂等）。"""
         self._stopping = True
+        self._stopped.set()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -140,23 +180,140 @@ class KookClient:
         if ws is not None:
             await cast(object, ws).close()  # type: ignore[attr-defined]
             self._log.info("kook 客户端已停止")
+        if self._rest_conn is not None:
+            with suppress(Exception):
+                self._rest_conn.close()
+            self._rest_conn = None
 
     # ------------------------------------------------------------------ 收发循环
     async def _run_loop(self) -> None:
-        """连接 -> 心跳 -> 收报文；断了按间隔重连，直到 ``stop``。"""
+        """连接 -> 心跳 -> 收报文；断开按指数退避重连（带抖动），直到 ``stop``。"""
+        failures = 0
         while not self._stopping:
             try:
                 await self._connect_once()
+                failures = 0  # 正常连过（收报文循环被断开才退出）：重连计数清零
             except Exception as exc:  # noqa: BLE001 — 连不上就退出来等下轮重连
+                failures += 1
                 self._log.warning("kook 连接失败，稍后重连", error=str(exc))
             if self._stopping:
                 return
-            await asyncio.sleep(self._options.reconnect_interval)
+            await asyncio.sleep(_reconnect_delay(self._options, failures))
+
+    # ------------------------------------------------- REST（限流 + 重试 + 连接复用）
+    async def _rest(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        body: bytes | None = None,
+    ) -> Mapping[str, object]:
+        """带限流 + 重试的 REST 调用；动作与 gateway/index 共用这一条路。
+
+        限流：两次请求至少隔 ``rest_min_interval`` 秒（``asyncio.Lock`` 串行化，顺带让
+        持久连接同一时刻只被一个请求占用）；瞬时失败（429 / 5xx / 连接错误）按指数退避
+        重试，最多 ``rest_max_retries`` 次，超了按环境问题抛 :class:`ConnectionError`。
+        """
+        async with self._rest_lock:
+            wait = self._last_rest + self._options.rest_min_interval - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            last: Exception | None = None
+            for attempt in range(self._options.rest_max_retries + 1):
+                try:
+                    payload = await asyncio.to_thread(
+                        self._rest_once, method, url, headers=headers, body=body
+                    )
+                    self._last_rest = time.monotonic()
+                    return payload
+                except _RestRetryable as exc:
+                    last = exc
+                    if attempt >= self._options.rest_max_retries:
+                        break
+                    self._log.warning(
+                        "kook REST 瞬时失败，准备重试",
+                        method=method,
+                        attempt=attempt + 1,
+                        reason=str(exc),
+                    )
+                    await asyncio.sleep(_rest_backoff(attempt))
+                except Exception as exc:  # noqa: BLE001 — 网络 / HTTP 错误统一按环境问题抛
+                    self._last_rest = time.monotonic()
+                    raise ConnectionError(f"REST 请求失败：{exc}") from exc
+            self._last_rest = time.monotonic()
+            raise ConnectionError(
+                f"REST 多次失败（{self._options.rest_max_retries + 1} 次）：{last}"
+            ) from last
+
+    def _rest_once(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        body: bytes | None,
+    ) -> Mapping[str, object]:
+        """发一次 HTTP 请求并解析 JSON 回应（同步，跑在 ``to_thread`` 里）。
+
+        连接复用：同一 host 懒建一条持久连接（``self._rest_conn``），成功读完回应后留着
+        下一条复用；429 / 5xx / 连接错误都算瞬时失败，丢连接交给 :meth:`_rest` 重试。
+        """
+        parts = urlsplit(url)
+        conn = self._rest_conn
+        if conn is None:
+            conn = http.client.HTTPSConnection(
+                parts.hostname or _DEFAULT_API_HOST,
+                timeout=self._options.action_timeout,
+            )
+            self._rest_conn = conn
+        target = parts.path + (f"?{parts.query}" if parts.query else "")
+        try:
+            conn.request(method, target, body=body, headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read()
+            status = resp.status
+            resp.close()
+        except (OSError, http.client.HTTPException) as exc:
+            self._rest_conn = None
+            raise _RestRetryable(f"连接错误：{exc}") from exc
+        if status in _REST_RETRYABLE_STATUS or status >= 500:
+            self._rest_conn = None
+            raise _RestRetryable(f"HTTP {status}")
+        if status < 200 or status >= 300:
+            self._rest_conn = None
+            raise ConnectionError(f"REST 返回 HTTP {status}")
+        return cast("Mapping[str, object]", json.loads(raw.decode("utf-8")))
+
+    async def _discover_gateway(self) -> str:
+        """调 gateway/index 拿真实网关地址（Kook 网关是动态下发的，不能硬编码）。
+
+        网关地址通过 ``GET /api/v3/gateway/index`` 下发（带 Bot Token 鉴权），返回的
+        ``data.url`` 里已经带好 token / compress 参数，直接拿它连即可。
+
+        :raises ConnectionError: 没配 Bot Token / 网络失败 / 返回里没有 url。
+        """
+        token = self._options.token
+        if not token:
+            raise ConnectionError("[kook] 未配置 Bot Token，无法获取网关地址")
+        try:
+            payload = await self._rest(
+                "GET",
+                f"{_GATEWAY_INDEX}?compress=0",
+                headers={"Authorization": f"Bot {token}"},
+            )
+        except ConnectionError as exc:
+            raise ConnectionError(f"[kook] 获取网关地址失败：{exc}") from exc
+        data = payload.get("data")
+        url = data.get("url") if isinstance(data, dict) else None
+        if not isinstance(url, str) or not url:
+            raise ConnectionError("[kook] gateway/index 没返回网关地址")
+        return url
 
     async def _connect_once(self) -> None:
         """建一条连接并跑它的收报文循环；连接断开 / 出错时返回（由 _run_loop 决定重连）。"""
-        gateway = self._options.gateway
         token = self._options.token
+        gateway = self._options.gateway or await self._discover_gateway()
         self._log.info("kook 正在连接网关", gateway=gateway, token_set=bool(token))
         async with ws_connect(
             gateway,
@@ -266,35 +423,76 @@ class KookClient:
         ``action`` 是 Kook 的 REST 动作名（如 ``send_channel_msg``），由适配器映射到具体端点；
         本层只负责「带凭证 POST 到 REST、把回应解析成 :class:`KookActionResponse`」。
 
+        :raises ValueError: 动作不在注册表 / 缺必填参数 / 有不认识的参数（能力表拦下）；
         :raises ConnectionError: 没配 Token / 网络失败等环境问题。
         """
         token = self._options.token
         if not token:
             raise ConnectionError("[kook] 未配置 Bot Token，无法发动作")
-        path = _action_path(action)
+        # 动作级校验：先查能力表（动作名拼错当场炸），再验参数（必填缺失 / 未知参数都拦下）
+        spec = _action_spec(action)
+        missing = [name for name in spec.required if name not in params]
+        if missing:
+            raise ValueError(f"[kook] 动作 {action!r} 缺必填参数：{'、'.join(missing)}")
+        unknown = [name for name in params if name not in spec.required and name not in spec.optional]
+        if unknown:
+            raise ValueError(f"[kook] 动作 {action!r} 有不认识的参数：{'、'.join(unknown)}")
+        path = spec.endpoint
         url = _api_url(self._options, path)
         body = json.dumps(params, ensure_ascii=False).encode("utf-8")
         headers = {
             "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
         }
-
-        def _post() -> Mapping[str, object]:
-            req = urlreq.Request(url, data=body, headers=headers, method="POST")
-            with urlreq.urlopen(req, timeout=self._options.action_timeout) as resp:
-                return cast("Mapping[str, object]", json.loads(resp.read().decode("utf-8")))
-
         try:
-            payload = await asyncio.to_thread(_post)
-        except Exception as exc:  # noqa: BLE001 — 网络 / HTTP 错误统一按环境问题抛
+            payload = await self._rest("POST", url, headers=headers, body=body)
+        except ConnectionError as exc:
             raise ConnectionError(f"[kook] 动作 {action!r} 发送失败：{exc}") from exc
         return parse_action_response(payload)
 
 
+class KookAction:
+    """一个 Kook REST 动作的「能力表面」：端点 + 参数契约。
+
+    端点（``endpoint``）是发到 Kook REST 的路径；参数分**必填**（``required``，缺了
+    当场抛）与**可选**（``optional``，预留：Kook 的 create 端点还有 target_type / type
+    一类可选字段，将来要用就在这里声明）。加动作 = 在这里加一行，``call`` / ``_action_path``
+    都不用改。
+    """
+
+    __slots__ = ("name", "endpoint", "required", "optional")
+
+    def __init__(
+        self,
+        name: str,
+        endpoint: str,
+        required: tuple[str, ...],
+        optional: tuple[str, ...] = (),
+    ) -> None:
+        self.name: str = name
+        self.endpoint: str = endpoint
+        self.required: tuple[str, ...] = required
+        self.optional: tuple[str, ...] = optional
+
+
+#: 动作注册表（能力表面）：动作名 -> 端点 + 参数契约
+KOOK_ACTIONS: dict[str, KookAction] = {
+    "send_channel_msg": KookAction("send_channel_msg", "/message/create", ("target_id", "content")),
+    "send_dm_msg": KookAction("send_dm_msg", "/message/create", ("target_id", "content")),
+    "delete_msg": KookAction("delete_msg", "/message/delete", ("msg_id",)),
+}
+
+
+def _action_spec(action: str) -> KookAction:
+    """按动作名取能力表；不认识的动作**当场抛**（拼错动作名调用时就炸，不兜底到 create）。"""
+    spec = KOOK_ACTIONS.get(action)
+    if spec is None:
+        raise ValueError(
+            f"[kook] 动作 {action!r} 不在注册表里（可选：{'、'.join(KOOK_ACTIONS)}）"
+        )
+    return spec
+
+
 def _action_path(action: str) -> str:
-    """动作名 -> Kook REST 端点路径（发消息类都走 message/create，删除走 message/delete）。"""
-    return {
-        "send_channel_msg": "/message/create",
-        "send_dm_msg": "/message/create",
-        "delete_msg": "/message/delete",
-    }.get(action, "/message/create")
+    """动作名 -> Kook REST 端点路径（查能力表；不认识的动作当场抛）。"""
+    return _action_spec(action).endpoint

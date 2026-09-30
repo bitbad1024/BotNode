@@ -40,6 +40,7 @@ from nacho.api import (  # noqa: E402
     create_app,
 )
 from nacho.bots import SqlBotStore  # noqa: E402
+from nacho.bridge.manager import BotManager  # noqa: E402
 from nacho.onebot import (  # noqa: E402
     OneBotOptions,
     OneBotServer,
@@ -140,6 +141,19 @@ def api_app(server: OneBotServer | None) -> FastAPI:
         ApiOptions(prefix="/api"),
         hasher=_TEST_HASHER,
         onebot=server,
+    )
+
+
+def bots_app(registry: SqlBotStore, *, secret_key: str = "") -> FastAPI:
+    """接口层应用：机器人管理服务（BotManager）挂在内存 sqlite 的凭证存储上。
+
+    ``onebot`` / ``kook`` 适配器都不接（None）——增 / 启停 / 删走落库即可，不需要真的连
+    平台；Kook 的 Bot Token 加密用 ``secret_key``（留空则加 kook 机器人会 503）。
+    """
+    return create_app(
+        ApiOptions(prefix="/api"),
+        hasher=_TEST_HASHER,
+        bots=BotManager(registry, secret_key=secret_key),
     )
 
 
@@ -681,56 +695,94 @@ async def test_scope_client_list_is_scoped() -> None:
             } == {"u-admin", "u-robot"}
 
 
-# --------------------------------------------------------------------- 机器人接口（P5-2 泛化壳）
+# --------------------------------------------------------------------- 机器人接口（跨平台）
 async def test_bots_list_and_add_onebot() -> None:
     """/api/bots：列表与添加；platform=onebot 走现有令牌签发，响应带 platform 字段。"""
-    async with opened_server(await memory_registry()) as server:
-        app = api_app(server)
-        async with api_client(app) as client:
-            headers = {"Authorization": f"Bearer {await login(client)}"}
+    registry = await memory_registry()
+    app = bots_app(registry)
+    async with api_client(app) as client:
+        headers = {"Authorization": f"Bearer {await login(client)}"}
 
-            # 初始为空
-            listed = await client.get("/api/bots", headers=headers)
-            assert listed.status_code == 200, listed.text
-            assert ApiResponse[list[dict]].model_validate(listed.json()).data == []
+        # 初始为空
+        listed = await client.get("/api/bots", headers=headers)
+        assert listed.status_code == 200, listed.text
+        assert ApiResponse[list[dict]].model_validate(listed.json()).data == []
 
-            # 添加一个 onebot 机器人
-            added = await client.post(
-                "/api/bots",
-                headers=headers,
-                json={"platform": "onebot", "account": "机器人一号", "remark": "主号"},
-            )
-            assert added.status_code == 200, added.text
-            data = added.json()["data"]
-            assert data["record"]["platform"] == "onebot"
-            assert data["record"]["owner_id"] == "u-admin"  # 归属 = 当前登录用户
-            assert data["token"].startswith("nbo_")  # 明文只露这一次
+        # 添加一个 onebot 机器人
+        added = await client.post(
+            "/api/bots",
+            headers=headers,
+            json={"platform": "onebot", "account": "机器人一号", "remark": "主号"},
+        )
+        assert added.status_code == 200, added.text
+        data = added.json()["data"]
+        assert data["record"]["platform"] == "onebot"
+        assert data["record"]["owner_id"] == "u-admin"  # 归属 = 当前登录用户
+        assert data["token"].startswith("nbo_")  # 明文只露这一次
 
-            # 列表里出现
-            listed = await client.get("/api/bots", headers=headers)
-            rows = listed.json()["data"]
-            assert [row["platform"] for row in rows] == ["onebot"]
-            assert rows[0]["account"] == "机器人一号"
+        # 列表里出现
+        listed = await client.get("/api/bots", headers=headers)
+        rows = listed.json()["data"]
+        assert [row["platform"] for row in rows] == ["onebot"]
+        assert rows[0]["account"] == "机器人一号"
 
 
-async def test_bots_add_kook_not_implemented() -> None:
-    """platform=kook 暂未接入：回 501。"""
-    async with opened_server(await memory_registry()) as server:
-        app = api_app(server)
-        async with api_client(app) as client:
-            headers = {"Authorization": f"Bearer {await login(client)}"}
-            added = await client.post(
-                "/api/bots",
-                headers=headers,
-                json={"platform": "kook", "account": "kook-bot"},
-            )
-            assert added.status_code == 501
+async def test_bots_add_kook() -> None:
+    """platform=kook：自填 Bot Token，可逆加密落库，明文只回显这一次。"""
+    registry = await memory_registry()
+    app = bots_app(registry, secret_key="test-secret")
+    async with api_client(app) as client:
+        headers = {"Authorization": f"Bearer {await login(client)}"}
+        added = await client.post(
+            "/api/bots",
+            headers=headers,
+            json={"platform": "kook", "account": "kook-bot", "token": "kook-token-abc"},
+        )
+        assert added.status_code == 200, added.text
+        data = added.json()["data"]
+        assert data["record"]["platform"] == "kook"
+        assert data["record"]["owner_id"] == "u-admin"
+        assert data["token"] == "kook-token-abc"  # 明文只回显这一次
+
+        # 列表里出现（不含明文：响应模型里 record 没有 token 字段）
+        listed = await client.get("/api/bots", headers=headers)
+        rows = listed.json()["data"]
+        assert [row["platform"] for row in rows] == ["kook"]
+        assert "token" not in rows[0]  # 只有 record，拿不回明文
+
+
+async def test_bots_add_kook_requires_token() -> None:
+    """platform=kook 没填 Bot Token：入口层直接挡掉（422）。"""
+    registry = await memory_registry()
+    app = bots_app(registry, secret_key="test-secret")
+    async with api_client(app) as client:
+        headers = {"Authorization": f"Bearer {await login(client)}"}
+        added = await client.post(
+            "/api/bots",
+            headers=headers,
+            json={"platform": "kook", "account": "kook-bot"},
+        )
+        assert added.status_code == 422
+
+
+async def test_bots_add_kook_without_secret_key() -> None:
+    """platform=kook 但没配加密密钥：回 503（服务端没就绪），不是 500。"""
+    registry = await memory_registry()
+    app = bots_app(registry)  # secret_key 留空
+    async with api_client(app) as client:
+        headers = {"Authorization": f"Bearer {await login(client)}"}
+        added = await client.post(
+            "/api/bots",
+            headers=headers,
+            json={"platform": "kook", "account": "kook-bot", "token": "kook-token-abc"},
+        )
+        assert added.status_code == 503
 
 
 async def test_bots_requires_login() -> None:
     """机器人接口都要登录：没带令牌 401。"""
-    async with opened_server(await memory_registry()) as server:
-        app = api_app(server)
-        async with api_client(app) as client:
-            assert (await client.get("/api/bots")).status_code == 401
-            assert (await client.post("/api/bots", json={"platform": "onebot"})).status_code == 401
+    registry = await memory_registry()
+    app = bots_app(registry)
+    async with api_client(app) as client:
+        assert (await client.get("/api/bots")).status_code == 401
+        assert (await client.post("/api/bots", json={"platform": "onebot"})).status_code == 401

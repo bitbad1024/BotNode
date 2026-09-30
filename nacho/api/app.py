@@ -6,8 +6,8 @@
 2. 装 :class:`~nacho.api.common.middlewares.RequestLogMiddleware`（编号 + 访问日志）；
 3. 装异常处理器（:func:`~nacho.api.common.errors.register_exception_handlers`）—— 出去的错误
    都是 :class:`~nacho.api.common.models.ErrorResponse` 那个形状；
-4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``、运行日志
-   ``<prefix>/logs``），并把各模块的服务挂到 ``app.state`` 上给路由注入。
+4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``、机器人管理
+   ``<prefix>/bots``、运行日志 ``<prefix>/logs``），并把各模块的服务挂到 ``app.state`` 上给路由注入。
 
 依赖全是可选的：不传 ``user_store`` / ``session_store`` 就用落库版
 :class:`~nacho.api.services.user.store_sql.SqlUserStore`（查 ``users`` 表）与
@@ -19,6 +19,10 @@
 ``<prefix>/onebot/*`` 那组管理接口才有用；没传就回 503（「没接入」和「出错了」分开报）。
 这里按 :class:`~nacho.api.api.onebot.protocols.OneBotLike` 协议接收，所以 **接口层不 import
 ``nacho.onebot``** —— 只装 ``nacho[api]`` 也能跑起来（具体说明见那个模块）。
+
+``bots`` 同样是可选的：主程序把 :class:`nacho.bridge.manager.BotManager` 传进来，
+``<prefix>/bots/*`` 那组管理接口（跨平台增 / 启停 / 删）才有用；没传就回 503。这里按
+:class:`~nacho.api.api.bots.protocols.BotsService` 协议接收，所以接口层不 import 任何平台包。
 
 用法::
 
@@ -44,6 +48,7 @@ from .common.errors import register_exception_handlers
 from .common.middlewares import RequestLogMiddleware
 from .logging import API_LOGGER_NAME, api_logger, keep_access_off_audit
 from .api import auth_router, bots_router, log_router, onebot_router, profile_router, workflow_router
+from .api.bots.protocols import BotsService
 from .api.onebot.protocols import OneBotLike
 from .api.workflow.protocols import WorkflowStoreLike, WorkflowTriggerLike
 from .services.auth import AuthService
@@ -64,6 +69,7 @@ def create_app(
     db: AsyncEngine | None = None,
     session_store: SessionStore | None = None,
     onebot: OneBotLike | None = None,
+    bots: BotsService | None = None,
     workflow_store: WorkflowStoreLike | None = None,
     workflow_triggers: WorkflowTriggerLike | None = None,
     avatar_store: AvatarStore | None = None,
@@ -87,6 +93,9 @@ def create_app(
         ``<prefix>/workflows/*`` 那组接口才可用，没传时这些接口回 503；
     :param onebot: OneBot 服务端（``nacho.onebot.OneBotServer``，只认 ``OneBotLike`` 协议）；
         传了 ``<prefix>/onebot/*`` 那组管理接口（在线列表 / 踢人 / 令牌增删）才可用，
+        没传时这些接口回 503；
+    :param bots: 机器人管理服务（``nacho.bridge.manager.BotManager``，只认 ``BotsService``
+        协议）；传了 ``<prefix>/bots/*`` 那组管理接口（跨平台增 / 启停 / 删）才可用，
         没传时这些接口回 503；
     :param workflow_triggers: 工作流的运行时触发器（只认
         :class:`~nacho.api.api.workflow.protocols.WorkflowTriggerLike`）；传了以后拨运行开关
@@ -211,6 +220,8 @@ def create_app(
     app.state.user_store = store
     # OneBot 服务端（可空）：没传时 <prefix>/onebot/* 回 503，见 onebot/dependencies.py
     app.state.onebot_server = onebot
+    # 机器人管理服务（可空，只认 BotsService 协议）：没传时 <prefix>/bots/* 回 503
+    app.state.bots_service = bots
     # 工作流存储（定义 + 版本双表）：<prefix>/workflows/* 用
     app.state.workflow_store = workflows_store
     # 运行时触发器（可空）：拨运行开关时即时启停，没传就只落库

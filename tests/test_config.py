@@ -257,9 +257,12 @@ class TestKookRegion:
     def test_defaults_without_section(self, tmp_path: Path) -> None:
         settings = Settings.load(write(tmp_path, ""))
         kook = settings.kook
-        assert kook.gateway == "wss://www.kookapp.cn/gateway"
+        assert kook.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
         assert kook.token == ""  # 没配 = 不接入
         assert kook.heartbeat_interval == 30.0
+        assert kook.reconnect_max_interval == 30.0
+        assert kook.rest_min_interval == 0.2
+        assert kook.rest_max_retries == 3
 
     def test_kook_section_reads_token_and_intervals(self, tmp_path: Path) -> None:
         settings = Settings.load(
@@ -271,6 +274,9 @@ class TestKookRegion:
                     token = "bot-token-xxx"
                     heartbeat_interval = 15.0
                     reconnect_interval = 5.0
+                    reconnect_max_interval = 20.0
+                    rest_min_interval = 0.5
+                    rest_max_retries = 5
                     """
                 ),
             )
@@ -280,3 +286,6 @@ class TestKookRegion:
         assert kook.heartbeat_interval == 15.0
         assert kook.reconnect_interval == 5.0
         assert kook.action_timeout == 30.0  # 没写的回默认
+        assert kook.reconnect_max_interval == 20.0
+        assert kook.rest_min_interval == 0.5
+        assert kook.rest_max_retries == 5
