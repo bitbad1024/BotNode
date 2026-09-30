@@ -13,6 +13,8 @@
                     import ``nacho.kook``）。与 OneBot 方向相反 —— OneBot 是反向 WS
                     （框架当服务端），Kook 是正向 WS（框架当客户端、Bot Token 鉴权）——
                     用来验证 ``BotAdapter`` 协议对「方向相反」的平台同样通用。
+* ``manager.py``   机器人管理服务 BotManager：把「凭证落库 + 适配器生命周期」统一成接口层
+                    认的 BotsService（跨平台增 / 启停 / 删，platform 差异封在实现里）
 
 依赖方向：本包只依赖 ``nacho.core``（logger），**不** import ``nacho.onebot`` /
 ``nacho.api`` / ``nacho.workflow`` —— 平台的类型只在适配器实现里出现，协议这边一律
@@ -31,17 +33,24 @@
    :class:`~nacho.bridge.models.PlatformEvent`（身份转字符串、会话指向归一、翻译不了的
    挂 ``raw``）后调 ``publish`` 投给 Gateway。这个模块是 bridge 里**唯一**允许
    import 平台包的地方；
-3. **装配** ``bootstrap.py``：读该平台的配置（``[kook]`` 这类）-> 建适配器
-   （``publish=gateway.publish``）-> ``gateway.register``；凭证形态（OneBot 的令牌表、
-   Kook 的 Bot Token）各平台自定，不套用别家的；
+3. **装配** ``bootstrap.py``：凭证统一是「凭证行」（``nacho.bots`` 的 ``bot_credentials``
+   表，``platform`` + ``owner_id`` + ``bot_id`` 复合键，一个用户可多个机器人）—— OneBot
+   行是随机令牌（反向 WS 握手按 token 认归属）、Kook 行是用户自填的 Bot Token（可逆加密
+   落库、连接时解密）；装配读行建适配器（``publish=gateway.publish``）->
+   ``gateway.register``，管理面经 ``manager.py`` 的 ``BotManager`` 统一成接口层认的
+   「增 / 启停 / 删」；
 4. **下游不动**：接口层与工作流认的是 Gateway / 适配器的形状，只要兼容面还在，
    新平台上线**不碰** ``router.py`` / 节点 / 前端 —— 这是本层存在的全部意义。
 
-装配形态（bootstrap 现在的样子，两个平台并存）::
+装配形态（bootstrap 现在的样子，两个平台并存；凭证统一是 ``bot_credentials`` 凭证行）::
 
     gateway = Gateway()
-    gateway.register(OneBotAdapter(options, publish=gateway.publish, tokens=registry))
-    gateway.register(KookAdapter(KookOptions(token="..."), publish=gateway.publish))  # 配了 token 才建
+    gateway.register(OneBotAdapter(options, publish=gateway.publish, tokens=store))  # store: SqlBotStore（凭证行）
+    kook = KookAdapter(kook_options, publish=gateway.publish)
+    for cred in await store.list_platform("kook", enabled_only=True):   # 读 Kook 凭证行
+        kook.add_bot(cred.bot_id, await store.decrypt_token(cred.bot_id, secret_key))
+    gateway.register(kook)
+    manager = BotManager(store, onebot=onebot, kook=kook, secret_key=secret_key)  # /api/bots/* 的 BotsService
     gateway.subscribe(on_platform_event)   # 业务只认规范化事件，不认平台
     await gateway.start()                  # -> 各 adapter.start()
 

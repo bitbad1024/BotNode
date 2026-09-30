@@ -39,6 +39,12 @@ nacho/api/
 │   │   ├── dependencies.py   get_onebot / CurrentUserDep
 │   │   ├── requests.py       IssueTokenRequest
 │   │   └── responses.py      ClientData / TokenData / IssuedTokenData…
+│   ├── bots/        机器人管理（跨平台 /api/bots/*：增 / 启停 / 删；凭证行走 bot_credentials）
+│   │   ├── router.py         列表 / 添加（选 platform）/ 启用停用 / 删除
+│   │   ├── protocols.py      BotsService / OnlineBot（结构化协议）
+│   │   ├── dependencies.py   get_bots / CurrentUserDep
+│   │   ├── requests.py       AddBotRequest / SetBotEnabledRequest
+│   │   └── responses.py      BotData / IssuedBotData（明文只在签发那一次出现）
 │   ├── workflow/     工作流管理（实现在 nacho.workflow，按协议取用，不 import 实现）
 │   │   ├── router.py         定义增删查改 / 暂存 / 版本 / 发布 / 入库前校验
 │   │   ├── protocols.py      WorkflowStoreLike（结构化协议）
@@ -109,10 +115,11 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/__init__.py` | 入口层总览，导出 `auth_router`、`profile_router`、`onebot_router`、`workflow_router`、`log_router`。 |
+| `api/__init__.py` | 入口层总览，导出 `auth_router`、`profile_router`、`onebot_router`、`bots_router`、`workflow_router`、`log_router`。 |
 | `api/auth/__init__.py` | 鉴权入口汇总（注册 / 登录 / 当前用户 / 登录设备）。 |
 | `api/profile/__init__.py` | 个人设置入口汇总（`ProfileData` / `profile_router`）。 |
-| `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销）。 |
+| `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销；P5 起是兼容面）。 |
+| `api/bots/__init__.py` | 机器人管理入口汇总（跨平台增 / 启停 / 删，列表 / 添加 / 启用停用 / 删除）。 |
 | `api/workflow/__init__.py` | 工作流管理入口汇总（`WorkflowStoreLike` / `workflow_router`）。 |
 | `api/log/__init__.py` | 运行日志入口汇总（`LogData` / `log_router`）。 |
 
@@ -159,6 +166,9 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 > 把 OneBot 的「在线客户端列表」与「令牌管理」做成 HTTP 接口。服务本身在 `nacho.onebot`，
 > 由主程序装配时传进 `create_app(onebot=...)`；**这里不 import `nacho.onebot`**（那样等于
 > 装 api 就必装 websockets），只按 `protocols.py` 里的结构化协议取用。
+>
+> **P5 起的兼容面**：新流程统一走 `/api/bots/*`（见 3.5），这组 `/api/onebot/*` 保留给旧
+> 客户端 / 旧流程（旧令牌 `nbo_` 仍能连）。
 
 > **登录了还要看身份**：这几个接口是**全局**操作（踢任意账号的客户端、给任意账号签令牌），
 > 只做认证等于把所有人的机器人交给每一个登录用户。带 `admin` 角色的人**不限**（能管所有账号），
@@ -178,7 +188,28 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
 
-### 3.5 api/workflow/ —— 工作流管理入口
+### 3.5 api/bots/ —— 机器人管理入口（跨平台泛化版）
+
+> 把「机器人」管理做成 HTTP 接口：一个用户添加一个机器人 = 一行「凭证行」（``nacho.bots`` 的
+> ``bot_credentials``：``platform`` + ``owner_id`` + ``bot_id`` 复合键，一个用户可多个机器人）。
+> OneBot 行是随机令牌（反向 WS 握手按 token 认归属）、Kook 行是用户自填的 Bot Token（可逆
+> 加密落库、连接时解密）。实现走 ``nacho.bridge.manager`` 的 ``BotManager``，接口层只认
+> ``protocols.py`` 里的 ``BotsService`` 协议——平台差异（Kook 的启停要 start / stop 正向 WS
+> 客户端）封在实现里，这里不 import 任何平台包。
+
+> **接口语义不硬套**：统一成「增 / 启停 / 删」，不套 OneBot 的「踢 / revoke」——Kook 单 bot
+> 没有「多归属客户端」概念，Kook 的停用 / 删除就是停 / 注销正向 WS 客户端。旧
+> ``/api/onebot/*`` 保留为**兼容面**（P5-4 起旧客户端用旧令牌仍能连），新流程都走这里。
+
+| 文件 | 作用 |
+|---|---|
+| `api/bots/router.py` | **HTTP 入口**：`GET <prefix>/bots`（列表 + 归属昵称 + 在线状态）、`POST <prefix>/bots`（添加，`platform` 选 onebot / kook）、`PATCH <prefix>/bots/{id}`（启用 / 停用）、`DELETE <prefix>/bots/{id}`（删除）。全部要求登录并按身份收范围。 |
+| `api/bots/protocols.py` | 结构化协议 `BotsService`（增 / 启停 / 删 + 在线聚合）+ `OnlineBot`（在线那一格）。记录形状复用 onebot 的 `TokenLike` / `IssuedLike`（一条凭证不含明文是跨平台的）。 |
+| `api/bots/dependencies.py` | 路由注入件：`get_bots`（从 `app.state` 取服务，没接入回 503）、`BotsDep`。 |
+| `api/bots/requests.py` | 请求体 `AddBotRequest`（`platform` 缺省 onebot；kook 必填 `token`）、`SetBotEnabledRequest`。 |
+| `api/bots/responses.py` | 响应体 `BotData`（一条记录，**不含明文**）/ `IssuedBotData`（明文只在签发那一次出现）。 |
+
+### 3.6 api/workflow/ —— 工作流管理入口
 
 > 工作流是**另一块业务**：图形 / 校验 / 落库的实现都在 `nacho.workflow`，接口层只认一份能力
 > 协议 `WorkflowStoreLike`（见 `protocols.py`），装配时由主程序挂到 `app.state.workflow_store`。
@@ -194,7 +225,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `api/workflow/requests.py` | 请求体：新建 / 改名 / 暂存 / 提交版本 / 发布 / 拨开关 / 改设置。 |
 | `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData` / `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`，以及节点目录的 `NodeCatalogData` / `NodeTypeData` / `NodeFieldData` / `NodePortData`（从注册表的 `NodeSpec` 映射，`MISSING_DEFAULT` 在这里翻成 `has_default=false`）。 |
 
-### 3.6 api/log/ —— 运行日志检索
+### 3.7 api/log/ —— 运行日志检索
 
 > 把「查历史日志」做成一个 HTTP 接口。**查询本身不在这里实现**：条件原样递给日志系统的
 > `BaseLogger.search()`，它再扇出到各出口 —— 落库那份就是一条 SQL（`WHERE` / `ORDER BY` /

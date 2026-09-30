@@ -9,9 +9,9 @@
 - [x] **P2** 适配器层抽象：新增 `nacho/bridge/`（`PlatformEvent` + `BotAdapter` 协议 + `Gateway` 总线），把 `OneBotServer` 包成第一个适配器
 - [x] **P3** workflow 泛化：消息触发真正接通（start `trigger=message`）+ `onebot` 节点泛化为 `send` 节点（platform 参数）
 - [x] **P4** Kook 适配器：作为第二个适配器验证抽象是否通用
-- [ ] **P5** 通用机器人基础设施：`/api/onebot/*` 泛化成 `/api/bots/*`；令牌表泛化成「机器人行」
+- [x] **P5** 通用机器人基础设施：`/api/onebot/*` 泛化成 `/api/bots/*`；令牌表泛化成「机器人行」
   （一条一个机器人，platform + owner_id + bot_id）；OneBot 兼容（旧客户端用旧令牌仍能连）
-- [ ] **P6** Kook 接入管理面：Kook 机器人也走 `/api/bots/*`（添 Bot Token 时填 platform=kook）；
+- [x] **P6** Kook 接入管理面：Kook 机器人也走 `/api/bots/*`（添 Bot Token 时填 platform=kook）；
   前端「机器人」页改成「添加机器人选底层适配器（onebot / kook）」
 
 设计基调：
@@ -49,5 +49,5 @@
   装配层读 Kook 凭证行建 KookAdapter（不再只认 `[kook]` 配置节）。
 - [x] **P6-2** Kook 管理面：`/api/bots/*` 支持 Kook 机器人的「添加 / 启用 / 停用 / 删」
   （不硬套 OneBot 的踢/revoke）；前端「添加机器人」开放 kook 选项。
-- [ ] **P6-3** 收尾：`bridge/__init__.py` / MODULES.md 文档同步（「凭证行」概念、platform
+- [x] **P6-3** 收尾：`bridge/__init__.py` / MODULES.md 文档同步（「凭证行」概念、platform
   复合键）；全量回归；勾掉 P5 / P6。

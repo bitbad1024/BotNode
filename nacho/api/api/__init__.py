@@ -6,7 +6,8 @@
 
     auth/     鉴权入口：``POST <prefix>/auth/login``、``GET <prefix>/auth/me``
     profile/  个人设置入口：``<prefix>/profile``（改昵称 / 头像）
-    onebot/   OneBot 管理入口：``<prefix>/onebot/clients``、``<prefix>/onebot/tokens``
+    onebot/   OneBot 管理入口：``<prefix>/onebot/clients``、``<prefix>/onebot/tokens``（兼容面）
+    bots/     机器人管理入口：``<prefix>/bots``（跨平台增 / 启停 / 删）
     log/      运行日志入口：``GET <prefix>/logs``
     workflow/ 工作流入口：``<prefix>/workflows``（定义 / 版本 / 发布 / 入库前校验）
 

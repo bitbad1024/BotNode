@@ -6,8 +6,8 @@
 2. 装 :class:`~nacho.api.common.middlewares.RequestLogMiddleware`（编号 + 访问日志）；
 3. 装异常处理器（:func:`~nacho.api.common.errors.register_exception_handlers`）—— 出去的错误
    都是 :class:`~nacho.api.common.models.ErrorResponse` 那个形状；
-4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``、运行日志
-   ``<prefix>/logs``），并把各模块的服务挂到 ``app.state`` 上给路由注入。
+4. 挂各业务模块的路由（鉴权 ``<prefix>/auth``、OneBot 管理 ``<prefix>/onebot``、机器人管理
+   ``<prefix>/bots``、运行日志 ``<prefix>/logs``），并把各模块的服务挂到 ``app.state`` 上给路由注入。
 
 依赖全是可选的：不传 ``user_store`` / ``session_store`` 就用落库版
 :class:`~nacho.api.services.user.store_sql.SqlUserStore`（查 ``users`` 表）与
@@ -19,6 +19,10 @@
 ``<prefix>/onebot/*`` 那组管理接口才有用；没传就回 503（「没接入」和「出错了」分开报）。
 这里按 :class:`~nacho.api.api.onebot.protocols.OneBotLike` 协议接收，所以 **接口层不 import
 ``nacho.onebot``** —— 只装 ``nacho[api]`` 也能跑起来（具体说明见那个模块）。
+
+``bots`` 同样是可选的：主程序把 :class:`nacho.bridge.manager.BotManager` 传进来，
+``<prefix>/bots/*`` 那组管理接口（跨平台增 / 启停 / 删）才有用；没传就回 503。这里按
+:class:`~nacho.api.api.bots.protocols.BotsService` 协议接收，所以接口层不 import 任何平台包。
 
 用法::
 

@@ -16,7 +16,8 @@
         encoding.py     base64 编解码（哈希串与令牌共用）
     api/            入口层：认识 FastAPI（路由 / 依赖 / 请求响应）
         auth/           鉴权接口：登录、当前用户
-        onebot/         OneBot 管理接口：在线客户端列表、踢人、令牌签发与吊销
+        onebot/         OneBot 管理接口：在线客户端列表、踢人、令牌签发与吊销（兼容面）
+        bots/           机器人管理接口：跨平台增 / 启停 / 删（凭证行走 bot_credentials）
     services/       业务层：不认识 FastAPI
         user/           用户：形状 / 校验规则 / 协议 / 默认实现
         auth/           鉴权：令牌 / 凭据换令牌的服务
@@ -38,7 +39,7 @@
     #   GET  /api/auth/me      Authorization: Bearer <上一步返回的 token>
 
 接真实环境时把各模块协议的实现传进 :func:`create_app` 即可（``user_store`` / ``hasher`` /
-``session_store`` / ``onebot`` / ``workflow_store`` / ``workflow_triggers`` / ``avatar_store``），
+``session_store`` / ``onebot`` / ``bots`` / ``workflow_store`` / ``workflow_triggers`` / ``avatar_store``），
 路由与这里一行都不用改。
 
 依赖 ``fastapi``（``pip install "nacho[api]"``）；请求日志走 ``nacho.core.logger``，
