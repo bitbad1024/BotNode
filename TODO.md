@@ -23,13 +23,13 @@
 - [x] 同步引用：`__init__.py` 导出、`console.py` docstring、tests、examples、docs/logger.md
 
 ### 3. base.py（核心改动）
-- [ ] 新增 `ChildLogger` 类：持 `_root` / `_parent` / `_name` / `_level` / `_targets`，**无 children 缓存字典、无父级状态复制**（扁平化，`__slots__` 即可）
-- [ ] `ChildLogger` 动态解析：`level` = 沿父链最近一个显式设置；`targets` = 沿父链最近一份显式指定，都没有则跟随 root 当前默认目标（`None` = 继承）
-- [ ] `ChildLogger.log()`：写时解析 → 构造记录 → 只投解析出的 targets，**不 propagate**
-- [ ] `ChildLogger` 提供 `child()`（继续生长）/ `bind()`（产 BoundLogger）/ `set_level()` / `is_enabled_for()` / `log()` + 各级别便捷方法 / `flush()`
-- [ ] `BaseLogger.child(name, *, level=None, targets=None) -> ChildLogger`：名字经 `qualify()` 拼接；每次返回新视图对象（无缓存，行为一致）
-- [ ] docstring 翻案：顶部「没有派生实例」段、`BoundLogger` 里那句 child 对比
-- [ ] `BoundLogger` 保持无 `child`（类型分离，现有已满足，仅文档确认）
+- [x] 新增 `ChildLogger` 类：持 `_root` / `_parent` / `_name` / `_level` / `_targets`，**无 children 缓存字典、无父级状态复制**（扁平化，`__slots__` 即可）
+- [x] `ChildLogger` 动态解析：`level` = 沿父链最近一个显式设置；`targets` = 沿父链最近一份显式指定，都没有则跟随 root 当前默认目标（`None` = 继承）
+- [x] `ChildLogger.log()`：写时解析 → 构造记录 → 只投解析出的 targets，**不 propagate**
+- [x] `ChildLogger` 提供 `child()`（继续生长）/ `bind()`（产 BoundLogger）/ `set_level()` / `is_enabled_for()` / `log()` + 各级别便捷方法 / `flush()`
+- [x] `BaseLogger.child(name, *, level=None, targets=None) -> ChildLogger`：名字经 `qualify()` 拼接；每次返回新视图对象（无缓存，行为一致）
+- [x] docstring 翻案：顶部「没有派生实例」段、`BoundLogger` 里那句 child 对比
+- [x] `BoundLogger` 保持无 `child`（类型分离，现有已满足，仅文档确认）
 
 ### 4. core.py
 - [ ] `mount_module(name, processor, *, core=None, level=None)`：`level` 透传给 `route`
