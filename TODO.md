@@ -45,15 +45,15 @@
 - [x] 翻案「没有派生实例」相关段落，补 child/bind 分工说明
 
 ### 8. 示例与处理器 docstring
-- [ ] `processors/console.py`、`examples/logging_demo.py` 中 `LevelFilter` 引用更新
+- [x] `processors/console.py`、`examples/logging_demo.py` 中 `LevelFilter` 引用更新
 
 ### 9. 测试
-- [ ] `test_log_core.py`：`LevelFilter` 用法改为 `mount(level=)`（约 3 处）
-- [ ] 新增 child 用例：层级命名、缓存命中同一对象、创建时固化（父后改配置不影响已派生节点）、无父级重复投递、`bind()` 产物无 `child`、`child().bind()` 组合语义
+- [x] `test_log_core.py`：`LevelFilter` 用法改为 `mount(level=)`（约 3 处）
+- [x] 新增 child 用例：层级命名、缓存命中同一对象、创建时固化（父后改配置不影响已派生节点）、无父级重复投递、`bind()` 产物无 `child`、`child().bind()` 组合语义
 
 ## 验证
-- [ ] `python -m pytest tests -q` 全绿
-- [ ] `ruff check` 无新增错误
+- [x] `python -m pytest tests -q` 全绿
+- [x] `ruff check` 无新增错误
 
 ## 备注
 - `route` / `publish` 保留不动：`route` 是「这条路换目标的具名缓存视图」（返回 `BoundLogger`），`child` 是「命名层级节点」——两者并存，docstring 讲清分工。

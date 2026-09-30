@@ -22,12 +22,12 @@ import pytest
 from nacho.core.logger import (
     BaseLogProcessor,
     BoundLogger,
+    ChildLogger,
     ConsoleLogProcessor,
     LocalFileLogProcessor,
     LogCore,
     LogFilter,
     LogRecord,
-    LogSearchResult,
     Target,
     configure,
     current_default_core,
@@ -726,3 +726,88 @@ class TestBoundTargets:
             await core.stop()  # 停机 flush 所有已接纳的出口
 
         assert outlet.received == ["一条"]
+
+
+class TestChildLogger:
+    """child 命名层级：缓存树 + 创建时固化，与 bind 的类型分工。"""
+
+    def test_child_name_is_qualified_hierarchically(self) -> None:
+        """相对名补全为完整层级名；再 child 一层继续拼；全名写法等价。"""
+        core = LogCore(console=False)
+        a = core.child("a")
+        assert isinstance(a, ChildLogger)
+        assert a.name == "nacho.a"
+        assert a.child("b").name == "nacho.a.b"
+        # root.child("a.b") 与 root.child("a").child("b") 名字一致、行为等价
+        assert core.child("a.b").name == "nacho.a.b"
+        assert core.child("nacho.a.b").name == "nacho.a.b"  # 全名原样返回
+
+    def test_child_cache_returns_same_object(self) -> None:
+        """同名 child 命中缓存：返回同一对象，不重复固化。"""
+        core = LogCore(console=False)
+        assert core.child("vision") is core.child("vision")
+        a = core.child("a")
+        assert a.child("b") is a.child("b")
+        # 路径一致的两条调用链，逐层都命中缓存
+        assert core.child("a").child("b") is core.child("a").child("b")
+
+    def test_child_snapshots_level_and_targets_at_creation(self) -> None:
+        """创建时固化：父后改级别 / 挂出口不影响已派生节点。"""
+        core = LogCore(console=False)
+        first = CollectingProcessor(name="first")
+        core.mount(first)
+        child = core.child("a")
+        frozen_level = child.level
+        frozen_targets = child.targets
+
+        core.set_level("ERROR")
+        core.mount(CollectingProcessor(name="later"))
+
+        assert child.level is frozen_level  # 级别仍是创建时那份
+        assert child.targets is frozen_targets  # 目标仍是创建时那份
+        assert child.is_enabled_for(LogLevel.INFO) is True  # 不受 root 改级别影响
+        assert core.is_enabled_for(LogLevel.INFO) is False  # root 自己确实改了
+        assert [target.processor for target in child.targets] == [first]  # 后挂的出口不在其中
+
+    async def test_child_does_not_repeat_delivery_to_root(self) -> None:
+        """无父级重复投递：挂了自己目标的子节点只投那一份，root 收不到。"""
+        root_outlet = CollectingProcessor(name="root")
+        child_outlet = CollectingProcessor(name="child")
+        core = LogCore(console=False, processors=[root_outlet])
+        child = core.child("robot", targets=[child_outlet])
+
+        await core.start()
+        try:
+            child.info("机器人专属")
+            assert await wait_until(lambda: child_outlet.received == ["机器人专属"]) is True
+        finally:
+            await core.stop()
+
+        assert root_outlet.received == []  # 不沿父链重复投递（无 propagate）
+
+    def test_bind_product_has_no_child(self) -> None:
+        """bind() 产物是上下文视图：不能再 child 生长（类型分离）。"""
+        core = LogCore(console=False)
+        assert not hasattr(core.bind(workflow_id="w1"), "child")
+        assert not hasattr(core.child("a").bind(workflow_id="w1"), "child")
+
+    async def test_child_then_bind_combines_semantics(self) -> None:
+        """child().bind() 组合：名字取子节点、目标取固化份、默认字段随记录走。"""
+        outlet = RecordingProcessor()
+        core = LogCore(console=False)
+        child = core.child("api.access", targets=[outlet])
+        log = child.bind(owner_id="u-admin", trace_id="t1")
+        assert log.name == "nacho.api.access"
+
+        await core.start()
+        try:
+            log.info("一条访问")
+            log.info("换个归属", owner_id="u-robot")
+            assert await wait_until(lambda: len(outlet.records) >= 2) is True
+        finally:
+            await core.stop()
+
+        assert [(r.logger_name, r.owner_id, r.extra) for r in outlet.records] == [
+            ("nacho.api.access", "u-admin", {"trace_id": "t1"}),
+            ("nacho.api.access", "u-robot", {"trace_id": "t1"}),
+        ]
