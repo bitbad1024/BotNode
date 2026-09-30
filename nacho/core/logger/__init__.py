@@ -28,7 +28,7 @@ from .processors import (
 )
 
 # ---- 过滤器（挂在 Target 上）----
-from .filters import LevelFilter, LogFilter
+from .filters import LogFilter
 
 # ---- 数据模型 ----
 from .models import LogLevel, LogRecord, LogSearchResult, Target, normalize_timestamp
@@ -57,7 +57,6 @@ __all__ = [
     "DatabaseLogProcessor",
     # 过滤器
     "LogFilter",
-    "LevelFilter",
     # 数据模型
     "LogLevel",
     "LogRecord",

@@ -12,12 +12,12 @@
 * 同一个过滤器能挂到任意出口上，同一个处理机也能配不同过滤器；
 * 过滤发生在**日志进入处理机之前**，被过滤掉的日志连处理机的缓冲区都不进。
 
-用法（挂载出口时把过滤器交给日志系统，而不是写进处理机）::
+出口级的最低级别用 ``level`` 门槛表达（挂在 :class:`Target` 上，而不是写进处理机）::
 
-    from nacho.core.logger import LogCore, ConsoleLogProcessor, LevelFilter
+    from nacho.core.logger import LogCore, ConsoleLogProcessor
 
     core = LogCore(console=False)
-    core.mount(ConsoleLogProcessor(), log_filter=LevelFilter("WARNING"))
+    core.mount(ConsoleLogProcessor(), level="WARNING")
     # 从此控制台只收 WARNING 及以上；分发器在路由时就把它过滤掉了
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 import abc
 from typing import override
 
-from .models import LogLevel, LogRecord
+from .models import LogRecord
 
 
 class LogFilter(abc.ABC):
@@ -53,7 +53,7 @@ class LogFilter(abc.ABC):
 class DenyAllFilter(LogFilter):
     """全拒过滤器：一条都不放行。
 
-    单独一个类而不是拿 ``LevelFilter("CRITICAL")`` 凑数：语义是「这个出口对这份实例
+    单独一个类而不是拿一个极高的 ``level`` 门槛凑数：语义是「这个出口对这份实例
     关闸」，与级别无关——就算出现比 CRITICAL 更高的级别也照拒。典型用途是
     :meth:`~nacho.core.logger.base.BaseLogger.mute`：把继承来的全局留存出口
     （如落库）在**某一路**日志上堵住，别的路照常投递。
@@ -70,27 +70,3 @@ class DenyAllFilter(LogFilter):
 
 #: 进程级共享的「全拒」单例（无状态，谁的 ``mute`` 都用它）
 DENY_ALL: DenyAllFilter = DenyAllFilter()
-
-
-class LevelFilter(LogFilter):
-    """按最低级别过滤：只放行 ``record.level >= level`` 的日志。
-
-    典型用途是「控制台只给粗粒度、文件全量」：同一个 :class:`LogCore` 上，
-    给控制台出口挂 ``LevelFilter("WARNING")``，给文件出口不加过滤器即可。
-    """
-
-    def __init__(self, level: "LogLevel | str") -> None:
-        self._level: LogLevel = LogLevel.parse(level)
-
-    @property
-    def level(self) -> LogLevel:
-        """放行的最低级别。"""
-        return self._level
-
-    @override
-    def match(self, record: LogRecord) -> bool:
-        return record.level >= self._level
-
-    @override
-    def __repr__(self) -> str:
-        return f"<LevelFilter level={self._level.name}>"

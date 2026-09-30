@@ -67,12 +67,12 @@ log.info("换个归属", owner_id="u-2")
 ## 运行期挂载与过滤器
 
 ```python
-from nacho.core.logger import LevelFilter, Target
+from nacho.core.logger import Target
 
 core.mount(LocalFileLogProcessor("logs", prefix="robot"),
-           log_filter=LevelFilter("WARNING"))     # 挂一个：只收 WARNING 及以上
-core.mount(Target(outlet, log_filter=LevelFilter("ERROR"), priority=-1))  # 带优先级
-# 过滤器挂在目标一侧：被筛掉的日志连处理机的缓冲区都不进
+           level="WARNING")                                  # 挂一个：只收 WARNING 及以上
+core.mount(Target(outlet, level="ERROR", priority=-1))       # 带优先级
+# 级别门槛挂在目标一侧：被筛掉的日志连处理机的缓冲区都不进
 ```
 
 ## 进程门面（业务代码通常只用这三个）

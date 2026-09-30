@@ -54,7 +54,7 @@ from dataclasses import replace
 from types import MappingProxyType, TracebackType
 from typing import TextIO, TypedDict, cast, override
 
-from .filters import DENY_ALL, LevelFilter, LogFilter
+from .filters import DENY_ALL, LogFilter
 from .models import LogLevel, LogRecord, LogSearchResult, Target, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
 from .processors.console import ConsoleLogProcessor
@@ -146,8 +146,8 @@ class BaseLogger:
         :param console: 是否默认挂一路控制台输出（默认 ``True``）：库 / 服务端不想
             要任何标准输出就传 ``False``。已经挂过控制台就不重复挂。
         :param console_level: 控制台最低级别，默认与 ``level`` 一致（控制台通常只给
-            人看，可以比文件出口更粗）。它会变成一个 :class:`LevelFilter` 挂在那个
-            目标上 —— 控制台处理机自己不做过滤。
+            人看，可以比文件出口更粗）。它作为**出口级 level 门槛**挂在那个目标上 ——
+            控制台处理机自己不做过滤。
         :param dispatch_batch_size: 分发器一次最多从队列取多少条。这是**交接批量**，
             不是攒批水位线——攒批由各处理机的 ``buffer_size`` 决定。
         :param dispatch_timeout: 队列取不到新日志时，最多再等多久就把手上这批先交出去。
@@ -181,11 +181,11 @@ class BaseLogger:
         #: 构造时是否要求了默认控制台输出（看得出「有没有那一路」）
         self._console_enabled: bool = console
         if console and self.get_processor(ConsoleLogProcessor.name) is None:
-            # 控制台也是一个普通目标：级别判定交给挂在它上面的 LevelFilter（给出口挂一层
-            # 过滤，而不是让处理机自己认级别）
+            # 控制台也是一个普通目标：级别门槛就是出口级 level（给出口设门槛，
+            # 而不是让处理机自己认级别）
             self.mount(
                 ConsoleLogProcessor(stream=console_stream, color=console_color),
-                log_filter=LevelFilter(level if console_level is None else console_level),
+                level=level if console_level is None else console_level,
             )
 
     @property
@@ -235,6 +235,7 @@ class BaseLogger:
         self,
         *processors: "Target | BaseLogProcessor",
         log_filter: LogFilter | None = None,
+        level: "LogLevel | str | None" = None,
         priority: int = 0,
         replace: bool = False,
     ) -> BaseLogger:
@@ -244,13 +245,15 @@ class BaseLogger:
         看得到。重复挂**同一个对象**无害。
 
         :param log_filter: 给这批目标挂的过滤器（只放行通过它的记录）。
+        :param level: 出口级最低级别，低于它的记录直接跳过；``None`` = 全收。只作用于
+            直接传入的处理机，已包装成 :class:`Target` 的用自己的 ``level``。
         :param priority: 投放优先级，小的先投。
         :param replace: 换通道：先把**同名**的那几个目标摘掉再挂（换输出路径 / 热重载）。
         """
         added: list[Target] = [
             item
             if isinstance(item, Target)
-            else Target(item, log_filter=log_filter, priority=priority)
+            else Target(item, log_filter=log_filter, level=level, priority=priority)
             for item in processors
         ]
         self.adopt(*(target.processor for target in added))
@@ -463,6 +466,8 @@ class BaseLogger:
             for target in record.targets or ():
                 processor = target.processor
                 if not processor.healthy:
+                    continue
+                if target.level is not None and record.level < target.level:
                     continue
                 if target.log_filter is not None and not target.log_filter.match(record):
                     continue

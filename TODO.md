@@ -13,10 +13,14 @@
 ### 1. models.py
 - [x] `Target` 加 `level: LogLevel | None = None` 字段（出口级最低级别，`None` = 全收）
 
-### 2. filters.py
-- [ ] 删除 `LevelFilter` 类（级别过滤收敛为 `Target.level` 字段，不留类）
-- [ ] 更新模块 docstring 示例与 `DenyAllFilter` docstring 引用
-- [ ] 清理残留 import（`LogLevel` 不再使用）
+### 2. 级别过滤收敛（filters.py + base.py 承接）
+- [x] 删除 `LevelFilter` 类（级别过滤收敛为 `Target.level` 字段，不留类）
+- [x] 更新 filters.py 模块 docstring 示例与 `DenyAllFilter` docstring 引用
+- [x] 清理 filters.py 残留 import（`LogLevel` 不再使用）
+- [x] `BaseLogger.mount(..., level=None)`：`Target` 带 level，替代 `LevelFilter` 的活
+- [x] `_dispatch` 分发时按 `target.level` 过滤（低于不放行）
+- [x] console 挂载改 `level=`（`console_level` 配置参数保留，映射到 `Target.level`）
+- [x] 同步引用：`__init__.py` 导出、`console.py` docstring、tests、examples、docs/logger.md
 
 ### 3. base.py（核心改动）
 - [ ] 新增 `ChildLogger` 类：持 `_root` / `_parent` / `_name` / `_level` / `_targets`，**无 children 缓存字典、无父级状态复制**（扁平化，`__slots__` 即可）
@@ -24,9 +28,6 @@
 - [ ] `ChildLogger.log()`：写时解析 → 构造记录 → 只投解析出的 targets，**不 propagate**
 - [ ] `ChildLogger` 提供 `child()`（继续生长）/ `bind()`（产 BoundLogger）/ `set_level()` / `is_enabled_for()` / `log()` + 各级别便捷方法 / `flush()`
 - [ ] `BaseLogger.child(name, *, level=None, targets=None) -> ChildLogger`：名字经 `qualify()` 拼接；每次返回新视图对象（无缓存，行为一致）
-- [ ] `BaseLogger.mount(..., level=None)`：`Target` 带 level，替代 `LevelFilter` 的活
-- [ ] `_dispatch` 分发时按 `target.level` 过滤（低于不放行）
-- [ ] console 挂载改 `level=`（`console_level` 配置参数保留，映射到 `Target.level`）
 - [ ] docstring 翻案：顶部「没有派生实例」段、`BoundLogger` 里那句 child 对比
 - [ ] `BoundLogger` 保持无 `child`（类型分离，现有已满足，仅文档确认）
 

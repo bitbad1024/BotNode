@@ -99,7 +99,7 @@ async def main() -> None:
                     flush_interval=0.2,
                 )
             ),
-            # 控制台那份也照收（它自带 LevelFilter，所以 DEBUG 还是进不去）
+            # 控制台那份也照收（它自带 level 门槛，所以 DEBUG 还是进不去）
             *([] if console is None else [Target(console)]),
         ],
     )

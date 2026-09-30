@@ -97,6 +97,11 @@ class Target:
     level: LogLevel | None = None
     priority: int = 0
 
+    def __post_init__(self) -> None:
+        """把 ``level`` 统一解析成 :class:`LogLevel`（挂载时允许传级别名）。"""
+        if self.level is not None:
+            object.__setattr__(self, "level", LogLevel.parse(self.level))
+
 
 @dataclass(slots=True)
 class LogRecord:

@@ -23,7 +23,6 @@ from nacho.core.logger import (
     BaseLogProcessor,
     BoundLogger,
     ConsoleLogProcessor,
-    LevelFilter,
     LocalFileLogProcessor,
     LogCore,
     LogFilter,
@@ -332,12 +331,12 @@ class TestDispatcherFiltering:
         assert kept.pending == 0  # 也没进它的缓冲区
 
     async def test_level_filter_only_lets_high_levels_through(self) -> None:
-        """显式给出口挂 LevelFilter：分发器在路由时按级别筛选。"""
+        """显式给出口挂 level 门槛：分发器在路由时按级别筛选。"""
         low = CollectingProcessor(name="low")
         high = CollectingProcessor(name="high")
         core = LogCore(console=False, level="DEBUG", dispatch_timeout=0.01)
         core.mount(low)
-        core.mount(high, log_filter=LevelFilter("ERROR"))
+        core.mount(high, level="ERROR")
 
         await core.start()
         try:
@@ -355,7 +354,7 @@ class TestDispatcherFiltering:
         """换出口时不带过滤器 -> 旧过滤器一并清掉，新出口全收。"""
         core = LogCore(console=False, dispatch_timeout=0.01)
         first = CollectingProcessor(name="file")
-        core.mount(first, log_filter=LevelFilter("ERROR"))
+        core.mount(first, level="ERROR")
 
         second = CollectingProcessor(name="file")
         core.mount(second, replace=True)
