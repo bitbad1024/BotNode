@@ -45,10 +45,11 @@
 - [x] 翻案「没有派生实例」相关段落，补 child/bind 分工说明
 
 ### 8. 示例与处理器 docstring
-- [x] `processors/console.py`、`examples/logging_demo.py` 中 `LevelFilter` 引用更新
+- [x] `processors/console.py`：docstring 改为「控制台不做过滤、挂载时用出口级 `level=` 设门槛」的表述（`LevelFilter` 字样随类删除一并清掉）
+- [x] `examples/logging_demo.py`：本无 `LevelFilter` 引用，未动；演示改用 `child()` + `Target`，注释注明控制台目标自带 level 门槛
 
 ### 9. 测试
-- [x] `test_log_core.py`：`LevelFilter` 用法改为 `mount(level=)`（约 3 处）
+- [x] `test_log_core.py`：原 `LevelFilter` 级别过滤用例改 `mount(level=)`（2 处：`test_level_filter_only_lets_high_levels_through`、`test_replace_without_filter_clears_old_filter`）
 - [x] 新增 child 用例：层级命名、缓存命中同一对象、创建时固化（父后改配置不影响已派生节点）、无父级重复投递、`bind()` 产物无 `child`、`child().bind()` 组合语义
 
 ## 验证
