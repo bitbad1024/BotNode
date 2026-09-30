@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from nacho.bridge.kook import KookAdapter, _translate
-from nacho.bridge.models import PlatformEvent
-from nacho.kook import KookEvent, KookOptions
+from nacho.platforms.bridge.kook import KookAdapter, _translate
+from nacho.platforms.bridge.models import PlatformEvent
+from nacho.platforms.kook import KookEvent, KookOptions
 
 
 def test_translate_group_message() -> None:
@@ -83,7 +83,7 @@ class _FakeClient:
 
     async def call(self, action: str, /, **params: object) -> Any:
         self.calls.append((action, dict(params)))
-        from nacho.kook import KookActionResponse
+        from nacho.platforms.kook import KookActionResponse
 
         return KookActionResponse(code=0 if self._ok else 40001, message="success" if self._ok else "参数错误")
 

@@ -21,8 +21,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from nacho.core.logger import BaseLogger, get_logger
-from nacho.onebot import OneBotOptions, OneBotServer
-from nacho.onebot.models import (
+from nacho.platforms.onebot import OneBotOptions, OneBotServer
+from nacho.platforms.onebot.models import (
     ActionResponse,
     MessageEvent,
     MetaEvent,
@@ -30,7 +30,7 @@ from nacho.onebot.models import (
     OneBotEvent,
     RequestEvent,
 )
-from nacho.onebot.server import ClientEntry, OneBotConnection
+from nacho.platforms.onebot.server import ClientEntry, OneBotConnection
 
 from .gateway import EventSubscriber
 from .models import ActionResult, BotClient, PlatformEvent

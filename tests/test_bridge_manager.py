@@ -13,8 +13,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from nacho.bots import SqlBotStore
-from nacho.bridge.manager import BotManager
-from nacho.bridge.models import BotClient
+from nacho.platforms.bridge.manager import BotManager
+from nacho.platforms.bridge.models import BotClient
 
 
 @pytest.fixture

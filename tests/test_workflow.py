@@ -1644,7 +1644,7 @@ class _FakeGateway:
     async def send(
         self, platform: str, owner_id: str, action: str, /, **params: object
     ) -> Any:
-        from nacho.bridge.models import ActionResult
+        from nacho.platforms.bridge.models import ActionResult
 
         self.calls.append((platform, owner_id, action, dict(params)))
         resp = self._response
@@ -3667,7 +3667,7 @@ async def test_on_platform_event_dispatches_message_to_router() -> None:
     字段进 ``trigger_data``，按 owner_id 路由；notice / meta 之类不触发。
     """
     import nacho.bootstrap as bootstrap
-    from nacho.bridge.models import PlatformEvent
+    from nacho.platforms.bridge.models import PlatformEvent
     from nacho.workflow.runtime import MessageRouter
 
     dispatched: list[tuple[str, dict[str, str]]] = []  # (owner_id, trigger_data)

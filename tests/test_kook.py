@@ -18,7 +18,7 @@ pytest.importorskip("websockets", reason="Kook 接入层要装 websockets：pip 
 
 from websockets.asyncio.server import serve  # noqa: E402
 
-from nacho.kook import (  # noqa: E402
+from nacho.platforms.kook import (  # noqa: E402
     EVENT_TEXT,
     KookActionResponse,
     KookClient,
@@ -27,7 +27,7 @@ from nacho.kook import (  # noqa: E402
     parse_action_response,
     parse_event,
 )
-from nacho.kook.client import _action_path, _reconnect_delay  # noqa: E402
+from nacho.platforms.kook.client import _action_path, _reconnect_delay  # noqa: E402
 
 
 def free_port() -> int:
@@ -307,7 +307,7 @@ async def test_stop_returns_serve_forever_quickly(monkeypatch: pytest.MonkeyPatc
 
 def test_reconnect_delay_grows_and_caps(monkeypatch: pytest.MonkeyPatch) -> None:
     """重连退避：连续失败指数增长、封顶上限；计数清零回到基准。"""
-    monkeypatch.setattr("nacho.kook.client._jitter", lambda: 1.0)  # 去掉抖动便于断言
+    monkeypatch.setattr("nacho.platforms.kook.client._jitter", lambda: 1.0)  # 去掉抖动便于断言
     options = KookOptions(reconnect_interval=3.0, reconnect_max_interval=30.0)
     assert _reconnect_delay(options, 0) == 3.0  # 重置 / 刚断开
     assert _reconnect_delay(options, 1) == 3.0
@@ -342,7 +342,7 @@ async def test_client_rest_reuses_connection(monkeypatch: pytest.MonkeyPatch) ->
 async def test_client_rest_retries_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
     """429 瞬时失败按退避重试，最后成功；重试耗尽按环境问题抛。"""
     client = KookClient(KookOptions(token="abc", rest_max_retries=2, rest_min_interval=0.0))
-    monkeypatch.setattr("nacho.kook.client._rest_backoff", lambda attempt: 0.0)  # 别真等退避
+    monkeypatch.setattr("nacho.platforms.kook.client._rest_backoff", lambda attempt: 0.0)  # 别真等退避
     count: dict[str, int] = {"n": 0}
 
     def script(n: int):

@@ -40,8 +40,8 @@ from nacho.api import (  # noqa: E402
     create_app,
 )
 from nacho.bots import SqlBotStore  # noqa: E402
-from nacho.bridge.manager import BotManager  # noqa: E402
-from nacho.onebot import (  # noqa: E402
+from nacho.platforms.bridge.manager import BotManager  # noqa: E402
+from nacho.platforms.onebot import (  # noqa: E402
     OneBotOptions,
     OneBotServer,
 )

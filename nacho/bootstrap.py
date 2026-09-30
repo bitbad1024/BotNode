@@ -30,15 +30,15 @@ from .api import (
     create_app,
 )
 from .bots import SqlBotStore
-from .bridge import Gateway, PlatformEvent
-from .bridge.kook import KookAdapter
-from .bridge.manager import BotManager
-from .bridge.onebot import OneBotAdapter
 from .core.cache import CacheOptions, cache
 from .core.logger import BaseLogger, get_logger, manager
 from .core.scheduler import scheduler
-from .kook import KookOptions
-from .onebot import OneBotOptions
+from .platforms.bridge import Gateway, PlatformEvent
+from .platforms.bridge.kook import KookAdapter
+from .platforms.bridge.manager import BotManager
+from .platforms.bridge.onebot import OneBotAdapter
+from .platforms.kook import KookOptions
+from .platforms.onebot import OneBotOptions
 from .workflow import SqlWorkflowStore
 from .workflow.runtime import (
     MessageRouter,

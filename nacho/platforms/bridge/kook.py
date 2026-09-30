@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 
 from nacho.core.logger import BaseLogger, get_logger
-from nacho.kook import KookActionResponse, KookClient, KookEvent, KookOptions
+from nacho.platforms.kook import KookActionResponse, KookClient, KookEvent, KookOptions
 
 from .gateway import EventSubscriber
 from .models import ActionResult, BotClient, PlatformEvent
