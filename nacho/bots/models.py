@@ -1,8 +1,9 @@
 """通用「机器人凭证」模型：一个用户添加一个机器人 = 一行凭证（跨平台）。
 
-与旧 :mod:`nacho.onebot.tokens` 的区别：旧模型是**一个归属一条令牌**（``id`` 即 owner_id
-主键，再签 = 换钥匙），只服务 OneBot 反向 WS 的多归属场景；这里是**一个机器人一行**
-（``bot_id`` 主键，一个用户可拥有多个机器人），``platform`` 区分底层适配器（onebot / kook）。
+与旧 :mod:`nacho.platforms.onebot.tokens` 的区别：旧模型是**一个归属一条令牌**（``id`` 即
+owner_id 主键，再签 = 换钥匙），只服务 OneBot 反向 WS 的多归属场景；这里是**一个机器人
+一行**（``bot_id`` 主键，一个用户可拥有多个机器人），``platform`` 区分底层适配器
+（onebot / kook）。
 
 字段三组看：
 
@@ -13,7 +14,7 @@
 * 展示与开关 —— ``account`` / ``remark`` / ``enabled`` / ``created_at``。
 
 本模块是纯数据模型（冻结），不 import 任何平台包，只依赖 ``nacho.core`` 的地位（与
-:mod:`nacho.onebot.models` 同级）。存储见 :mod:`nacho.bots.store`。
+:mod:`nacho.platforms.onebot.models` 同级）。存储见 :mod:`nacho.bots.store`。
 """
 from __future__ import annotations
 

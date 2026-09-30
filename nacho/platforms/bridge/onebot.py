@@ -1,16 +1,16 @@
-"""OneBot 适配器：把 :class:`~nacho.onebot.OneBotServer` 包成第一个 ``BotAdapter``。
+"""OneBot 适配器：把 :class:`~nacho.platforms.onebot.OneBotServer` 包成第一个 ``BotAdapter``。
 
-本模块是 bridge 里**唯一**允许 import ``nacho.onebot`` 的地方（平台胶水就住这儿；
-``nacho.bridge`` 的 ``__init__`` 不碰它，没装 ``nacho[onebot]`` 照样能用模型 / 协议 /
-总线）。第二个平台（Kook，P4）照这个模块的样子再写一份即可。
+本模块是 bridge 里**唯一**允许 import ``nacho.platforms.onebot`` 的地方（平台胶水就住这儿；
+``nacho.platforms.bridge`` 的 ``__init__`` 不碰它，没装 ``nacho[onebot]`` 照样能用模型 /
+协议 / 总线）。第二个平台（Kook，P4）照这个模块的样子再写一份即可。
 
-分工（包一层，不改一层）——``nacho/onebot/`` 一行不动，这里做三件事：
+分工（包一层，不改一层）——``nacho/platforms/onebot/`` 一行不动，这里做三件事：
 
-* **事件翻译**：``OneBotEvent`` -> :class:`~nacho.bridge.models.PlatformEvent`（身份转
+* **事件翻译**：``OneBotEvent`` -> :class:`~nacho.platforms.bridge.models.PlatformEvent`（身份转
   字符串、会话指向归一），翻译完调 ``publish`` 投给 Gateway。心跳不用滤——服务端的
   ``_emit`` 在调 handler **之前**就把心跳滤掉了（口径沿用，不重复做）；
 * **能力转述**：``clients()`` / ``send()`` 实现 ``BotAdapter`` 协议——在线列表翻成
-  :class:`~nacho.bridge.models.BotClient`，发动作按 onebot 节点同一套挑连接规则；
+  :class:`~nacho.platforms.bridge.models.BotClient`，发动作按 onebot 节点同一套挑连接规则；
 * **兼容面**：roster / kick / revoke_by_id / set_token_enabled / tokens / connections
   原样透传给被包的服务端——接口层的 ``OneBotLike`` 协议与工作流的 ``ctx.onebot``
   鸭子形状（P2 验收线：``router.py`` 与 ``nodes/onebot.py`` 零改动）由本适配器

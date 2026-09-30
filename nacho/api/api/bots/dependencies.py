@@ -6,7 +6,7 @@
 **登录校验 / 身份判断直接复用 OneBot 管理那份**（:data:`nacho.api.api.auth.dependencies.CurrentUserDep`
 与 :func:`nacho.api.api.onebot.dependencies.is_admin` / :func:`may_touch`）：登录令牌只有一套，
 「管理员不限、其余人只限自己」的口径也是跨平台同一套。这里只补机器人管理**自己**那份：
-从 ``app.state.bots_service`` 取服务（装配层注入的实现见 :class:`nacho.bridge.manager.BotManager`）。
+从 ``app.state.bots_service`` 取服务（装配层注入的实现见 :class:`nacho.platforms.bridge.manager.BotManager`）。
 """
 from __future__ import annotations
 

@@ -14,7 +14,7 @@ Kook 的是字符串），下游（workflow 触发、日志钩子）不该逐平
   复合键路由。**本阶段复合键不落库、不进接口层**（令牌仍是 onebot 专属，Kook 的
   令牌形态留给 P4）；
 * 翻译不了的字段不去硬翻：平台原始事件整条挂在 ``raw`` 上（OneBot 来的就是
-  :class:`~nacho.onebot.models.OneBotEvent`），下游要用细节就下探到 ``raw``，
+  :class:`~nacho.platforms.onebot.models.OneBotEvent`），下游要用细节就下探到 ``raw``，
   但下探就意味着绑平台 —— 能用规范化字段就别用 ``raw``。
 
 三个模型都是**冻结**的：事件是已发生的事，不改写。
@@ -73,7 +73,7 @@ class PlatformEvent:
 class BotClient:
     """在线列表里的一行：某个平台下、连着的一条机器人连接。
 
-    与 :class:`~nacho.onebot.server.ClientEntry` 同构，但身份字段统一成字符串口径，
+    与 :class:`~nacho.platforms.onebot.server.ClientEntry` 同构，但身份字段统一成字符串口径，
     且**不带**平台字段 —— 在线列表总是从某个适配器问出来（``adapter.clients()``），
     「哪个平台」由问谁决定。
     """

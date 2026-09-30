@@ -107,7 +107,7 @@ async def _prepare_stores(
 async def on_platform_event(event: PlatformEvent) -> None:
     """bridge 事件订阅：业务接这里。
 
-    认的是 :class:`~nacho.bridge.models.PlatformEvent`，**不再认识任何平台事件** ——
+    认的是 :class:`~nacho.platforms.bridge.models.PlatformEvent`，**不再认识任何平台事件** ——
     平台差异（OneBot 的整数号、Kook 的字符串号）在适配器里翻译掉了。要发消息走
     ``gateway.send(platform, owner_id, action, ...)``。
 

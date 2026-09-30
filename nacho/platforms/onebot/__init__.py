@@ -17,7 +17,7 @@
 
 用起来::
 
-    from nacho.onebot import OneBotOptions, OneBotServer
+    from nacho.platforms.onebot import OneBotOptions, OneBotServer
 
     async def on_event(conn, event):
         await conn.call("send_msg", message_type="private", user_id=event.user_id, message="hi")

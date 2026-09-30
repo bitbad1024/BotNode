@@ -1,6 +1,6 @@
 """工作流编排：图校验流水线 + 定义 / 版本落库 + 节点执行器。
 
-业务核心包（同 :mod:`nacho.onebot` 的地位，不 import FastAPI）：
+业务核心包（同 :mod:`nacho.platforms.onebot` 的地位，不 import FastAPI）：
 
 * :mod:`nacho.workflow.models`    图（节点 / 边）、校验报告、落库记录、规范 JSON / 摘要
 * :mod:`nacho.workflow.validator` 入库前校验：结构 → 拓扑 → 语义（Dry Run 留协议位）

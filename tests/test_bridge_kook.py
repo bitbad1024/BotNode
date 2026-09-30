@@ -1,7 +1,7 @@
 """Kook 适配器测试：事件翻译（KookEvent -> PlatformEvent）、clients / send 透传、投递口。
 
 不 import ``nacho.kook`` 的底层 WS（正向连接要真连网关，测试里用 FakeClient 走翻译 +
-透传），只验 :class:`nacho.bridge.kook.KookAdapter` 这层胶水。
+透传），只验 :class:`nacho.platforms.bridge.kook.KookAdapter` 这层胶水。
 """
 from __future__ import annotations
 

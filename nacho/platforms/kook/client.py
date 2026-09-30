@@ -17,7 +17,7 @@ Kook 的正向 WS **只推事件，不能发消息**；发消息走 **REST API**
 
 用法::
 
-    from nacho.kook import KookOptions, KookClient
+    from nacho.platforms.kook import KookOptions, KookClient
 
     async def on_event(event):
         print(event.type, event.target_id, event.content)

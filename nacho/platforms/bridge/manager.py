@@ -7,9 +7,9 @@
 本模块坐在几点之上（装配层注入）：
 
 * ``store`` —— :class:`nacho.bots.SqlBotStore`：凭证的落库 CRUD（多实例、跨平台）；
-* ``onebot`` —— :class:`nacho.bridge.onebot.OneBotAdapter`：OneBot 的在线列表与启停 /
+* ``onebot`` —— :class:`nacho.platforms.bridge.onebot.OneBotAdapter`：OneBot 的在线列表与启停 /
   吊销（复用服务端「断开连接」那一套）；
-* ``kook`` —— :class:`nacho.bridge.kook.KookAdapter`：Kook 的客户端生命周期（多客户端）；
+* ``kook`` —— :class:`nacho.platforms.bridge.kook.KookAdapter`：Kook 的客户端生命周期（多客户端）；
 * ``secret_key`` —— Kook Bot Token 落库加密的密钥（签发时加密、连接时解密）。
 
 平台分歧怎么收敛：**每个平台一个生命周期对象**（:class:`BotLifecycle`，见下）——OneBot

@@ -31,7 +31,7 @@ def generate_token() -> str:
     """造一个令牌（明文）；只出现在签发那一刻，服务端只留摘要。
 
     32 字节随机 = 256 位熵，不必查重（``auth_sessions`` 那边还有主键兜底），推算见
-    :func:`nacho.onebot.tokens.generate_token`。
+    :func:`nacho.platforms.onebot.tokens.generate_token`。
     """
     return TOKEN_PREFIX + secrets.token_urlsafe(32)
 

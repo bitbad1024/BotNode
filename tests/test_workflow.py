@@ -1618,7 +1618,7 @@ def test_condition_fields_are_validated() -> None:
 
 # ------------------------------------------------------------- ④-E OneBot 节点
 class _FakeActionResponse:
-    """假的动作回应（形状对齐 ``nacho.onebot.models.ActionResponse``：``ok`` = status/retcode 都成功）。"""
+    """假的动作回应（形状对齐 ``nacho.platforms.onebot.models.ActionResponse``：``ok`` = status/retcode 都成功）。"""
 
     def __init__(self, status: str = "ok", retcode: int = 0, data: object = None) -> None:
         self.status = status

@@ -6,9 +6,9 @@
     DELETE <prefix>/bots/{id}     删除（OneBot 吊销令牌 / Kook 停并注销客户端）
 
 这里认的是 :class:`~nacho.api.api.bots.protocols.BotsService` 协议（装配层注入
-:class:`nacho.bridge.manager.BotManager`，平台差异封在实现里）：接口层不 import 任何平台包，
-「Kook 的启停要 start / stop 正向 WS 客户端」这类细节在这里不存在。OneBot 的语义不再硬套给
-Kook —— 接口统一成「增 / 启停 / 删」，底层按平台分派。
+:class:`nacho.platforms.bridge.manager.BotManager`，平台差异封在实现里）：接口层不 import
+任何平台包，「Kook 的启停要 start / stop 正向 WS 客户端」这类细节在这里不存在。OneBot 的
+语义不再硬套给 Kook —— 接口统一成「增 / 启停 / 删」，底层按平台分派。
 
 安全口径与 onebot 完全一致：都要登录；签发永远归当前登录用户；管理员不限、其余人只看
 自己；按 id 找东西越界回 404（不泄露存在性）。

@@ -1,10 +1,10 @@
-"""接口层需要的那点 OneBot 管理能力（**结构化协议**，不 import ``nacho.onebot``）。
+"""接口层需要的那点 OneBot 管理能力（**结构化协议**，不 import ``nacho.platforms.onebot``）。
 
-为什么要绕一层协议：``nacho.onebot`` 依赖 ``websockets``，而 ``nacho.api`` 是独立的
+为什么要绕一层协议：``nacho.platforms.onebot`` 依赖 ``websockets``，而 ``nacho.api`` 是独立的
 可选依赖（``pip install "nacho[api]"`` 就能跑登录）。让接口层直接 import 它，等于装上
 api 就必须装 onebot——所以这里只声明「接口层要用到哪些方法」，由
-:class:`nacho.onebot.OneBotServer` / :class:`nacho.onebot.TokenRegistry` **结构化满足**，
-两边不用互相 import（同一套路子见 :mod:`nacho.api.services.user.protocols`）。
+:class:`nacho.platforms.onebot.OneBotServer` / :class:`nacho.platforms.onebot.TokenRegistry`
+**结构化满足**，两边不用互相 import（同一套路子见 :mod:`nacho.api.services.user.protocols`）。
 
 数据那几个（:class:`ClientLike` / :class:`TokenLike`）的成员一律写成 **只读属性**
 （``@property``）：对面是冻结数据类，字段不可写；协议里若声明成可写属性，
@@ -18,7 +18,7 @@ from typing import Protocol
 
 
 class ClientLike(Protocol):
-    """在线列表里的一行（对应 :class:`nacho.onebot.ClientEntry`）。"""
+    """在线列表里的一行（对应 :class:`nacho.platforms.onebot.ClientEntry`）。"""
 
     @property
     def client_id(self) -> str:
@@ -100,7 +100,7 @@ class TokenLike(Protocol):
 
 
 class IssuedLike(Protocol):
-    """签发结果（对应 :class:`nacho.onebot.IssuedToken`）。"""
+    """签发结果（对应 :class:`nacho.platforms.onebot.IssuedToken`）。"""
 
     @property
     def record(self) -> TokenLike:
@@ -118,9 +118,9 @@ class TokenRegistry(Protocol):
 
     服务端只认这一个协议，令牌存哪（库 / 内存 / 别处）由实现决定。
 
-    这一份协议被接口层与 :mod:`nacho.onebot` **共用**：方法签名只用结构化类型
-    :class:`TokenLike` / :class:`IssuedLike`，所以协议文件不 import ``nacho.onebot``——
-    接口层用得上，而 ``nacho.onebot`` 也不强制依赖 ``nacho.api``（运行时仅以
+    这一份协议被接口层与 :mod:`nacho.platforms.onebot` **共用**：方法签名只用结构化类型
+    :class:`TokenLike` / :class:`IssuedLike`，所以协议文件不 import ``nacho.platforms.onebot``
+    ——接口层用得上，而 ``nacho.platforms.onebot`` 也不强制依赖 ``nacho.api``（运行时仅以
     :pep:`563` 惰性注解 + ``TYPE_CHECKING`` 引用本协议）。
     """
 
@@ -156,7 +156,7 @@ class TokenRegistry(Protocol):
 
 
 class OneBotLike(Protocol):
-    """接口层要用的 OneBot 服务端（对应 :class:`nacho.onebot.OneBotServer`）。"""
+    """接口层要用的 OneBot 服务端（对应 :class:`nacho.platforms.onebot.OneBotServer`）。"""
 
     def roster(self, *, id: str | None = None) -> tuple[ClientLike, ...]:
         """在线客户端列表（快照）；给 ``id`` 就只看那一个归属（谁的）下的。"""
