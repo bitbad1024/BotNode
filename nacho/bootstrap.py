@@ -208,9 +208,18 @@ async def run(
             if not secret_key:
                 log.warning("Kook 凭证行存在但没配 secret_key，跳过登记", bot_id=cred.bot_id)
                 continue
-            bot_token = await tokens.decrypt_token(cred.bot_id, secret_key)
+            try:
+                bot_token = await tokens.decrypt_token(cred.bot_id, secret_key)
+            except ValueError as exc:
+                # 有密文但解不开：几乎都是 secret_key 配错——明说，别让用户只看到「机器人起不来」
+                log.error(
+                    "Kook 凭证行解不开（secret_key 不对或密文损坏），跳过登记",
+                    bot_id=cred.bot_id,
+                    error=str(exc),
+                )
+                continue
             if not bot_token:
-                log.warning("Kook 凭证行解密失败，跳过登记", bot_id=cred.bot_id)
+                log.warning("Kook 凭证行没有密文，跳过登记", bot_id=cred.bot_id)
                 continue
             _kook_adapter.add_bot(cred.bot_id, bot_token, owner_id=cred.owner_id)
         # 兼容路径：[kook].token 配了但没走凭证行（旧部署）时，仍按原样接一个

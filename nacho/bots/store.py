@@ -201,7 +201,11 @@ class SqlBotStore:
             return [_to_record(row) for row in result.all()]
 
     async def decrypt_token(self, bot_id: str, secret_key: str) -> str | None:
-        """解出某条 Kook 凭证的明文 Bot Token；不是 kook / 没有密文 / 解不开返回 None。
+        """解出某条 Kook 凭证的明文 Bot Token。
+
+        「没有密文」是正常情况（不是 kook / 记录不存在 / 老行没密文）返回 ``None``；
+        **有密文但解不开**（secret_key 配错 / 密文损坏）当场抛 ``ValueError`` —— 不静默
+        吞成 ``None``，否则装配层只会看到「机器人起不来」而不是「密钥不对」。
 
         装配层（bootstrap）建 KookAdapter 时用：连接要拿明文 Token 鉴权。
         """
@@ -209,10 +213,7 @@ class SqlBotStore:
             row = await session.get(BotCredentialTable, bot_id)
         if row is None or row.platform != "kook" or not row.token_secret:
             return None
-        try:
-            return decrypt_token(row.token_secret, secret_key)
-        except ValueError:
-            return None
+        return decrypt_token(row.token_secret, secret_key)
 
     async def get_by_id(self, bot_id: str) -> BotCredential | None:
         """按主键（bot_id）取一条；没有返回 None（对齐 TokenRegistry.get_by_id）。"""
