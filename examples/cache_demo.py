@@ -52,7 +52,7 @@ from nacho.core.cache import (  # noqa: E402
     RedisOptions,
     cache,
 )
-from nacho.core.logger import BaseLogger, LogCore, configure, get_logger  # noqa: E402
+from nacho.core.logger import BaseLogger, LogCore, configure, default_core  # noqa: E402
 from nacho.core.logger import manager as log_manager  # noqa: E402
 
 #: 业务日志实例：main 里先 configure() 建进程默认核心，再取它
@@ -110,7 +110,7 @@ async def main() -> None:
     # 也进这个核心，所以它的提示和业务日志会出现在同一个控制台上
     core: LogCore = configure("nacho", console_color=True, dispatch_timeout=0.05)
     await core.start()
-    log = get_logger("demo.cache")
+    log = default_core().child("demo.cache")
 
     try:
         # ---------------------------------------------------------------- 0. 默认

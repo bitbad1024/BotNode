@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from nacho.core.logger import BaseLogger, BoundLogger, get_logger
+from nacho.core.logger import BaseLogger, BoundLogger, default_core
 from nacho.core.scheduler import TaskManager
 
 from .executor import NodeExecutionContext, SimpleWorkflowRunner
@@ -33,12 +33,12 @@ if TYPE_CHECKING:
 def _log() -> BaseLogger | BoundLogger:
     """取本模块的日志实例：**用到才取**，不要在模块级取。
 
-    模块级 ``_logger = get_logger(...)`` 是**导入即执行**的：谁先 import 这个模块，谁就顺手把
-    进程默认日志核心按默认参数建出来（那时配置还没读），于是 ``[logging]`` 里的颜色 / 级别被
-    定死之后再也传不进去 —— 入口后面那次 ``configure(console_color=True)`` 只会撞上
-    「已存在核心」被丢掉（见 :mod:`nacho.core.logger.manager`）。用到才取，核心由启动顺序建。
+    模块级 ``_logger = default_core().child(...)`` 是**导入即执行**的：谁先 import 这个模块，
+    谁就顺手把进程默认日志核心按默认参数建出来（那时配置还没读），于是 ``[logging]`` 里的
+    颜色 / 级别被定死之后再也传不进去 —— 入口后面那次 ``configure(console_color=True)`` 只会
+    撞上「已存在核心」被丢掉（见 :mod:`nacho.core.logger.manager`）。用到才取，核心由启动顺序建。
     """
-    return get_logger("workflow.runtime")
+    return default_core().child("workflow.runtime")
 
 
 def make_trigger(

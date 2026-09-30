@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TypeAlias
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, default_core
 
 from .models import ActionResult, PlatformEvent
 from .protocols import BotAdapter
@@ -39,7 +39,7 @@ class Gateway:
     def __init__(self, *, logger: BaseLogger | None = None) -> None:
         self._adapters: dict[str, BotAdapter] = {}
         self._subscribers: list[EventSubscriber] = []
-        self._log: BaseLogger = logger if logger is not None else get_logger("bridge")
+        self._log: BaseLogger = logger if logger is not None else default_core().child("bridge")
 
     # ------------------------------------------------------------------ 注册
     def register(self, adapter: BotAdapter) -> None:

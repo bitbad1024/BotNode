@@ -19,7 +19,7 @@ from fnmatch import fnmatchcase
 from typing import NamedTuple, cast
 
 from nacho.core.cache.models import CacheError
-from nacho.core.logger import get_logger
+from nacho.core.logger import default_core
 
 
 class _Entry(NamedTuple):
@@ -77,7 +77,7 @@ class MemoryCache:
         # 这行 await 自己会抛 CancelledError，正好往上传播（停机信号不能被吞）
         _, pending = await asyncio.wait({sweeper}, timeout=timeout)
         if pending:  # 取消是瞬时的，走到这里说明另有情况，记一笔但不等了
-            get_logger("cache").warning("内存缓存的清扫任务没在超时内停下")
+            default_core().child("cache").warning("内存缓存的清扫任务没在超时内停下")
 
     async def ping(self) -> bool:
         """本地缓存永远在线。"""

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, default_core
 from nacho.platforms.kook import KookActionResponse, KookClient, KookEvent, KookOptions
 
 from .gateway import EventSubscriber
@@ -102,7 +102,7 @@ class KookAdapter:
         :param logger: 业务日志实例，默认 ``bridge`` 那个。
         """
         self._publish: EventSubscriber | None = publish
-        self._log: BaseLogger = logger if logger is not None else get_logger("bridge")
+        self._log: BaseLogger = logger if logger is not None else default_core().child("bridge")
         self._template: KookOptions = options if options is not None else KookOptions()
         #: bot_id -> 客户端（一个 Bot Token 一个客户端）
         self._clients: dict[str, KookClient] = {}

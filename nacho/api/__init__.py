@@ -72,7 +72,6 @@ from .logging import (
     API_LOGGER_NAME,
     TRACE_ID_HEADER,
     api_logger,
-    keep_access_off_audit,
 )
 from .api import auth_router, log_router, onebot_router, profile_router
 from .api.auth.dependencies import SESSION_COOKIE
@@ -220,7 +219,6 @@ __all__ = [
     "profile_router",
     # 日志接入点
     "api_logger",
-    "keep_access_off_audit",
     "RequestLogMiddleware",
     "API_LOGGER_NAME",
     "ACCESS_LOGGER_NAME",

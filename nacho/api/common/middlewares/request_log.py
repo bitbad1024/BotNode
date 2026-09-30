@@ -8,8 +8,8 @@
    :data:`~nacho.api.logging.ACCESS_LOGGER_NAME`（``api.access``）；认得出登录用户的请求
    还会带上 ``owner_id``（这次操作属于谁），没登录的就是空串 = 公共所有者；
    ``options.access_log = False`` 就一条都不记（但编号照旧生成）。
-   访问日志**只进文件与控制台**：装配时 :func:`~nacho.api.logging.keep_access_off_audit`
-   把 ``api.access`` 的落库通道静音了——落库那份是审计时间线，逐条请求的流水不进；
+   访问日志**只进文件与控制台**：:func:`~nacho.api.logging.api_logger` 每次取 ``api.access``
+   都把它的落库通道静音了——落库那份是审计时间线，逐条请求的流水不进；
 3. **记没兜住的异常**：业务异常（:class:`~nacho.api.common.errors.ApiError`）由异常处理器记过
    了，这里不重复；其余记一条带堆栈的 ERROR。
 

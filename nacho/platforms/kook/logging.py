@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, default_core
 
 #: kook 层日志的名字（**相对核心**：核心名 nacho -> nacho.kook）
 KOOK_LOGGER_NAME: str = "kook"
@@ -20,4 +20,4 @@ KOOK_LOGGER_NAME: str = "kook"
 
 def kook_logger(name: str = KOOK_LOGGER_NAME) -> BaseLogger:
     """取 kook 层的日志实例（没 ``configure`` 过会顺带建一个默认核心）。"""
-    return get_logger(name)
+    return default_core().child(name)

@@ -19,7 +19,7 @@ from nacho.core.cache.interfaces import CacheBackend
 from nacho.core.cache.memory import MemoryCache
 from nacho.core.cache.models import CacheError, CacheOptions
 from nacho.core.cache.redis import RedisCache
-from nacho.core.logger import get_logger
+from nacho.core.logger import default_core
 
 
 class Cache:
@@ -68,13 +68,13 @@ class Cache:
                 if not options.fallback_to_memory:
                     raise
                 self._degraded = True
-                get_logger("cache").warning("Redis 起不来，退回本地缓存", error=str(exc))
+                default_core().child("cache").warning("Redis 起不来，退回本地缓存", error=str(exc))
                 backend = MemoryCache(sweep_interval=options.sweep_interval)
             else:
                 backend = redis_backend
         await backend.start()  # redis 分支已经起过，这里是空操作
         self._backend = backend
-        get_logger("cache").info(
+        default_core().child("cache").info(
             f"缓存就绪：{self.backend_name}", namespace=options.namespace
         )
 

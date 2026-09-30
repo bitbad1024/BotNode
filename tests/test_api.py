@@ -50,6 +50,7 @@ from nacho.api import (  # noqa: E402
     SessionService,
     SqlSessionStore,
     SqlUserStore,
+    api_logger,
     create_app,
     profile_of,
 )
@@ -62,7 +63,6 @@ from nacho.core.logger import (  # noqa: E402
     LogRecord,
     LogSearchResult,
     configure,
-    get_logger,
     manager,
 )
 from nacho.db import SqlLogStore  # noqa: E402
@@ -862,7 +862,7 @@ class TestLogSearch:
     async def test_filters_pass_through(self, core: LogCore) -> None:
         """条件透传：归属 / 关键字 / 出口各自把目标那几条挑出来。"""
         core.mount(await memory_log_processor())
-        log = get_logger(API_LOGGER_NAME)
+        log = api_logger(API_LOGGER_NAME)
         log.info("管理员干的活", owner_id="u-admin")
         log.warning("机器人干的活", owner_id="u-robot")
         log.info("框架自己的活")  # 不填归属 = 公共所有者
@@ -887,7 +887,7 @@ class TestLogSearch:
     async def test_reports_total_for_paging(self, core: LogCore) -> None:
         """响应带命中总数：`limit` / `offset` 只决定本页 items，total 始终是命中总数。"""
         core.mount(await memory_log_processor())
-        log = get_logger(API_LOGGER_NAME)
+        log = api_logger(API_LOGGER_NAME)
         for index in range(5):
             log.info(f"第 {index} 条", owner_id="u-pager")
         await drain(core)
@@ -916,7 +916,7 @@ class TestLogSearch:
         recording.received.append(LogRecord(message="只有内存出口有这条", owner_id="u-admin"))
         core.mount(recording)
         core.mount(await memory_log_processor())
-        log = get_logger(API_LOGGER_NAME)
+        log = api_logger(API_LOGGER_NAME)
         log.info("落库那份有这条", owner_id="u-admin")
         await drain(core)
 
@@ -1033,7 +1033,7 @@ class TestLogSearch:
     async def test_normal_user_only_sees_own(self, core: LogCore) -> None:
         """普通用户只看得到自己名下的；显式要别人的归属 -> 403。"""
         core.mount(await memory_log_processor())
-        log = get_logger(API_LOGGER_NAME)
+        log = api_logger(API_LOGGER_NAME)
         log.info("管理员干的活", owner_id="u-admin")
         log.info("机器人干的活", owner_id="u-robot")
         await drain(core)

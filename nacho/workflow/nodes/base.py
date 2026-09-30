@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from nacho.core.cache import cache as process_cache
-from nacho.core.logger import BaseLogger, BoundLogger, get_logger
+from nacho.core.logger import BaseLogger, BoundLogger, ChildLogger, default_core
 from nacho.core.scheduler import TaskManager
 
 from ..models import ValidationIssue, WorkflowNode
@@ -240,16 +240,15 @@ class NodeExecutionContext:
         self.gateway: Any | None = gateway
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）
         self.cache: Any = cache if cache is not None else process_cache
-        base: BaseLogger | BoundLogger = (
-            logger if logger is not None else get_logger("workflow")
+        base: BaseLogger | ChildLogger | BoundLogger = (
+            logger if logger is not None else default_core().child("workflow")
         )
         # 日志**提前带好默认参数**：这一趟的身份（哪条工作流 / 谁的 / 给谁跑的）在构造上下文
-        # 时就定了，之后每个节点写日志都自动带上，不用谁在调用点手抄一遍。两者都能 bind
-        # （:class:`~nacho.core.logger.BaseLogger` 与它的绑定视图），只有鸭子形状不带时才
-        # 原样用。
-        self._logger: BaseLogger | BoundLogger = (
+        # 时就定了，之后每个节点写日志都自动带上，不用谁在调用点手抄一遍。三者都能 bind
+        # （核心 / 层级节点 / 绑定视图），只有鸭子形状不带时才原样用。
+        self._logger: BaseLogger | ChildLogger | BoundLogger = (
             base.bind(workflow_id=workflow_id, owner_id=owner_id, user_id=user_id)
-            if isinstance(base, (BaseLogger, BoundLogger))
+            if isinstance(base, (BaseLogger, ChildLogger, BoundLogger))
             else base
         )
         self._scheduler: TaskManager | None = scheduler

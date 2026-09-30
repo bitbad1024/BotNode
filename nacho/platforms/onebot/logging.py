@@ -18,7 +18,7 @@
 """
 from __future__ import annotations
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger, default_core
 
 #: onebot 层日志的名字（**相对核心**：核心名 nacho -> nacho.onebot）
 ONEBOT_LOGGER_NAME: str = "onebot"
@@ -26,4 +26,4 @@ ONEBOT_LOGGER_NAME: str = "onebot"
 
 def onebot_logger(name: str = ONEBOT_LOGGER_NAME) -> BaseLogger:
     """取 onebot 层的日志实例（没 ``configure`` 过会顺带建一个默认核心）。"""
-    return get_logger(name)
+    return default_core().child(name)

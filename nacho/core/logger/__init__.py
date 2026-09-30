@@ -1,19 +1,18 @@
-"""异步日志系统：一根 root、按目标扇出、具名路由；child 管命名层级，bind 管上下文字段。
+"""异步日志系统：一根 root，child 管命名层级、bind 管上下文字段。
 
 快速开始::
 
-    from nacho.core.logger import configure, get_logger
+    from nacho.core.logger import configure, default_core
 
     configure(level="INFO")
-    get_logger("api.robot").info("收到请求")
+    default_core().child("api.robot").info("收到请求")
 
-设计要点、child / bind / route / 过滤器 / 内省与检索的完整说明见 ``docs/logger.md``。
+设计要点、child / bind / 过滤器 / 内省与检索的完整说明见 ``docs/logger.md``。
 """
 from __future__ import annotations
 
 # ---- 进程门面（业务代码常用）----
-from .core import mount_module
-from .manager import configure, get_logger, manager
+from .manager import configure, manager
 
 # ---- 核心与视图 ----
 from .base import BaseLogger, BoundLogger, ChildLogger
@@ -43,9 +42,7 @@ from .interfaces import LogStore
 __all__ = [
     # 进程门面（业务代码常用）
     "configure",
-    "get_logger",
     "manager",
-    "mount_module",
     # 核心与视图
     "LogCore",
     "BaseLogger",

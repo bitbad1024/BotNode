@@ -66,8 +66,6 @@ class LoggerStats(TypedDict):
     queue: QueueStats
     processors: list[ProcessorStats]
     dropped: DroppedStats
-    #: 「实例名字 -> 该实例解析后会投的处理机名」
-    routes: dict[str, list[str]]
 
 
 
@@ -243,8 +241,6 @@ class BaseLogger(_LevelMethodsMixin):
         self._running: bool = False
         #: **默认目标**（没给自己的目标时都用它），按优先级排好
         self._targets: tuple[Target, ...] = ()
-        #: **显式发布的具名路由**：只有 :meth:`publish` / :meth:`route` 过才在里面
-        self._routes: dict[str, BoundLogger] = {}
         #: **命名层级树的子节点缓存**：``child(name)`` 命中返回同一对象
         self._children: dict[str, ChildLogger] = {}
         if processors:
@@ -341,46 +337,6 @@ class BaseLogger(_LevelMethodsMixin):
                 kept = (*kept, target)
         self._targets = tuple(sorted(kept, key=lambda target: target.priority))
         return self
-
-    # ------------------------------------------------------------------ 具名路由
-    def publish(self, view: BoundLogger) -> BoundLogger:
-        """把一份视图**发布**成这个名字的路由：之后 :func:`get_logger` 取到的就是它。
-
-        取代派生实例树的那张表：**不发布就没有**，不再有「派生出来就自动有身份」这种
-        隐式规则。典型用法是某一路要换个目标 / 堵个通道（``api.access`` 不进审计库），
-        改完再发布回去，这条路上所有人都拿到改过的那份。
-        """
-        self._routes[view.name] = view
-        return view
-
-    def route(
-        self,
-        name: str,
-        *,
-        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
-        level: "LogLevel | str | None" = None,
-        **defaults: object,
-    ) -> BoundLogger:
-        """取（必要时先建并发布）一条**具名路由**：一个名字 = 一份绑定好的视图。
-
-        名字相对本实例（``"api.robot"`` -> ``"nacho.api.robot"``，写全名也认）；已经
-        发布过就直接返回那份，不会覆盖。没给 ``targets`` 就沿用本实例的默认目标 ——
-        所以「某个模块只要和别人一样」是不用发布任何东西的::
-
-            access = core.route("api.access", trace_id="t-1")
-            robot = core.route("api.robot", targets=[Target(file_outlet, priority=-1)])
-        """
-        full: str = self.qualify(name)
-        existing: BoundLogger | None = self._routes.get(full)
-        if existing is not None:
-            return existing
-        return self.publish(self.bind(name=full, targets=targets, level=level, **defaults))
-
-    @property
-    def named_routes(self) -> dict[str, BoundLogger]:
-        """已发布的具名路由（名字 -> 视图）快照副本。"""
-        return dict(self._routes)
-
 
     # ------------------------------------------------------------------ 注册表
     def get_processor(self, name: str) -> BaseLogProcessor | None:
@@ -797,11 +753,6 @@ class BaseLogger(_LevelMethodsMixin):
                 "buffers": buffer_dropped,
                 "total": queue_dropped + buffer_dropped,
             },
-            # 发布过的具名路由：谁有自己的去处，一眼看得到（没发布的不在里面）
-            "routes": {
-                name: [target.processor.name for target in view.targets or ()]
-                for name, view in sorted(self._routes.items())
-            },
         }
 
     @override
@@ -829,7 +780,7 @@ class BoundLogger(_LevelMethodsMixin):
     ``user_id``，一次请求带上 ``trace_id``，这条路上之后每条日志自己就认得出是谁的，
     调用点不用一遍遍手抄::
 
-        log = get_logger("workflow").bind(workflow_id="w1", user_id="10001")
+        log = default_core().child("workflow").bind(workflow_id="w1", user_id="10001")
         log.info("开始")                    # extra: workflow_id=w1, user_id=10001
         log.info("换人", user_id="10002")    # extra: workflow_id=w1, user_id=10002
 
@@ -948,11 +899,6 @@ class BoundLogger(_LevelMethodsMixin):
     def processor_registry(self) -> list[BaseLogProcessor]:
         """所有已接纳的处理机（视图不持有自己的清单，看的是源实例那份）。"""
         return self._logger.processor_registry
-
-    @property
-    def named_routes(self) -> dict[str, BoundLogger]:
-        """已发布的具名路由（视图不持有自己的表，看的是源实例那份）。"""
-        return self._logger.named_routes
 
     async def flush(self) -> None:
         """刷新所有出口的缓冲区（视图不持有任何自己的状态，交给源实例做）。"""
@@ -1099,6 +1045,11 @@ class ChildLogger(_LevelMethodsMixin):
         """本节点的生效目标（创建时固化的那份）。"""
         return self._targets
 
+    @property
+    def processor_registry(self) -> list[BaseLogProcessor]:
+        """所有已接纳的处理机（子节点不持有自己的清单，看的是源核心那份）。"""
+        return self._root.processor_registry
+
     def child(
         self,
         name: str,
@@ -1189,6 +1140,32 @@ class ChildLogger(_LevelMethodsMixin):
     async def flush(self) -> None:
         """刷新所有出口的缓冲区（视图不持有状态，交给 root 做）。"""
         await self._root.flush()
+
+    async def search(
+        self,
+        *,
+        query: str | None = None,
+        level: "LogLevel | str | None" = None,
+        start: "TimestampLike" = None,
+        end: "TimestampLike" = None,
+        logger_name: str | None = None,
+        owner_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        processors: "Sequence[str] | None" = None,
+    ) -> LogSearchResult:
+        """检索：走 root 那份（节点不持有状态，查的东西与它无异）。"""
+        return await self._root.search(
+            query=query,
+            level=level,
+            start=start,
+            end=end,
+            logger_name=logger_name,
+            owner_id=owner_id,
+            limit=limit,
+            offset=offset,
+            processors=processors,
+        )
 
     @override
     def __repr__(self) -> str:  # pragma: no cover - 调试用

@@ -20,7 +20,7 @@ import asyncio
 import inspect
 from datetime import datetime
 
-from nacho.core.logger import get_logger
+from nacho.core.logger import default_core
 from nacho.core.scheduler.cron import CronError
 from nacho.core.scheduler.models import Task
 from nacho.core.scheduler.timeline import TaskTimeline
@@ -121,7 +121,7 @@ class Scheduler:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 循环绝不能死
-                get_logger("scheduler").error(
+                default_core().child("scheduler").error(
                     "调度循环出意外，继续运行", error=f"{type(exc).__name__}: {exc}"
                 )
                 await asyncio.sleep(0.1)
@@ -137,7 +137,7 @@ class Scheduler:
         except CronError as exc:
             task.next_run = None
             self._timeline.discard(task.task_id)
-            get_logger("scheduler").error(f"任务 {task.display_name} 的 cron 排不了程：{exc}")
+            default_core().child("scheduler").error(f"任务 {task.display_name} 的 cron 排不了程：{exc}")
             return
         self._timeline.upsert(task)
 
@@ -161,7 +161,7 @@ class Scheduler:
             budget -= 1
             self._timeline.discard(task.task_id)  # 先出队，免得重排后又落回这个过去点
             if task.running and not task.multi_instance:
-                get_logger("scheduler").warning(
+                default_core().child("scheduler").warning(
                     f"任务 {task.display_name} 上一次还没跑完，跳过 {task.next_run} 这次"
                 )
                 self._schedule(task, now)  # 别卡在过去的触发点上
@@ -198,7 +198,7 @@ class Scheduler:
             task.last_ok = False
             task.fail_count += 1
             task.last_error = f"{type(exc).__name__}: {exc}"
-            get_logger("scheduler").error(
+            default_core().child("scheduler").error(
                 f"定时任务 {task.display_name} 执行失败", error=task.last_error
             )
         else:
@@ -213,6 +213,6 @@ class Scheduler:
             return
         _, pending = await asyncio.wait(self._inflight, timeout=timeout)
         if pending:
-            get_logger("scheduler").warning(
+            default_core().child("scheduler").warning(
                 f"停机时还有 {len(pending)} 个任务没跑完，不再等待（不强杀，让它们自然收尾）"
             )

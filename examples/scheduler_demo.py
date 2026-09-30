@@ -42,7 +42,7 @@ from unicodedata import east_asian_width
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nacho.core.logger import BaseLogger, LogCore, configure, get_logger  # noqa: E402
+from nacho.core.logger import BaseLogger, LogCore, configure, default_core  # noqa: E402
 from nacho.core.logger import manager as log_manager  # noqa: E402
 from nacho.core.scheduler import CronError, TaskManager, scheduler  # noqa: E402
 
@@ -174,7 +174,7 @@ async def main() -> None:
     # 所以它的提示和业务日志会出现在同一个控制台上（app.py 里是按配置 config 来建这个核心）
     core: LogCore = configure("nacho", console_color=True, dispatch_timeout=0.05)
     await core.start()
-    log = get_logger("demo.scheduler")
+    log = default_core().child("demo.scheduler")
 
     try:
         # ---------------------------------------------------------------- 0. 登记
