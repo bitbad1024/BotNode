@@ -87,12 +87,26 @@ class _SharedState:
         self.registry: list[BaseLogProcessor] = []
 
 
-class _LevelMethodsMixin:
-    """六个级别便捷方法（``debug`` / ``info`` / ``warning`` / ``error`` / ``exception``）。
+def _normalize_targets(targets: Sequence[Target | BaseLogProcessor]) -> tuple[Target, ...]:
+    """把「目标或裸处理机」的序列统一成按优先级排好的 :class:`Target` 元组。
 
-    root / 绑定视图 / 层级节点三处的 ``log`` 签名一致，这里把「固定级别 + 转发给
-    ``self.log``」抽成一份，免得每个类重复六遍几乎一样的壳；具体怎么构造记录、怎么投，
-    各自实现 :meth:`log`。
+    裸处理机等价于 ``Target(processor)``（全收、优先级 0）；已包装的用自己那份
+    ``priority`` 排序。``bind`` / ``child`` 挂目标、创建视图 / 层级节点时都走这一份，
+    归一化 + 排序只此一处。
+    """
+    normalized: list[Target] = [
+        item if isinstance(item, Target) else Target(item) for item in targets
+    ]
+    normalized.sort(key=lambda target: target.priority)
+    return tuple(normalized)
+
+
+class _LevelMethodsMixin:
+    """六个级别便捷方法 + 统一的 :meth:`log`。
+
+    root / 绑定视图 / 层级节点三处的 ``log`` 流程完全一致：解析级别 -> 级别门控 ->
+    构造「当次」记录 -> 交给 :meth:`write` 入队。整条链抽成这一份，只有「怎么构造记录」
+    （:meth:`_make_record`）由各类按自己的名字 / 目标 / 默认字段规则覆盖。
     """
 
     __slots__: tuple[str, ...] = ()
@@ -106,8 +120,46 @@ class _LevelMethodsMixin:
         exc_info: object = False,
         **extra: object,
     ) -> bool:
-        """类型锚点：子类各自实现（合并 / 写入逻辑不同），这里不会被执行。"""
+        """构造日志记录并写入队列，是**唯一**入口；:meth:`write` 只负责入队。
+
+        ``owner_id`` 是这条日志的**所有者**：谁的操作就填谁（api 层填登录用户 id、ws 层填
+        那条连接的归属），不填就是**空串 = 公共所有者**（启动、框架自身这类没归属的日志）。
+        它单独成一等字段而不塞进 ``extra``：所有者要能渲染、能落库、能按它检索。
+
+        ``exc_info`` 收口为 ``object``：既允许 ``True``（用当前异常），也允许
+        ``sys.exc_info()`` 那样的 ``(type, value, traceback)`` 三元组；层间用
+        ``**extra`` 透传时也只有宽类型才放得下，运行期再按元组 / 布尔分支处理。
+        """
+        parsed_level = LogLevel.parse(level)
+        if not self.is_enabled_for(parsed_level):
+            return False
+        return self.write(
+            self._make_record(
+                parsed_level, message, owner_id=owner_id, exc_info=exc_info, extra=extra
+            )
+        )
+
+    def _make_record(
+        self,
+        level: LogLevel,
+        message: object,
+        *,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """构造「当次」记录：名字 / 目标按各类自己的规则放好。子类各自实现。"""
         _ = level, message, owner_id, exc_info, extra
+        raise NotImplementedError  # pragma: no cover - 三个子类都覆盖它
+
+    def write(self, record: LogRecord) -> bool:
+        """入队出口：子类各自实现（root 补默认目标；视图盖名字 / 目标再转发）。"""
+        _ = record
+        raise NotImplementedError  # pragma: no cover - 三个子类都覆盖它
+
+    def is_enabled_for(self, level: LogLevel) -> bool:
+        """级别门控：子类各自实现。"""
+        _ = level
         raise NotImplementedError  # pragma: no cover - 三个子类都覆盖它
 
     def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
@@ -539,10 +591,12 @@ class BaseLogger(_LevelMethodsMixin):
                 _fallback.exception("处理机 %s 处理日志失败", processor.name)
 
     # ------------------------------------------------------------------ 写入
+    @override
     def is_enabled_for(self, level: LogLevel | str) -> bool:
         """本条日志是否达到本实例的级别。"""
         return LogLevel.parse(level) >= self._level
 
+    @override
     def write(self, record: LogRecord) -> bool:
         """写入方法：默认把日志推到消息队列（非阻塞），返回是否入队成功。
 
@@ -558,38 +612,24 @@ class BaseLogger(_LevelMethodsMixin):
             return False
 
     @override
-    def log(
+    def _make_record(
         self,
-        level: LogLevel | str,
+        level: LogLevel,
         message: object,
         *,
-        owner_id: str = "",
-        exc_info: object = False,
-        **extra: object,
-    ) -> bool:
-        """构造日志记录并写入队列。
-
-        ``owner_id`` 是这条日志的**所有者**：谁的操作就填谁（api 层填登录用户 id、ws 层填
-        那条连接的归属），不填就是**空串 = 公共所有者**（启动、框架自身这类没归属的日志）。
-        它单独成一等字段而不塞进 ``extra``：所有者要能渲染、能落库、能按它检索。
-
-        ``exc_info`` 收口为 ``object``：既允许 ``True``（用当前异常），也允许
-        ``sys.exc_info()`` 那样的 ``(type, value, traceback)`` 三元组；层间用
-        ``**extra`` 透传时也只有宽类型才放得下，运行期再按元组 / 布尔分支处理。
-        """
-        parsed_level = LogLevel.parse(level)
-        if not self.is_enabled_for(parsed_level):
-            return False
-
-        record = self.new_record(
-            parsed_level,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """root 直接以自己的名字构造记录；目标留空，写入时补 root 默认目标。"""
+        return self.new_record(
+            level,
             message,
             owner_id=owner_id,
             exc_info=exc_info,
             extra=extra,
             logger_name=self.name,
         )
-        return self.write(record)
 
     def new_record(
         self,
@@ -836,11 +876,7 @@ class BoundLogger(_LevelMethodsMixin):
         #: 目标快照：``None`` = 不指定，沿用源实例那份（分发时按名字解析）
         self._targets: tuple[Target, ...] | None = None
         if targets is not None:
-            normalized: list[Target] = [
-                item if isinstance(item, Target) else Target(item) for item in targets
-            ]
-            normalized.sort(key=lambda target: target.priority)
-            self._targets = tuple(normalized)
+            self._targets = _normalize_targets(targets)
             # 只在这里出现的处理机也要能被停机 flush、被检索、被统计
             logger.adopt(*(target.processor for target in self._targets))
         self._level: LogLevel | None = None if level is None else LogLevel.parse(level)
@@ -957,10 +993,12 @@ class BoundLogger(_LevelMethodsMixin):
         return str(owner_id or bound_owner), merged
 
     # ------------------------------------------------------------------ 写入
+    @override
     def is_enabled_for(self, level: LogLevel | str) -> bool:
         """本条日志是否达到本视图的生效级别（没单独绑就看源实例）。"""
         return LogLevel.parse(level) >= self.level
 
+    @override
     def write(self, record: LogRecord) -> bool:
         """直接写一条记录：默认字段并进 ``extra``，名字与目标按本视图那份盖上。"""
         patched: LogRecord = record
@@ -974,25 +1012,18 @@ class BoundLogger(_LevelMethodsMixin):
         return self._logger.write(replace(patched, extra=extra, owner_id=owner_id))
 
     @override
-    def log(
+    def _make_record(
         self,
-        level: LogLevel | str,
+        level: LogLevel,
         message: object,
         *,
-        owner_id: str = "",
-        exc_info: object = False,
-        **extra: object,
-    ) -> bool:
-        """写一条日志：构造好「当次」记录后交给 :meth:`write`，默认字段由它并入。
-
-        ``owner_id`` / ``extra`` 是**当次**的；视图绑定的默认字段在 :meth:`write`
-        里合并（当次同名键优先），这条链上的合并只有那一处。
-        """
-        parsed_level = LogLevel.parse(level)
-        if not self.is_enabled_for(parsed_level):
-            return False
-        record = self._logger.new_record(
-            parsed_level,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """按本视图的名字 / 目标构造「当次」记录；默认字段由 :meth:`write` 并入。"""
+        return self._logger.new_record(
+            level,
             message,
             owner_id=owner_id,
             exc_info=exc_info,
@@ -1000,7 +1031,6 @@ class BoundLogger(_LevelMethodsMixin):
             logger_name=self.name,
             targets=self._targets,
         )
-        return self.write(record)
 
 
 
@@ -1046,11 +1076,7 @@ class ChildLogger(_LevelMethodsMixin):
         self._children: dict[str, "ChildLogger"] = {}
         self._name: str = name
         self._level: LogLevel = LogLevel.parse(level)
-        normalized: list[Target] = [
-            item if isinstance(item, Target) else Target(item) for item in targets
-        ]
-        normalized.sort(key=lambda target: target.priority)
-        self._targets: tuple[Target, ...] = tuple(normalized)
+        self._targets: tuple[Target, ...] = _normalize_targets(targets)
         root.adopt(*(target.processor for target in self._targets))
 
     @property
@@ -1126,10 +1152,12 @@ class ChildLogger(_LevelMethodsMixin):
         """设自己的级别；传 ``None`` 恢复为 root 的级别（固化后「继承」只到 root）。"""
         self._level = self._root.level if level is None else LogLevel.parse(level)
 
+    @override
     def is_enabled_for(self, level: LogLevel | str) -> bool:
         """本条日志是否达到本节点的生效级别（创建时固化的那份）。"""
         return LogLevel.parse(level) >= self._level
 
+    @override
     def write(self, record: LogRecord) -> bool:
         """直接写一条记录：名字与目标按本节点**固化的那一份**盖上。"""
         patched: LogRecord = record
@@ -1138,21 +1166,18 @@ class ChildLogger(_LevelMethodsMixin):
         return self._root.write(replace(patched, targets=self._targets))
 
     @override
-    def log(
+    def _make_record(
         self,
-        level: LogLevel | str,
+        level: LogLevel,
         message: object,
         *,
-        owner_id: str = "",
-        exc_info: object = False,
-        **extra: object,
-    ) -> bool:
-        """写一条日志：构造好记录后交给 :meth:`write`，由它盖名字 / 目标并入队。"""
-        parsed_level = LogLevel.parse(level)
-        if not self.is_enabled_for(parsed_level):
-            return False
-        record = self._root.new_record(
-            parsed_level,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """按本节点**固化**的名字 / 目标构造「当次」记录。"""
+        return self._root.new_record(
+            level,
             message,
             owner_id=owner_id,
             exc_info=exc_info,
@@ -1160,7 +1185,6 @@ class ChildLogger(_LevelMethodsMixin):
             logger_name=self._name,
             targets=self._targets,
         )
-        return self.write(record)
 
     async def flush(self) -> None:
         """刷新所有出口的缓冲区（视图不持有状态，交给 root 做）。"""
