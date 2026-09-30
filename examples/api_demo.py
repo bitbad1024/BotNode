@@ -110,8 +110,9 @@ async def main() -> None:
         settings.app.name, level="DEBUG", console=True, processors=[outlet]
     )
     await core.start()
-    # 接口层那份也进这一份：给它发布一条具名路由（名字相对核心的 ``nacho.api``）
-    mount_module(API_LOGGER_NAME, outlet, core=core)
+    # 接口层那份也进这一份：给它挂一个**子节点**（名字相对核心的 ``nacho.api``），
+    # 之后 ``api_logger(API_LOGGER_NAME)`` 命中子节点缓存，取到的就是带这份出口的视图
+    core.child(API_LOGGER_NAME, targets=[outlet])
     print(f"[0] 日志接入：片落 {LOG_DIR}（{LOG_PREFIX}-<日期>.log）")
 
     # 1) 装配：不传 user_store 就兜底挂一块内存 sqlite 并种演示账号；令牌有效期来自 [api].token_ttl

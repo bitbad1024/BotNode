@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from nacho.core.scheduler.cron import CronError, CronExpr, CronField
 from nacho.core.scheduler.core import Scheduler
+from nacho.core.scheduler.logging import SCHEDULER_LOGGER_NAME, scheduler_logger
 from nacho.core.scheduler.manager import TaskManager, scheduler
 from nacho.core.scheduler.models import Task, TaskFunc
 from nacho.core.scheduler.timeline import TaskTimeline
@@ -37,9 +38,11 @@ __all__ = [
     "CronExpr",
     "CronField",
     "Scheduler",
+    "SCHEDULER_LOGGER_NAME",
     "Task",
     "TaskFunc",
     "TaskManager",
     "TaskTimeline",
     "scheduler",
+    "scheduler_logger",
 ]

@@ -100,7 +100,7 @@ def _make_adapter(  # type: ignore[no-untyped-def]
     """把 FakeClient 塞进适配器（绕过构造时的真客户端与多客户端字典）。"""
     adapter = KookAdapter.__new__(KookAdapter)
     adapter._publish = publish  # noqa: SLF001
-    adapter._log = __import__("nacho.core.logger", fromlist=["get_logger"]).get_logger("bridge")
+    adapter._log = __import__("nacho.core.logger", fromlist=["default_core"]).default_core().child("bridge")
     adapter._clients = {bot_id: client}  # noqa: SLF001
     adapter._owners = {bot_id: owner_id}  # noqa: SLF001
     adapter._by_self = {}  # noqa: SLF001

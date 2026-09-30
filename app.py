@@ -5,10 +5,10 @@
 HTTP、OneBot 反向 WS、调度器、工作流），并在停机时先收业务（含冲刷日志余量、关库连接）。
 
 之所以切这一刀：日志核心必须在**任何业务模块被 import 之前**按配置建好。nacho 里有模块级
-``get_logger``（导入即执行）——谁先被 import，谁就顺手把进程默认核心按默认参数建出来，配置里
-的颜色 / 级别就此定死、再也传不进去（``LogManager.configure`` 在「已存在核心」时只合并
-processors）。所以本文件顶层**不 import 任何业务模块**，:mod:`nacho.bootstrap` 也是建好核心
-之后才（在函数里）导入。
+``default_core().child(...)``（导入即执行）——谁先被 import，谁就顺手把进程默认核心按默认
+参数建出来，配置里的颜色 / 级别就此定死、再也传不进去（``LogManager.configure`` 在「已存在
+核心」时只合并 processors）。所以本文件顶层**不 import 任何业务模块**，:mod:`nacho.bootstrap`
+也是建好核心之后才（在函数里）导入。
 
 配置不在这里：TOML 读取、取值校验、:class:`Settings` 都在同目录的 ``config.py``，本文件只管
 流程——取一份设置，照它把日志核心拉起来，把业务交给包内装配，停机收尾。

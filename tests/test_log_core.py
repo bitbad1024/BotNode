@@ -8,7 +8,7 @@
   处理机与过滤器复制成落回配置；子实例自己挂了出口就只投自层那些（自层覆盖），
   没挂才整份走落回配置。落回配置创建即冻结，父实例之后再挂 / 再摘都不回头影响
   已建好的子实例，也不沿名字逐层累加；
-* 进程门面：``configure`` 重复调用不再丢参数，``get_logger`` 返回共享核心的子实例。
+* 进程门面：``configure`` 重复调用不再丢参数，``child`` 挂到共享核心的命名层级。
 """
 from __future__ import annotations
 
@@ -22,19 +22,16 @@ import pytest
 from nacho.core.logger import (
     BaseLogProcessor,
     BoundLogger,
+    ChildLogger,
     ConsoleLogProcessor,
-    LevelFilter,
     LocalFileLogProcessor,
     LogCore,
     LogFilter,
     LogRecord,
-    LogSearchResult,
     Target,
-    mount_module,
     configure,
     current_default_core,
     default_core,
-    get_logger,
     manager,
 )
 from nacho.core.logger.models import LogLevel, TimestampLike
@@ -332,12 +329,12 @@ class TestDispatcherFiltering:
         assert kept.pending == 0  # 也没进它的缓冲区
 
     async def test_level_filter_only_lets_high_levels_through(self) -> None:
-        """显式给出口挂 LevelFilter：分发器在路由时按级别筛选。"""
+        """显式给出口挂 level 门槛：分发器在路由时按级别筛选。"""
         low = CollectingProcessor(name="low")
         high = CollectingProcessor(name="high")
         core = LogCore(console=False, level="DEBUG", dispatch_timeout=0.01)
         core.mount(low)
-        core.mount(high, log_filter=LevelFilter("ERROR"))
+        core.mount(high, level="ERROR")
 
         await core.start()
         try:
@@ -355,7 +352,7 @@ class TestDispatcherFiltering:
         """换出口时不带过滤器 -> 旧过滤器一并清掉，新出口全收。"""
         core = LogCore(console=False, dispatch_timeout=0.01)
         first = CollectingProcessor(name="file")
-        core.mount(first, log_filter=LevelFilter("ERROR"))
+        core.mount(first, level="ERROR")
 
         second = CollectingProcessor(name="file")
         core.mount(second, replace=True)
@@ -371,22 +368,22 @@ class TestDispatcherFiltering:
 
 
 
-    async def test_mixed_routes_in_one_batch_each_to_its_own_outlet(self) -> None:
-        """同一批里混着不同名字的路由：各自投自己的出口，不串。
+    async def test_mixed_children_in_one_batch_each_to_its_own_outlet(self) -> None:
+        """同一批里混着不同名字的子节点：各自投自己的出口，不串。
 
         目标现在是**随记录走**的（写的时候就钉死在这条记录上），所以分发只是照着投；
-        这条是那条主路的回归闸：不同路由的记录不能被并错地方。
+        这条是那条主路的回归闸：不同名字的记录不能被并错地方。
         """
         first = CollectingProcessor(name="first")
         second = CollectingProcessor(name="second")
         core = LogCore(console=False, dispatch_timeout=0.01)
-        core.route("a", targets=[first])   # nacho.a -> 只投 first
-        core.route("b", targets=[second])  # nacho.b -> 只投 second
+        core.child("a", targets=[first])   # nacho.a -> 只投 first
+        core.child("b", targets=[second])  # nacho.b -> 只投 second
 
         await core.start()
         try:
-            core.route("a").info("一号的事")
-            core.route("b").info("二号的事")
+            core.child("a").info("一号的事")
+            core.child("b").info("二号的事")
             assert await wait_until(lambda: first.received == ["一号的事"]) is True
             assert await wait_until(lambda: second.received == ["二号的事"]) is True
         finally:
@@ -394,7 +391,7 @@ class TestDispatcherFiltering:
 
 
 class TestManagerFacade:
-    """进程门面：configure 增量挂载，get_logger 派生共享核心的子实例。"""
+    """进程门面：configure 增量挂载，child 挂到共享核心的命名层级。"""
 
     def test_configure_returns_core_with_console(self) -> None:
         core = configure("nacho", console=False)
@@ -422,17 +419,6 @@ class TestManagerFacade:
 
         assert core.processors == [second]
         assert core.get_processor("local") is second
-
-    def test_get_logger_returns_the_named_route(self) -> None:
-        """:func:`get_logger` 不再是「派生实例」，而是取一条**具名绑定**。"""
-        core = configure("nacho", console=False)
-        assert get_logger() is core
-
-        view = get_logger("api")
-        assert isinstance(view, BoundLogger)
-        assert view.name == "nacho.api"  # 相对核心的名字
-        assert get_logger("api") is view  # 同名就是同一份
-        assert view.processor_registry is core.processor_registry  # 共享同一批出口
 
     async def test_manager_start_stop_delegates_to_core(self) -> None:
         core = configure("nacho", console=False)
@@ -511,7 +497,7 @@ class TestBoundDefaults:
             await core.stop()
 
     def test_bind_is_a_view_not_another_instance(self) -> None:
-        """视图共享源实例的队列与出口，且不进注册表（``get_logger`` 拿不到它）。"""
+        """视图共享源实例的队列与出口，本身不登记任何东西。"""
         core = LogCore(console=False)
         processor = RecordingProcessor()
         core.mount(processor)
@@ -521,7 +507,6 @@ class TestBoundDefaults:
         assert dict(log.defaults) == {"workflow_id": "w1"}
         assert core.get_processor("recording") is processor  # 出口还是那一份
         assert [target.processor for target in core.targets] == [processor]
-        assert core.named_routes == {}  # bind 不发布任何具名路由
         # 叠一层：同名按新的，原视图不变
         assert dict(log.bind(workflow_id="w2").defaults) == {"workflow_id": "w2"}
         assert dict(log.defaults) == {"workflow_id": "w1"}
@@ -578,14 +563,13 @@ class TestBoundDefaults:
             await core.stop()
 
     def test_bind_never_grows_the_registry(self) -> None:
-        """``bind`` 视图不进注册表：叠多少层、绑多少个 id，实例表与 routes 都不变长。
+        """``bind`` 视图不进注册表：叠多少层、绑多少个 id，注册表都不变长。
 
         这条是「请求级数据不许拿 ``bind`` 当实例用」的保险丝：哪天有人为了省参数去按
-        用户 / 按请求绑定出名字（``nacho.api.user-42`` 那种），实例表就成了只增不减的
+        用户 / 按请求绑定出名字（``nacho.api.user-42`` 那种），注册表就成了只增不减的
         字典 —— 那是 :meth:`BaseLogger.child` 该操心的事。
         """
         core = LogCore(console=False)
-        routes_before = len(core.named_routes)
         registry_before = len(core.processor_registry)
 
         view = core.bind(trace_id="t1")
@@ -593,7 +577,6 @@ class TestBoundDefaults:
             _ = view.bind(step=index)
             _ = core.bind(user_id=f"u-{index}")
 
-        assert len(core.named_routes) == routes_before
         assert len(core.processor_registry) == registry_before
         assert dict(view.defaults) == {"trace_id": "t1"}  # 原视图没被叠坏
 
@@ -650,16 +633,15 @@ class TestBoundTargets:
         finally:
             await core.stop()
 
-    async def test_target_route_and_mute(self) -> None:
-        """名字就是一份发布出来的路由：堵掉某个出口后，这条路上的日志不再进它。"""
+    async def test_target_child_and_mute(self) -> None:
+        """名字就是一个挂目标的子节点：堵掉某个出口后，这条路上的日志不再进它。"""
         db = CollectingProcessor(name="database")
         file = CollectingProcessor(name="file")
         core = LogCore(console=False)
-        access = core.route("api.access", targets=[Target(db, priority=-1), Target(file)])
-        quiet = access.mute("database")
+        access = core.child("api.access", targets=[Target(db, priority=-1), Target(file)])
+        quiet = access.bind().mute("database")
 
         assert access.name == "nacho.api.access"
-        assert core.named_routes == {"nacho.api.access": access}  # 发布过就登记上
         assert [target.processor for target in quiet.targets or ()] == [db, file]
 
         await core.start()
@@ -744,3 +726,88 @@ class TestBoundTargets:
             await core.stop()  # 停机 flush 所有已接纳的出口
 
         assert outlet.received == ["一条"]
+
+
+class TestChildLogger:
+    """child 命名层级：缓存树 + 创建时固化，与 bind 的类型分工。"""
+
+    def test_child_name_is_qualified_hierarchically(self) -> None:
+        """相对名补全为完整层级名；再 child 一层继续拼；全名写法等价。"""
+        core = LogCore(console=False)
+        a = core.child("a")
+        assert isinstance(a, ChildLogger)
+        assert a.name == "nacho.a"
+        assert a.child("b").name == "nacho.a.b"
+        # root.child("a.b") 与 root.child("a").child("b") 名字一致、行为等价
+        assert core.child("a.b").name == "nacho.a.b"
+        assert core.child("nacho.a.b").name == "nacho.a.b"  # 全名原样返回
+
+    def test_child_cache_returns_same_object(self) -> None:
+        """同名 child 命中缓存：返回同一对象，不重复固化。"""
+        core = LogCore(console=False)
+        assert core.child("vision") is core.child("vision")
+        a = core.child("a")
+        assert a.child("b") is a.child("b")
+        # 路径一致的两条调用链，逐层都命中缓存
+        assert core.child("a").child("b") is core.child("a").child("b")
+
+    def test_child_snapshots_level_and_targets_at_creation(self) -> None:
+        """创建时固化：父后改级别 / 挂出口不影响已派生节点。"""
+        core = LogCore(console=False)
+        first = CollectingProcessor(name="first")
+        core.mount(first)
+        child = core.child("a")
+        frozen_level = child.level
+        frozen_targets = child.targets
+
+        core.set_level("ERROR")
+        core.mount(CollectingProcessor(name="later"))
+
+        assert child.level is frozen_level  # 级别仍是创建时那份
+        assert child.targets is frozen_targets  # 目标仍是创建时那份
+        assert child.is_enabled_for(LogLevel.INFO) is True  # 不受 root 改级别影响
+        assert core.is_enabled_for(LogLevel.INFO) is False  # root 自己确实改了
+        assert [target.processor for target in child.targets] == [first]  # 后挂的出口不在其中
+
+    async def test_child_does_not_repeat_delivery_to_root(self) -> None:
+        """无父级重复投递：挂了自己目标的子节点只投那一份，root 收不到。"""
+        root_outlet = CollectingProcessor(name="root")
+        child_outlet = CollectingProcessor(name="child")
+        core = LogCore(console=False, processors=[root_outlet])
+        child = core.child("robot", targets=[child_outlet])
+
+        await core.start()
+        try:
+            child.info("机器人专属")
+            assert await wait_until(lambda: child_outlet.received == ["机器人专属"]) is True
+        finally:
+            await core.stop()
+
+        assert root_outlet.received == []  # 不沿父链重复投递（无 propagate）
+
+    def test_bind_product_has_no_child(self) -> None:
+        """bind() 产物是上下文视图：不能再 child 生长（类型分离）。"""
+        core = LogCore(console=False)
+        assert not hasattr(core.bind(workflow_id="w1"), "child")
+        assert not hasattr(core.child("a").bind(workflow_id="w1"), "child")
+
+    async def test_child_then_bind_combines_semantics(self) -> None:
+        """child().bind() 组合：名字取子节点、目标取固化份、默认字段随记录走。"""
+        outlet = RecordingProcessor()
+        core = LogCore(console=False)
+        child = core.child("api.access", targets=[outlet])
+        log = child.bind(owner_id="u-admin", trace_id="t1")
+        assert log.name == "nacho.api.access"
+
+        await core.start()
+        try:
+            log.info("一条访问")
+            log.info("换个归属", owner_id="u-robot")
+            assert await wait_until(lambda: len(outlet.records) >= 2) is True
+        finally:
+            await core.stop()
+
+        assert [(r.logger_name, r.owner_id, r.extra) for r in outlet.records] == [
+            ("nacho.api.access", "u-admin", {"trace_id": "t1"}),
+            ("nacho.api.access", "u-robot", {"trace_id": "t1"}),
+        ]

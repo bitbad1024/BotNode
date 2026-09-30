@@ -7,10 +7,11 @@
                      Gateway）-> 起调度器 -> 载入已发布工作流 -> 停机（含冲刷日志余量、
                      关库连接）
 
-为什么要在意这个顺序：日志核心必须在**任何业务模块被 import 之前**按配置建好。nacho 里有模块
-级 ``get_logger``（导入即执行）——谁先被 import，谁就顺手把进程默认核心按默认参数建出来，配置
-里的颜色 / 级别就此定死、再也传不进去（``LogManager.configure`` 在「已存在核心」时只合并
-processors）。入口因此不在顶层 import 业务模块，本模块也是**建好核心之后**才被导入。
+为什么要在意这个顺序：日志核心必须在业务真正开始跑之前按配置建好，然后经
+:func:`nacho.wiring.wire_loggers` 存进各业务模块的日志槽位。各 ``logging`` 接入点
+（``workflow_logger`` 等）是纯「槽位 + 惰性取」，import 零副作用 —— 没装配就调用会当场
+抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。入口因此不在顶层 import
+业务模块，本模块也是**建好核心之后**才被导入。
 
 依赖方向：本模块认识 nacho 的各业务包；反过来不成立 —— 入口只认识本模块，不认识业务。
 """
@@ -31,7 +32,7 @@ from .api import (
 )
 from .bots import SqlBotStore
 from .core.cache import CacheOptions, cache
-from .core.logger import BaseLogger, get_logger, manager
+from .core.logger import BaseLogger, default_core, manager
 from .core.scheduler import scheduler
 from .platforms.bridge import Gateway, PlatformEvent
 from .platforms.bridge.kook import KookAdapter
@@ -39,6 +40,7 @@ from .platforms.bridge.manager import BotManager
 from .platforms.bridge.onebot import OneBotAdapter
 from .platforms.kook import KookOptions
 from .platforms.onebot import OneBotOptions
+from .wiring import wire_loggers
 from .workflow import SqlWorkflowStore
 from .workflow.runtime import (
     MessageRouter,
@@ -115,7 +117,7 @@ async def on_platform_event(event: PlatformEvent) -> None:
     消息路由（``MessageRouter.dispatch``）触发 ``trigger=message`` 的工作流 —— 「PlatformEvent
     拆成普通数据」这一步就发生在这里，消息路由本身不 import bridge，依赖方向不破。
     """
-    log = get_logger("bridge")
+    log = default_core().child("bridge")
     log.info(
         "收到事件",
         platform=event.platform,
@@ -171,7 +173,10 @@ async def run(
     global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter, _kook_adapter
     global _message_router
     _db_engine = engine
-    log = get_logger("bootstrap")
+    log = default_core().child("bootstrap")
+    # 把核心派发给各业务模块（workflow / scheduler / cache / bridge 的日志槽位）：之后它们
+    # 再调便捷函数就直接落进这份核心，未装配则当场抛错（fail fast），而不是各自 default_core()
+    wire_loggers(default_core())
 
     # 缓存：默认（memory）就是本地内存，配了 redis 而连不上时按 fallback_to_memory 处理
     cache.configure(CacheOptions.from_mapping(cache_config))

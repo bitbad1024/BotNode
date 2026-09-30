@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from nacho.core.logger import BaseLogger, get_logger
+from nacho.core.logger import BaseLogger
 from nacho.platforms.onebot import OneBotOptions, OneBotServer
 from nacho.platforms.onebot.models import (
     ActionResponse,
@@ -33,6 +33,7 @@ from nacho.platforms.onebot.models import (
 from nacho.platforms.onebot.server import ClientEntry, OneBotConnection
 
 from .gateway import EventSubscriber
+from .logging import bridge_logger
 from .models import ActionResult, BotClient, PlatformEvent
 
 if TYPE_CHECKING:
@@ -146,7 +147,7 @@ class OneBotAdapter:
         :param logger: 业务日志实例，默认 ``bridge`` 那个。
         """
         self._publish: EventSubscriber | None = publish
-        self._log: BaseLogger = logger if logger is not None else get_logger("bridge")
+        self._log: BaseLogger = logger if logger is not None else bridge_logger()
         self._server: OneBotServer = OneBotServer(
             options, handler=self._on_event, tokens=tokens
         )

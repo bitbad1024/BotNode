@@ -1,47 +1,22 @@
 """异步日志系统：一根 root + 若干绑定视图。
 
-职责划分
+设计哲学
 ========
 
-* :meth:`BaseLogger.write`：**写入方法**。默认把日志推到消息队列（非阻塞），
-  业务侧永远不会因为落盘 / 落库而卡住；
-* :meth:`BaseLogger.bind`：**绑定**。得到一份 :class:`BoundLogger` 视图：名字、出口、
-  级别、默认字段四样都能换，适合给一段执行（一趟工作流、一次请求）统一打上下文标记，
-  不用每个调用点手抄一遍；
-* 内部分发器从队列批量取日志，**照着每条记录自带的目标**扇出给各处理机；
-* :meth:`BaseLogger.flush`：**刷新缓冲区方法**，刷新所有处理机的缓冲区；
-* :meth:`BaseLogger.search`：**检索方法**，聚合各处理机的检索结果。
+* **目标随记录走**：写入那一刻目标钉死在 ``LogRecord.targets`` 上，分发器只照投，
+  不再查任何「名字 -> 实例」表 —— 出口长在 root 身上，``bind`` / ``child`` /
+  ``route`` 只是给它打不同名字 / 字段的视图；
+* **child 是缓存树，创建时固化**：派生那一刻把级别 / 目标解析固化进新节点，同名
+  ``child`` 命中同一对象；父后挂出口、改级别对已派生节点不生效，要新配置就再
+  ``child`` 一层；
+* **过滤挂在目标侧**：一条日志只有通过某目标的过滤器才被投给它，被滤掉的连处理机
+  缓冲区都不进 —— 处理机只负责落地，不含过滤器；
+* **两级缓冲分工**：``AsyncLogQueue`` 只管同步写入与异步分发之间的交接
+  （``dispatch_timeout`` 是交接窗口不是攒批窗口），攒批由各处理机自己的
+  ``buffer_size`` / ``flush_interval`` 决定，互不牵制。
 
-没有派生实例
-============
-
-曾经有一套「名字 -> 派生实例」的树：``get_logger("a.b")`` 会派生一个子实例，把父级
-的出口复制成「落回配置」（创建即冻结），于是**取实例的先后顺序会影响它能收到什么**
-—— 那个坑连同 ``child`` / ``attach`` / 落回配置一起删了。现在：
-
-* **出口长在 root 身上**：构造给（``processors=``）或后来 :meth:`mount` 上去；
-* **一个模块另一处去处**就 :meth:`route` 发布一条具名路由（一个名字 = 一份绑定好的
-  视图）；不发布就跟着 root 那份走；
-* **目标随记录走**：写入那一刻目标就钉死在 :attr:`~nacho.core.logger.models
-  .LogRecord.targets` 上，分发只是照着投，不再查任何名字表。
-
-过滤器
-======
-
-``log_filter``（:class:`~nacho.core.logger.filters.LogFilter`）挂在**目标**一侧
-（:class:`~nacho.core.logger.models.Target`）：一条日志只有通过某个目标的过滤器才会
-被投递给它，被过滤掉的日志连处理机的缓冲区都不进。过滤器因此不属于处理机——处理机
-只负责落地。
-
-**两级缓冲，分工明确**：
-
-* :class:`~nacho.core.logger.queue.AsyncLogQueue`（**交接**）：同步写入方与异步
-  分发器之间的边界。``dispatch_timeout`` 只决定「一次最多等多久把手上这批取走」，
-  是**交接窗口**而非攒批窗口，所以取小值，让日志尽快交到处理机；
-* :class:`~nacho.core.logger.processors.base.BaseLogProcessor` 的缓冲区（**攒批**）：
-  每个出口自己的批大小与刷盘周期（``buffer_size`` / ``flush_interval``），攒批窗口
-  只由它决定——控制台可以 ``buffer_size=1`` 逐条直写，文件 / 数据库则成批落，
-  互不牵制。
+职责一句话：``write`` 入队（非阻塞）、``bind`` 出视图、``flush`` / ``search`` 聚合
+各出口。完整的使用说明见 ``docs/logger.md``。
 """
 from __future__ import annotations
 
@@ -54,7 +29,7 @@ from dataclasses import replace
 from types import MappingProxyType, TracebackType
 from typing import TextIO, TypedDict, cast, override
 
-from .filters import DENY_ALL, LevelFilter, LogFilter
+from .filters import DENY_ALL, LogFilter
 from .models import LogLevel, LogRecord, LogSearchResult, Target, TimestampLike
 from .processors.base import BaseLogProcessor, ProcessorStats
 from .processors.console import ConsoleLogProcessor
@@ -91,8 +66,6 @@ class LoggerStats(TypedDict):
     queue: QueueStats
     processors: list[ProcessorStats]
     dropped: DroppedStats
-    #: 「实例名字 -> 该实例解析后会投的处理机名」
-    routes: dict[str, list[str]]
 
 
 
@@ -112,15 +85,109 @@ class _SharedState:
         self.registry: list[BaseLogProcessor] = []
 
 
+def _normalize_targets(targets: Sequence[Target | BaseLogProcessor]) -> tuple[Target, ...]:
+    """把「目标或裸处理机」的序列统一成按优先级排好的 :class:`Target` 元组。
 
-class BaseLogger:
+    裸处理机等价于 ``Target(processor)``（全收、优先级 0）；已包装的用自己那份
+    ``priority`` 排序。``bind`` / ``child`` 挂目标、创建视图 / 层级节点时都走这一份，
+    归一化 + 排序只此一处。
+    """
+    normalized: list[Target] = [
+        item if isinstance(item, Target) else Target(item) for item in targets
+    ]
+    normalized.sort(key=lambda target: target.priority)
+    return tuple(normalized)
+
+
+class _LevelMethodsMixin:
+    """六个级别便捷方法 + 统一的 :meth:`log`。
+
+    root / 绑定视图 / 层级节点三处的 ``log`` 流程完全一致：解析级别 -> 级别门控 ->
+    构造「当次」记录 -> 交给 :meth:`write` 入队。整条链抽成这一份，只有「怎么构造记录」
+    （:meth:`_make_record`）由各类按自己的名字 / 目标 / 默认字段规则覆盖。
+    """
+
+    __slots__: tuple[str, ...] = ()
+
+    def log(
+        self,
+        level: LogLevel | str,
+        message: object,
+        *,
+        owner_id: str = "",
+        exc_info: object = False,
+        **extra: object,
+    ) -> bool:
+        """构造日志记录并写入队列，是**唯一**入口；:meth:`write` 只负责入队。
+
+        ``owner_id`` 是这条日志的**所有者**：谁的操作就填谁（api 层填登录用户 id、ws 层填
+        那条连接的归属），不填就是**空串 = 公共所有者**（启动、框架自身这类没归属的日志）。
+        它单独成一等字段而不塞进 ``extra``：所有者要能渲染、能落库、能按它检索。
+
+        ``exc_info`` 收口为 ``object``：既允许 ``True``（用当前异常），也允许
+        ``sys.exc_info()`` 那样的 ``(type, value, traceback)`` 三元组；层间用
+        ``**extra`` 透传时也只有宽类型才放得下，运行期再按元组 / 布尔分支处理。
+        """
+        parsed_level = LogLevel.parse(level)
+        if not self.is_enabled_for(parsed_level):
+            return False
+        return self.write(
+            self._make_record(
+                parsed_level, message, owner_id=owner_id, exc_info=exc_info, extra=extra
+            )
+        )
+
+    def _make_record(
+        self,
+        level: LogLevel,
+        message: object,
+        *,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """构造「当次」记录：名字 / 目标按各类自己的规则放好。子类各自实现。"""
+        _ = level, message, owner_id, exc_info, extra
+        raise NotImplementedError  # pragma: no cover - 三个子类都覆盖它
+
+    def write(self, record: LogRecord) -> bool:
+        """入队出口：子类各自实现（root 补默认目标；视图盖名字 / 目标再转发）。"""
+        _ = record
+        raise NotImplementedError  # pragma: no cover - 三个子类都覆盖它
+
+    def is_enabled_for(self, level: LogLevel) -> bool:
+        """级别门控：子类各自实现。"""
+        _ = level
+        raise NotImplementedError  # pragma: no cover - 三个子类都覆盖它
+
+    def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
+
+    def info(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.INFO, message, owner_id=owner_id, **extra)
+
+    def warning(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        return self.log(LogLevel.WARNING, message, owner_id=owner_id, **extra)
+
+    def error(
+        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
+    ) -> bool:
+        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
+
+    def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
+        """记录一条 ERROR 日志并附带当前异常堆栈。"""
+        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
+
+
+class BaseLogger(_LevelMethodsMixin):
     """日志系统本体（一根 root）：队列 + 分发器 + 一份目标清单。
 
-    出口就长在它身上：构造给的那些、后来 :meth:`mount` 上去的那些。业务侧拿到的都是
-    :meth:`bind` 出来的视图（:class:`BoundLogger`）—— **没有派生实例、没有落回配置、
-    没有冻结**：一条日志投给谁，写的时候按它所属视图的那份目标定了。
+    出口就长在它身上：构造给的那些、后来 :meth:`mount` 上去的那些。业务侧拿到的要么
+    是 :meth:`bind` 出来的上下文视图（:class:`BoundLogger`），要么是 :meth:`child`
+    出来的**缓存树节点**（:class:`ChildLogger`）—— 节点在派生那一刻固化一份配置，
+    之后不再沿父链解析。
 
-    想要「某个模块另一个去处」， explicit 发布一条 :meth:`route` 就够了：一个名字 =
+    想要「某个模块另一个去处」， :meth:`route` 发布一条具名路由就够了：一个名字 =
     一份绑定好的视图，不发布就跟着 root 那份走。
     """
 
@@ -146,8 +213,8 @@ class BaseLogger:
         :param console: 是否默认挂一路控制台输出（默认 ``True``）：库 / 服务端不想
             要任何标准输出就传 ``False``。已经挂过控制台就不重复挂。
         :param console_level: 控制台最低级别，默认与 ``level`` 一致（控制台通常只给
-            人看，可以比文件出口更粗）。它会变成一个 :class:`LevelFilter` 挂在那个
-            目标上 —— 控制台处理机自己不做过滤。
+            人看，可以比文件出口更粗）。它作为**出口级 level 门槛**挂在那个目标上 ——
+            控制台处理机自己不做过滤。
         :param dispatch_batch_size: 分发器一次最多从队列取多少条。这是**交接批量**，
             不是攒批水位线——攒批由各处理机的 ``buffer_size`` 决定。
         :param dispatch_timeout: 队列取不到新日志时，最多再等多久就把手上这批先交出去。
@@ -174,26 +241,26 @@ class BaseLogger:
         self._running: bool = False
         #: **默认目标**（没给自己的目标时都用它），按优先级排好
         self._targets: tuple[Target, ...] = ()
-        #: **显式发布的具名路由**：只有 :meth:`publish` / :meth:`route` 过才在里面
-        self._routes: dict[str, BoundLogger] = {}
+        #: **命名层级树的子节点缓存**：``child(name)`` 命中返回同一对象
+        self._children: dict[str, ChildLogger] = {}
         if processors:
             self.mount(*processors)
         #: 构造时是否要求了默认控制台输出（看得出「有没有那一路」）
         self._console_enabled: bool = console
         if console and self.get_processor(ConsoleLogProcessor.name) is None:
-            # 控制台也是一个普通目标：级别判定交给挂在它上面的 LevelFilter（给出口挂一层
-            # 过滤，而不是让处理机自己认级别）
+            # 控制台也是一个普通目标：级别门槛就是出口级 level（给出口设门槛，
+            # 而不是让处理机自己认级别）
             self.mount(
                 ConsoleLogProcessor(stream=console_stream, color=console_color),
-                log_filter=LevelFilter(level if console_level is None else console_level),
+                level=level if console_level is None else console_level,
             )
 
+    # ------------------------------------------------------------------ 目标
     @property
     def console_enabled(self) -> bool:
         """是否挂了默认的控制台输出。"""
         return self._console_enabled
 
-    # ------------------------------------------------------------------ 目标
     @property
     def targets(self) -> tuple[Target, ...]:
         """默认目标（:class:`Target` 元组，按优先级排好）。"""
@@ -235,6 +302,7 @@ class BaseLogger:
         self,
         *processors: "Target | BaseLogProcessor",
         log_filter: LogFilter | None = None,
+        level: "LogLevel | str | None" = None,
         priority: int = 0,
         replace: bool = False,
     ) -> BaseLogger:
@@ -244,13 +312,15 @@ class BaseLogger:
         看得到。重复挂**同一个对象**无害。
 
         :param log_filter: 给这批目标挂的过滤器（只放行通过它的记录）。
+        :param level: 出口级最低级别，低于它的记录直接跳过；``None`` = 全收。只作用于
+            直接传入的处理机，已包装成 :class:`Target` 的用自己的 ``level``。
         :param priority: 投放优先级，小的先投。
         :param replace: 换通道：先把**同名**的那几个目标摘掉再挂（换输出路径 / 热重载）。
         """
         added: list[Target] = [
             item
             if isinstance(item, Target)
-            else Target(item, log_filter=log_filter, priority=priority)
+            else Target(item, log_filter=log_filter, level=level, priority=priority)
             for item in processors
         ]
         self.adopt(*(target.processor for target in added))
@@ -268,55 +338,7 @@ class BaseLogger:
         self._targets = tuple(sorted(kept, key=lambda target: target.priority))
         return self
 
-    # ------------------------------------------------------------------ 具名路由
-    def publish(self, view: BoundLogger) -> BoundLogger:
-        """把一份视图**发布**成这个名字的路由：之后 :func:`get_logger` 取到的就是它。
-
-        取代派生实例树的那张表：**不发布就没有**，不再有「派生出来就自动有身份」这种
-        隐式规则。典型用法是某一路要换个目标 / 堵个通道（``api.access`` 不进审计库），
-        改完再发布回去，这条路上所有人都拿到改过的那份。
-        """
-        self._routes[view.name] = view
-        return view
-
-    def route(
-        self,
-        name: str,
-        *,
-        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
-        level: "LogLevel | str | None" = None,
-        **defaults: object,
-    ) -> BoundLogger:
-        """取（必要时先建并发布）一条**具名路由**：一个名字 = 一份绑定好的视图。
-
-        名字相对本实例（``"api.robot"`` -> ``"nacho.api.robot"``，写全名也认）；已经
-        发布过就直接返回那份，不会覆盖。没给 ``targets`` 就沿用本实例的默认目标 ——
-        所以「某个模块只要和别人一样」是不用发布任何东西的::
-
-            access = core.route("api.access", trace_id="t-1")
-            robot = core.route("api.robot", targets=[Target(file_outlet, priority=-1)])
-        """
-        full: str = self.qualify(name)
-        existing: BoundLogger | None = self._routes.get(full)
-        if existing is not None:
-            return existing
-        return self.publish(self.bind(name=full, targets=targets, level=level, **defaults))
-
-    @property
-    def named_routes(self) -> dict[str, BoundLogger]:
-        """已发布的具名路由（名字 -> 视图）快照副本。"""
-        return dict(self._routes)
-
-
     # ------------------------------------------------------------------ 注册表
-
-
-
-
-    # ------------------------------------------------------------------ 输出通道挂载
-
-
-
     def get_processor(self, name: str) -> BaseLogProcessor | None:
         """按名称取已接纳的输出通道（在共享清单里找）。"""
         for processor in self._shared.registry:
@@ -332,6 +354,17 @@ class BaseLogger:
         ``bind`` 里出现过的出口 —— 生命周期与刷新 / 检索都按这份来。
         """
         return self._shared.registry
+
+    def adopt(self, *processors: BaseLogProcessor) -> None:
+        """把处理机接进共享清单（幂等：已经在里面就不动）。
+
+        ``stop`` / ``flush`` / ``search`` / ``stats`` 都只认这张清单 —— 只出现在某个
+        ``bind`` 的目标里却没被接纳进来的处理机，停机时不会 flush，日志会在缓冲区里丢。
+        """
+        registry: list[BaseLogProcessor] = self._shared.registry
+        for processor in processors:
+            if not any(existing is processor for existing in registry):
+                registry.append(processor)
 
     # ------------------------------------------------------------------ 名字
     def qualify(self, name: str) -> str:
@@ -376,14 +409,48 @@ class BaseLogger:
         """
         return BoundLogger(self, name=name, targets=targets, level=level, **defaults)
 
+    # ------------------------------------------------------------------ 命名层级
+    def child(
+        self,
+        name: str,
+        *,
+        level: "LogLevel | str | None" = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+    ) -> ChildLogger:
+        """沿名字生长一层**缓存树节点**：名字经 :meth:`qualify` 拼接，**缓存命中
+        返回同一对象**。
 
+        派生那一刻就把生效的级别 / 目标**固化**进新节点（:class:`ChildLogger` 的
+        ``_level`` / ``_targets`` 永远是具体值），之后不再沿父链解析——所以父级后挂
+        出口、改级别对**已派生**节点不生效，要新配置就再 ``child`` 一层。
 
+        :param name: 相对名字（``"api"``）或完整名字（``"nacho.api"``），经
+            :meth:`qualify` 拼接成完整层级名；
+        :param level: 本节点的最低级别；``None`` = 固化父 / root 当前级别；
+        :param targets: 本节点的出口；``None`` = 固化父 / root 当前默认目标。
+
+        child 与 bind 的分工：``child`` 换的是**名字与出口**（名字即身份，可继续
+        ``child`` 生长）；``bind`` 换的是**默认字段**（给一段执行打上下文标记，产物
+        只能 ``bind`` / ``log`` / ``mute``，不能再 ``child``）。
+        """
+        cached = self._children.get(name)
+        if cached is not None:
+            return cached
+        node = ChildLogger(
+            self,
+            name=self.qualify(name),
+            level=self.level if level is None else level,
+            targets=self.targets if targets is None else targets,
+        )
+        self._children[name] = node
+        return node
+
+    # ------------------------------------------------------------------ 生命周期
     @property
     def running(self) -> bool:
         """分发器是否在运行（即 :meth:`start` 是否已生效）。"""
         return self._running
 
-    # ------------------------------------------------------------------ 生命周期
     async def start(self) -> BaseLogger:
         """启动所有已接纳的处理机，并把分发器跑起来。"""
         if self._running:
@@ -438,18 +505,6 @@ class BaseLogger:
             if self._queue.closed and self._queue.empty:
                 break
 
-
-    def adopt(self, *processors: BaseLogProcessor) -> None:
-        """把处理机接进共享清单（幂等：已经在里面就不动）。
-
-        ``stop`` / ``flush`` / ``search`` / ``stats`` 都只认这张清单 —— 只出现在某个
-        ``bind`` 的目标里却没被接纳进来的处理机，停机时不会 flush，日志会在缓冲区里丢。
-        """
-        registry: list[BaseLogProcessor] = self._shared.registry
-        for processor in processors:
-            if not any(existing is processor for existing in registry):
-                registry.append(processor)
-
     async def _dispatch(self, records: list[LogRecord]) -> None:
         """一批日志扇出给各处理机：**照着每条记录自己的目标投**。
 
@@ -463,6 +518,8 @@ class BaseLogger:
             for target in record.targets or ():
                 processor = target.processor
                 if not processor.healthy:
+                    continue
+                if target.level is not None and record.level < target.level:
                     continue
                 if target.log_filter is not None and not target.log_filter.match(record):
                     continue
@@ -490,10 +547,12 @@ class BaseLogger:
                 _fallback.exception("处理机 %s 处理日志失败", processor.name)
 
     # ------------------------------------------------------------------ 写入
+    @override
     def is_enabled_for(self, level: LogLevel | str) -> bool:
         """本条日志是否达到本实例的级别。"""
         return LogLevel.parse(level) >= self._level
 
+    @override
     def write(self, record: LogRecord) -> bool:
         """写入方法：默认把日志推到消息队列（非阻塞），返回是否入队成功。
 
@@ -508,38 +567,25 @@ class BaseLogger:
             _fallback.exception("日志入队失败")
             return False
 
-    def log(
+    @override
+    def _make_record(
         self,
-        level: LogLevel | str,
+        level: LogLevel,
         message: object,
         *,
-        owner_id: str = "",
-        exc_info: object = False,
-        **extra: object,
-    ) -> bool:
-        """构造日志记录并写入队列。
-
-        ``owner_id`` 是这条日志的**所有者**：谁的操作就填谁（api 层填登录用户 id、ws 层填
-        那条连接的归属），不填就是**空串 = 公共所有者**（启动、框架自身这类没归属的日志）。
-        它单独成一等字段而不塞进 ``extra``：所有者要能渲染、能落库、能按它检索。
-
-        ``exc_info`` 收口为 ``object``：既允许 ``True``（用当前异常），也允许
-        ``sys.exc_info()`` 那样的 ``(type, value, traceback)`` 三元组；层间用
-        ``**extra`` 透传时也只有宽类型才放得下，运行期再按元组 / 布尔分支处理。
-        """
-        parsed_level = LogLevel.parse(level)
-        if not self.is_enabled_for(parsed_level):
-            return False
-
-        record = self.new_record(
-            parsed_level,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """root 直接以自己的名字构造记录；目标留空，写入时补 root 默认目标。"""
+        return self.new_record(
+            level,
             message,
             owner_id=owner_id,
             exc_info=exc_info,
             extra=extra,
             logger_name=self.name,
         )
-        return self.write(record)
 
     def new_record(
         self,
@@ -589,29 +635,6 @@ class BaseLogger:
             owner_id=owner_id,
             targets=targets,
         )
-
-    def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
-
-    def info(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        return self.log(LogLevel.INFO, message, owner_id=owner_id, **extra)
-
-    def warning(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        return self.log(LogLevel.WARNING, message, owner_id=owner_id, **extra)
-
-    def error(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
-    def critical(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
-    def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        """记录一条 ERROR 日志并附带当前异常堆栈。"""
-        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
 
     # ------------------------------------------------------------------ 刷新与检索
     async def flush(self) -> None:
@@ -730,11 +753,6 @@ class BaseLogger:
                 "buffers": buffer_dropped,
                 "total": queue_dropped + buffer_dropped,
             },
-            # 发布过的具名路由：谁有自己的去处，一眼看得到（没发布的不在里面）
-            "routes": {
-                name: [target.processor.name for target in view.targets or ()]
-                for name, view in sorted(self._routes.items())
-            },
         }
 
     @override
@@ -743,7 +761,7 @@ class BaseLogger:
         return f"<BaseLogger name={self.name!r} level={self._level.name} processors=[{names}]>"
 
 
-class BoundLogger:
+class BoundLogger(_LevelMethodsMixin):
     """**绑定过的日志视图**：默认字段 / 名字 / 出口 / 级别，四项都能换，视图本身不登记。
 
     四项每一项都随用随给：给了就覆盖，没给就沿用来源那份::
@@ -762,7 +780,7 @@ class BoundLogger:
     ``user_id``，一次请求带上 ``trace_id``，这条路上之后每条日志自己就认得出是谁的，
     调用点不用一遍遍手抄::
 
-        log = get_logger("workflow").bind(workflow_id="w1", user_id="10001")
+        log = default_core().child("workflow").bind(workflow_id="w1", user_id="10001")
         log.info("开始")                    # extra: workflow_id=w1, user_id=10001
         log.info("换人", user_id="10002")    # extra: workflow_id=w1, user_id=10002
 
@@ -809,11 +827,7 @@ class BoundLogger:
         #: 目标快照：``None`` = 不指定，沿用源实例那份（分发时按名字解析）
         self._targets: tuple[Target, ...] | None = None
         if targets is not None:
-            normalized: list[Target] = [
-                item if isinstance(item, Target) else Target(item) for item in targets
-            ]
-            normalized.sort(key=lambda target: target.priority)
-            self._targets = tuple(normalized)
+            self._targets = _normalize_targets(targets)
             # 只在这里出现的处理机也要能被停机 flush、被检索、被统计
             logger.adopt(*(target.processor for target in self._targets))
         self._level: LogLevel | None = None if level is None else LogLevel.parse(level)
@@ -886,11 +900,6 @@ class BoundLogger:
         """所有已接纳的处理机（视图不持有自己的清单，看的是源实例那份）。"""
         return self._logger.processor_registry
 
-    @property
-    def named_routes(self) -> dict[str, BoundLogger]:
-        """已发布的具名路由（视图不持有自己的表，看的是源实例那份）。"""
-        return self._logger.named_routes
-
     async def flush(self) -> None:
         """刷新所有出口的缓冲区（视图不持有任何自己的状态，交给源实例做）。"""
         await self._logger.flush()
@@ -930,10 +939,12 @@ class BoundLogger:
         return str(owner_id or bound_owner), merged
 
     # ------------------------------------------------------------------ 写入
+    @override
     def is_enabled_for(self, level: LogLevel | str) -> bool:
         """本条日志是否达到本视图的生效级别（没单独绑就看源实例）。"""
         return LogLevel.parse(level) >= self.level
 
+    @override
     def write(self, record: LogRecord) -> bool:
         """直接写一条记录：默认字段并进 ``extra``，名字与目标按本视图那份盖上。"""
         patched: LogRecord = record
@@ -946,56 +957,216 @@ class BoundLogger:
         owner_id, extra = self._merge(patched.owner_id, patched.extra)
         return self._logger.write(replace(patched, extra=extra, owner_id=owner_id))
 
-    def log(
+    @override
+    def _make_record(
         self,
-        level: LogLevel | str,
+        level: LogLevel,
         message: object,
         *,
-        owner_id: str = "",
-        exc_info: object = False,
-        **extra: object,
-    ) -> bool:
-        """写一条日志：``extra`` = 默认字段 + 当次字段（当次同名键优先）。"""
-        parsed_level = LogLevel.parse(level)
-        if not self.is_enabled_for(parsed_level):
-            return False
-        merged_owner, merged_extra = self._merge(owner_id, extra)
-        return             self._logger.write(
-            self._logger.new_record(
-                parsed_level,
-                message,
-                owner_id=merged_owner,
-                exc_info=exc_info,
-                extra=merged_extra,
-                logger_name=self.name,
-                targets=self._targets,
-            )
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """按本视图的名字 / 目标构造「当次」记录；默认字段由 :meth:`write` 并入。"""
+        return self._logger.new_record(
+            level,
+            message,
+            owner_id=owner_id,
+            exc_info=exc_info,
+            extra=extra,
+            logger_name=self.name,
+            targets=self._targets,
         )
 
-    def debug(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        return self.log(LogLevel.DEBUG, message, owner_id=owner_id, **extra)
 
-    def info(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        return self.log(LogLevel.INFO, message, owner_id=owner_id, **extra)
-
-    def warning(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        return self.log(LogLevel.WARNING, message, owner_id=owner_id, **extra)
-
-    def error(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
-    def critical(
-        self, message: object, *, owner_id: str = "", exc_info: object = False, **extra: object
-    ) -> bool:
-        return self.log(LogLevel.CRITICAL, message, owner_id=owner_id, exc_info=exc_info, **extra)
-
-    def exception(self, message: object, *, owner_id: str = "", **extra: object) -> bool:
-        """记录一条 ERROR 日志并附带当前异常堆栈（默认字段照带）。"""
-        return self.log(LogLevel.ERROR, message, owner_id=owner_id, exc_info=True, **extra)
 
     @override
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         keys = ", ".join(self._defaults)
         return f"<BoundLogger name={self.name!r} defaults=[{keys}]>"
+
+
+class ChildLogger(_LevelMethodsMixin):
+    """**缓存式命名层级树节点**：``child()`` 缓存子节点，创建时固化一份配置。
+
+    与旧版「写时沿父链解析」的区别：派生那一刻就把生效的级别 / 目标**解析并固化**
+    进新节点（``_level`` / ``_targets`` 永远是具体值，没有「继承 / 待解析」），
+    之后读 ``level`` / ``targets`` 不再沿父链向上找。于是：
+
+    * 多次 ``child("a")`` 返回**同一个对象**（``children`` 缓存字典，行为一致）；
+    * 父级后挂出口、改级别对**已派生**节点不生效 —— 要新配置就再 ``child`` 一层；
+    * 写日志只投**固化下来的那一份目标**，不沿父链重复投递（无 propagate）。
+
+    child 与 bind 的分工：``child`` 换的是**名字与出口**（名字即身份，可继续
+    ``child`` 生长）；``bind`` 换的是**默认字段**（给一段执行打上下文标记，产物
+    只能 ``bind`` / ``log`` / ``mute``，不能再 ``child``）。
+    """
+
+    __slots__: tuple[str, ...] = (
+        "_root",
+        "_children",
+        "_name",
+        "_level",
+        "_targets",
+    )
+
+    def __init__(
+        self,
+        root: BaseLogger,
+        *,
+        name: str,
+        level: LogLevel | str,
+        targets: Sequence[Target | BaseLogProcessor],
+    ) -> None:
+        self._root: BaseLogger = root
+        self._children: dict[str, "ChildLogger"] = {}
+        self._name: str = name
+        self._level: LogLevel = LogLevel.parse(level)
+        self._targets: tuple[Target, ...] = _normalize_targets(targets)
+        root.adopt(*(target.processor for target in self._targets))
+
+    @property
+    def name(self) -> str:
+        """完整名字（写进 ``record.logger_name`` 的标签，不是身份）。"""
+        return self._name
+
+    @property
+    def children(self) -> Mapping[str, "ChildLogger"]:
+        """已派生的子节点（只读视图）。"""
+        return MappingProxyType(self._children)
+
+    @property
+    def level(self) -> LogLevel:
+        """本节点的生效级别（创建时固化的那份）。"""
+        return self._level
+
+    @property
+    def targets(self) -> tuple[Target, ...]:
+        """本节点的生效目标（创建时固化的那份）。"""
+        return self._targets
+
+    @property
+    def processor_registry(self) -> list[BaseLogProcessor]:
+        """所有已接纳的处理机（子节点不持有自己的清单，看的是源核心那份）。"""
+        return self._root.processor_registry
+
+    def child(
+        self,
+        name: str,
+        *,
+        level: "LogLevel | str | None" = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+    ) -> "ChildLogger":
+        """继续沿名字生长一层：**缓存命中返回同一对象**，未命中按父当前配置固化一份。
+
+        ``root.child("a").child("b")`` 与 ``root.child("a.b")`` 行为等价 —— 都是
+        创建时固化 root 当时的当前状态，路径深浅不影响结果。已派生的名字再次
+        ``child`` 直接返回缓存那一份（不会覆盖原有的覆盖项）。
+        """
+        full: str = name
+        if self._name and name and name != self._name and not name.startswith(self._name + "."):
+            full = f"{self._name}.{name}"
+        cached = self._children.get(name)
+        if cached is not None:
+            return cached
+        node = ChildLogger(
+            self._root,
+            name=full,
+            level=self._level if level is None else level,
+            targets=self._targets if targets is None else targets,
+        )
+        self._children[name] = node
+        return node
+
+    def bind(
+        self,
+        *,
+        name: str | None = None,
+        targets: "Sequence[Target | BaseLogProcessor] | None" = None,
+        level: "LogLevel | str | None" = None,
+        **defaults: object,
+    ) -> BoundLogger:
+        """产一份 :class:`BoundLogger`：名字 / 出口 / 级别默认沿用本视图**解析值**。
+
+        从这里起是**上下文视图**：只能 ``bind`` / ``log`` / ``mute``，不能再 ``child``
+        生长（类型分离，见类 docstring）。
+        """
+        return BoundLogger(
+            self._root,
+            name=name if name is not None else self._name,
+            targets=targets if targets is not None else self.targets,
+            level=level if level is not None else self.level,
+            **defaults,
+        )
+
+    def set_level(self, level: "LogLevel | str | None") -> None:
+        """设自己的级别；传 ``None`` 恢复为 root 的级别（固化后「继承」只到 root）。"""
+        self._level = self._root.level if level is None else LogLevel.parse(level)
+
+    @override
+    def is_enabled_for(self, level: LogLevel | str) -> bool:
+        """本条日志是否达到本节点的生效级别（创建时固化的那份）。"""
+        return LogLevel.parse(level) >= self._level
+
+    @override
+    def write(self, record: LogRecord) -> bool:
+        """直接写一条记录：名字与目标按本节点**固化的那一份**盖上。"""
+        patched: LogRecord = record
+        if self._name:
+            patched = replace(patched, logger_name=self._name)
+        return self._root.write(replace(patched, targets=self._targets))
+
+    @override
+    def _make_record(
+        self,
+        level: LogLevel,
+        message: object,
+        *,
+        owner_id: str,
+        exc_info: object,
+        extra: Mapping[str, object],
+    ) -> LogRecord:
+        """按本节点**固化**的名字 / 目标构造「当次」记录。"""
+        return self._root.new_record(
+            level,
+            message,
+            owner_id=owner_id,
+            exc_info=exc_info,
+            extra=extra,
+            logger_name=self._name,
+            targets=self._targets,
+        )
+
+    async def flush(self) -> None:
+        """刷新所有出口的缓冲区（视图不持有状态，交给 root 做）。"""
+        await self._root.flush()
+
+    async def search(
+        self,
+        *,
+        query: str | None = None,
+        level: "LogLevel | str | None" = None,
+        start: "TimestampLike" = None,
+        end: "TimestampLike" = None,
+        logger_name: str | None = None,
+        owner_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        processors: "Sequence[str] | None" = None,
+    ) -> LogSearchResult:
+        """检索：走 root 那份（节点不持有状态，查的东西与它无异）。"""
+        return await self._root.search(
+            query=query,
+            level=level,
+            start=start,
+            end=end,
+            logger_name=logger_name,
+            owner_id=owner_id,
+            limit=limit,
+            offset=offset,
+            processors=processors,
+        )
+
+    @override
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<ChildLogger {self._name} level={self.level.name}>"

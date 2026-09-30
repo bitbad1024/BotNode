@@ -86,13 +86,21 @@ class Target:
     再按名字反查实例表 —— 名字表因此可以彻底不存在。
 
     :param log_filter: 只放行通过它的记录；``None`` = 这个出口全收。
+    :param level: 出口级最低级别；低于它的记录直接跳过，``None`` = 全收。
+        与 ``log_filter`` 分工：level 是数值门槛，log_filter 是自定义判定。
     :param priority: 投放顺序，**小的先投**：先落库还是先写文件由它说了算，不必依赖
         ``bind`` 里写 targets 的先后。
     """
 
     processor: BaseLogProcessor
     log_filter: "FilterLike | None" = None
+    level: LogLevel | None = None
     priority: int = 0
+
+    def __post_init__(self) -> None:
+        """把 ``level`` 统一解析成 :class:`LogLevel`（挂载时允许传级别名）。"""
+        if self.level is not None:
+            object.__setattr__(self, "level", LogLevel.parse(self.level))
 
 
 @dataclass(slots=True)

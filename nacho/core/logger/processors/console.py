@@ -66,9 +66,8 @@ class ConsoleLogProcessor(BaseLogProcessor):
         :param color: 是否用 ANSI 颜色区分级别，默认开启。
 
         控制台不做任何过滤：模块路由与级别过滤都由分发器负责。想让控制台只收
-        更高级别的日志，请在挂载时交给它一个
-        :class:`~nacho.core.logger.filters.LevelFilter`，例如
-        ``core.mount(ConsoleLogProcessor(), log_filter=LevelFilter("WARNING"))``。
+        更高级别的日志，请在挂载时给它一个出口级 ``level`` 门槛，例如
+        ``core.mount(ConsoleLogProcessor(), level="WARNING")``。
         """
         # 逐条直写：控制台输出不攒批，出问题时也不会压在缓冲区里
         super().__init__(name=name, buffer_size=1, flush_interval=0)

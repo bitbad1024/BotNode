@@ -35,6 +35,7 @@ from nacho.core.logger import (  # noqa: E402
     configure,
     manager,
 )
+from nacho.wiring import wire_loggers  # noqa: E402
 from nacho.workflow import (  # noqa: E402
     ConfigField,
     NodeExecutionContext,
@@ -139,12 +140,13 @@ async def wait_for_records(records: list[LogRecord], *, count: int = 1) -> None:
 
 @asynccontextmanager
 async def runtime_logs() -> AsyncIterator[list[LogRecord]]:
-    """把**进程默认核心**换成带采集出口的一份，产出「收到的记录」列表（退出时还原）。
+    """把**进程默认核心**换成带采集出口的一份，并把各业务模块的日志槽位指到它
+    （产出「收到的记录」列表，退出时还原）。
 
-    运行时模块的日志走的是进程默认核心（``nacho.workflow.runtime`` 的 ``_log()`` 没有可从
-    调用点注入的口子），要让它们落进测试的口袋，只能把默认核心整个换掉。``configure`` 会
-    **复用**已有核心，而先前用例派生过的子实例早就把「当时的出口」冻结在自己的落回配置里，
-    这会儿再挂出口补不进去 —— 所以先 ``manager.reset()``，保证下面这份是全新的。
+    运行时模块的日志走 ``nacho.workflow.runtime`` 的 ``_log()``，而它没有可从调用点注入的
+    口子 —— 改造后走的是**装配槽位**（:func:`nacho.wiring.wire_loggers` 存进去的核心）。
+    这里换上新核心后重新 wire 一次，runtime 那几条日志就落进采集出口；退出时还原默认核心
+    并清空槽位（下个用例由 conftest 重新装配）。
     """
     records: list[LogRecord] = []
     manager.reset()
@@ -152,11 +154,13 @@ async def runtime_logs() -> AsyncIterator[list[LogRecord]]:
         "nacho", console=False, processors=[LogCollector(records)], dispatch_timeout=0.01
     )
     await core.start()
+    wire_loggers(core)  # 槽位指到带采集出口的这份核心，runtime._log() 由此落进口袋
     try:
         yield records
     finally:
         await core.stop()
         manager.reset()  # 默认核心是进程级的：用完还回去，别影响别的用例
+        wire_loggers(None)  # 槽位一并清空，避免指向已停止的核心
 
 
 # --------------------------------------------------------------------------- ① 结构校验
