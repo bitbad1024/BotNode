@@ -36,7 +36,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import TypeAlias, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 from websockets.asyncio.client import connect as ws_connect
@@ -84,6 +84,25 @@ def _reconnect_delay(options: KookOptions, attempts: int) -> float:
     return base * _jitter()
 
 
+def _with_resume(url: str, sn: int, session_id: str) -> str:
+    """把断线重连的续传参数（``resume=1&sn=&session_id=``）拼进网关地址。
+
+    Kook 网关协议：WebSocket 断开重连时，在 url 后追加 ``resume=1``、本地已处理的最大
+    ``sn`` 与上一连接的 ``session_id``，服务端从该 sn 之后续传离线消息；没收到过任何
+    事件（sn=0）且没有 session_id 就原样返回（全新连接，不需要续传）。
+    """
+    if sn <= 0 and not session_id:
+        return url
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["resume"] = "1"
+    if sn > 0:
+        query["sn"] = str(sn)
+    if session_id:
+        query["session_id"] = session_id
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def _rest_backoff(attempt: int) -> float:
     """REST 第 ``attempt`` 次重试前的等待：0.2s 指数退避封顶 1s，带抖动。"""
     return min(0.2 * (2 ** attempt), 1.0) * _jitter()
@@ -120,8 +139,16 @@ class KookClient:
         self._stopping: bool = False
         #: 停下来的通知事件（serve_forever / _wait_until_stopped 等它，不再轮询）
         self._stopped: asyncio.Event = asyncio.Event()
-        #: 最近一次 hello / pong 里的 sn（心跳 ping 要带上）
+        #: 最近收到的最大事件 sn：心跳 ping 带上它（Kook 靠它确认送达），重连 resume 也要
         self._sn: int = 0
+        #: hello 下发的 session_id：断线重连 resume 时拼回网关地址
+        self._session_id: str = ""
+        #: 正在用的网关地址（不含 resume 参数）：续传必须复用同一个地址——每次都重新
+        #: discover 会拿到带新 token 的地址，token 和 session 对不上，续传必被网关拒绝
+        self._gateway_url: str = ""
+        #: 本次连接有没有完成握手（收到 code==0 的 hello）：没握手就断开 = 续传被拒 /
+        #: 网关直接掐线，收尾时要清掉续传状态，让下轮重连走全新连接
+        self._greeted: bool = False
         #: 连上后从事件里学到的机器人自身 id；没学到是空串
         self.self_id: str = ""
         #: 最近一次连上的时刻（Unix 秒）；没连过是 0
@@ -313,7 +340,13 @@ class KookClient:
     async def _connect_once(self) -> None:
         """建一条连接并跑它的收报文循环；连接断开 / 出错时返回（由 _run_loop 决定重连）。"""
         token = self._options.token
-        gateway = self._options.gateway or await self._discover_gateway()
+        # 网关地址只取一次、断线复用：续传必须用同一地址（同 token 才配得上 session_id）；
+        # 每次都重新 discover 会拿新 token，resume 必被拒，形成「连上就断、断了又连」的死循环
+        if not self._gateway_url:
+            self._gateway_url = self._options.gateway or await self._discover_gateway()
+        # 断线重连：把已处理的最大 sn 和上一连接的 session_id 拼进去，让网关续传而不是重放
+        gateway = _with_resume(self._gateway_url, self._sn, self._session_id)
+        self._greeted = False
         self._log.info("kook 正在连接网关", gateway=gateway, token_set=bool(token))
         async with ws_connect(
             gateway,
@@ -344,6 +377,13 @@ class KookClient:
                         await self._consume_task
                     self._consume_task = None
                 self._ws = None
+        # 连接收尾：没完成握手就断了（resume 被拒 / 网关直接掐线）——清掉续传状态，
+        # 让下轮重连走全新连接；否则会拿失效的 session_id 无限重试
+        if not self._greeted:
+            self._log.warning("kook 网关握手未完成（续传被拒或连接被掐），下次全新连接")
+            self._session_id = ""
+            self._sn = 0
+            self._gateway_url = ""
 
     async def _heartbeat(self) -> None:
         """定期发 signal 2（ping，带最近 sn），保活连接。"""
@@ -359,7 +399,7 @@ class KookClient:
                 self._log.debug("kook 心跳发送失败", error=str(exc))
 
     async def _handle_raw(self, raw: str | bytes) -> None:
-        """一条原始报文：解 JSON -> signal 1/3 更新 sn、signal 0 入队交给 worker。"""
+        """一条原始报文：解 JSON -> hello 记 session_id、事件按顶层 sn 推进并去重。"""
         text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
         try:
             loaded = cast(object, json.loads(text))
@@ -371,15 +411,38 @@ class KookClient:
             return
         signal = loaded.get("s")
         data = loaded.get("d")
-        if signal in (1, 3):  # hello / pong：更新 sn，交给心跳任务带上下一次 ping
-            if isinstance(data, dict) and isinstance(data.get("sn"), int):
-                self._sn = int(data["sn"])
-            # hello 后立刻 ping 一次，别等心跳周期
-            if signal == 1:
-                self._ping_now()
+        if signal == 1:  # hello：记下 session_id（断线重连 resume 要用），立刻 ping 一次
+            code = data.get("code", 0) if isinstance(data, dict) else 0
+            if code != 0:
+                # 续传被拒（session 失效 / token 不对 / 网关不认这条续传）：清掉续传状态，
+                # 下轮重连走全新连接；否则会拿失效 session_id 无限重试
+                self._log.warning(
+                    "kook 网关拒绝续传（hello code=%s），下次将全新连接", code=code
+                )
+                self._session_id = ""
+                self._sn = 0
+                self._gateway_url = ""
+                return
+            if isinstance(data, dict) and isinstance(data.get("session_id"), str):
+                self._session_id = data["session_id"]
+            self._greeted = True
+            self._ping_now()
+            return
+        if signal == 3:  # pong：心跳回应，不推进 sn
             return
         if signal != 0 or not isinstance(data, dict):
             return
+        # 事件报文：sn 在顶层（官方协议 {"s":0,"d":{...},"sn":N}），是「已收到」的推进点。
+        # 心跳 ping 带上最新 sn，网关才确认事件送达；不推进的话网关会按旧 sn 反复重传。
+        event_sn = loaded.get("sn")
+        if not isinstance(event_sn, int):
+            event_sn = None
+        if event_sn is not None and event_sn <= self._sn:
+            # 已处理过的 sn（重连重放 / 重传）：直接丢弃，别重复投递
+            self._log.debug("kook 事件 sn 已处理过，丢弃", sn=event_sn)
+            return
+        if event_sn is not None:
+            self._sn = event_sn
         try:
             event = parse_event(cast("Mapping[str, object]", data))
         except ValidationError as exc:

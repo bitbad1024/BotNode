@@ -118,6 +118,19 @@ async def on_platform_event(event: PlatformEvent) -> None:
     拆成普通数据」这一步就发生在这里，消息路由本身不 import bridge，依赖方向不破。
     """
     log = default_core().child("bridge")
+    if event.kind != "message":
+        # 系统事件 / 通知：静默 —— 不进消息路由（不触发 trigger=message 工作流），
+        # 只留 debug 痕迹，不刷 INFO 日志
+        log.debug(
+            "收到非消息事件",
+            platform=event.platform,
+            owner_id=event.owner_id,
+            kind=event.kind,
+            chat=event.chat,
+            chat_id=event.chat_id,
+            user_id=event.user_id,
+        )
+        return
     log.info(
         "收到事件",
         platform=event.platform,
@@ -127,8 +140,6 @@ async def on_platform_event(event: PlatformEvent) -> None:
         chat_id=event.chat_id,
         user_id=event.user_id,
     )
-    if event.kind != "message":
-        return
     router = _message_router
     if router is None:
         return  # 装配还没走到建路由（或没配消息触发）—— 不该发生，防御性放过

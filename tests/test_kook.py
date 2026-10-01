@@ -9,7 +9,7 @@ import asyncio
 import json
 import socket
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import cast
 
 import pytest
@@ -27,7 +27,7 @@ from nacho.platforms.kook import (  # noqa: E402
     parse_action_response,
     parse_event,
 )
-from nacho.platforms.kook.client import _action_path, _reconnect_delay  # noqa: E402
+from nacho.platforms.kook.client import _action_path, _reconnect_delay, _with_resume  # noqa: E402
 
 
 def free_port() -> int:
@@ -179,14 +179,20 @@ async def test_client_call_rejects_bad_action_and_params() -> None:
 # --------------------------------------------------------------------------- 连网关收事件
 @asynccontextmanager
 async def fake_gateway(events: list[dict[str, object]]) -> AsyncGenerator[int, None]:
-    """起一个本地 WS 服务端，模拟 Kook 网关：先发 hello，再把 ``events`` 逐条发下来。"""
+    """起一个本地 WS 服务端，模拟 Kook 网关：先发 hello，再把 ``events`` 逐条发下来。
+
+    ``events`` 每项是事件体；带上 ``"sn"`` 键（如 ``{"sn": 101, "type": ...}``）就发成
+    顶层 sn 的报文，不写 sn 就按序从 101 递增（Kook 事件报文的 sn 在顶层）。
+    """
     port = free_port()
 
     async def handler(ws) -> None:  # type: ignore[no-untyped-def]
-        # hello（signal 1）：带 sn
-        await ws.send(json.dumps({"s": 1, "d": {"sn": 100}}))
-        for event in events:
-            await ws.send(json.dumps({"s": 0, "d": event}))
+        # hello（signal 1）：官方报文 d 里只有 code/session_id，sn 只在事件报文里有
+        await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-1"}}))
+        for i, item in enumerate(events):
+            body = dict(item)
+            sn = body.pop("sn", 100 + i + 1)  # 没给 sn 就按序从 101 编
+            await ws.send(json.dumps({"s": 0, "d": body, "sn": sn}))
             await asyncio.sleep(0.05)
         # 挂住，等客户端主动断开
         try:
@@ -399,4 +405,207 @@ async def test_client_rest_rate_limits_burst(monkeypatch: pytest.MonkeyPatch) ->
     assert all(r.ok for r in results)
     assert count["n"] == 3
     assert elapsed >= 0.6  # 3 次请求至少隔 2 个最小间隔（0.3s * 2）
+
+
+# --------------------------------------------------------------------------- 事件 sn / 续传
+def test_with_resume_params() -> None:
+    """resume 拼参：有 sn/session_id 才拼；都没有原样返回；已有 query 是追加不是覆盖。"""
+    # 有 sn + session_id：追加 resume=1&sn=&session_id=
+    url = _with_resume("wss://gw/kook?token=abc&compress=0", 5, "sess-1")
+    assert "resume=1" in url and "sn=5" in url and "session_id=sess-1" in url
+    # sn=0 且无 session_id：全新连接，原样返回
+    assert _with_resume("wss://gw/kook?token=abc", 0, "") == "wss://gw/kook?token=abc"
+    # 只有 session_id（没收到过事件）：拼 resume + session_id，不带 sn
+    url2 = _with_resume("wss://gw/kook?token=abc", 0, "sess-2")
+    assert "resume=1" in url2 and "session_id=sess-2" in url2 and "sn=" not in url2
+
+
+async def test_client_sn_advances_and_drops_replayed_event() -> None:
+    """事件 sn 在顶层：收到后推进 self._sn；重放（sn <= 已处理）被丢弃，不重复投递。"""
+    received: list[KookEvent] = []
+
+    async def on_event(event: KookEvent) -> None:
+        received.append(event)
+
+    event = {
+        "type": EVENT_TEXT,
+        "channel_type": "GROUP",
+        "target_id": "ch-1",
+        "author_id": "u-1",
+        "content": "hi",
+    }
+    # sn 101、101（重放）、102：只有 101 和 102 两条进 handler
+    async with fake_gateway(
+        [{**event, "sn": 101}, {**event, "sn": 101}, {**event, "sn": 102}]
+    ) as port:
+        client = KookClient(
+            KookOptions(gateway=f"ws://127.0.0.1:{port}", token="abc"),
+            handler=on_event,
+        )
+        await client.start()
+        try:
+            assert await wait_until(lambda: len(received) == 2, timeout=3.0)
+            assert client._sn == 102  # 事件 sn 已推进到最大
+        finally:
+            await client.stop()
+
+
+async def test_client_heartbeat_pings_latest_sn() -> None:
+    """心跳 ping 带上已处理的最大事件 sn（Kook 靠它确认送达，不推进就会反复重传）。"""
+    port = free_port()
+    pings: list[dict[str, object]] = []
+
+    async def handler(ws) -> None:  # type: ignore[no-untyped-def]
+        await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-1"}}))
+        await ws.send(json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "hi"}, "sn": 42}))
+        with suppress(Exception):
+            async for raw in ws:
+                msg = json.loads(cast("str", raw))
+                if msg.get("s") == 2:
+                    pings.append(msg)
+
+    server = await serve(handler, "127.0.0.1", port)
+    received: list[KookEvent] = []
+
+    async def on_event(event: KookEvent) -> None:
+        received.append(event)
+
+    client = KookClient(
+        KookOptions(
+            gateway=f"ws://127.0.0.1:{port}",
+            token="abc",
+            heartbeat_interval=0.1,  # 别等默认 30 秒
+        ),
+        handler=on_event,
+    )
+    try:
+        await client.start()
+        assert await wait_until(lambda: len(received) == 1)
+        # 事件之后至少有一轮心跳带 42（已处理的最大 sn）
+        assert await wait_until(
+            lambda: any(p.get("sn") == 42 for p in pings), timeout=1.0
+        )
+    finally:
+        await client.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_client_resume_rejected_falls_back_to_fresh_connection() -> None:
+    """续传被拒（hello code != 0）后清掉续传状态：下次重连走全新连接，不死循环。
+
+    复现线上问题：重连一直带着失效的 ``resume=1&sn=..&session_id=..`` 参数，网关连上就断、
+    断了又连。修复后第二次（续传被拒）必须清状态，第三次是全新连接并正常收到事件。
+    """
+    port = free_port()
+    paths: list[str] = []
+    connection_no = 0
+
+    async def handler(ws) -> None:  # type: ignore[no-untyped-def]
+        nonlocal connection_no
+        connection_no += 1
+        paths.append(cast("str", ws.request.path))
+        if connection_no == 1:
+            # 第一次：正常握手 + 一条事件，然后服务端掐线
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-1"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "hi"}, "sn": 1})
+            )
+            await ws.close()
+        elif connection_no == 2:
+            # 第二次：网关拒绝续传（hello code != 0），然后掐线
+            await ws.send(json.dumps({"s": 1, "d": {"code": 40100, "session_id": ""}}))
+            await ws.close()
+        else:
+            # 第三次：全新连接成功，正常收事件
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-3"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "again"}, "sn": 2})
+            )
+            with suppress(Exception):
+                async for raw in ws:
+                    pass
+
+    server = await serve(handler, "127.0.0.1", port)
+    received: list[KookEvent] = []
+
+    async def on_event(event: KookEvent) -> None:
+        received.append(event)
+
+    client = KookClient(
+        KookOptions(
+            gateway=f"ws://127.0.0.1:{port}",
+            token="abc",
+            reconnect_interval=0.05,  # 别等默认 3 秒
+        ),
+        handler=on_event,
+    )
+    try:
+        await client.start()
+        # 第三次连接（全新）收到事件，说明没死循环
+        assert await wait_until(lambda: len(received) >= 2, timeout=3.0)
+        assert connection_no >= 3
+        # 第二次是续传尝试（带 resume），第三次是全新连接（不带）
+        assert "resume=1" in paths[1]
+        assert "resume=1" not in paths[2]
+    finally:
+        await client.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_client_disconnect_before_hello_clears_resume_state() -> None:
+    """连上但没完成握手就被掐（没收到 code==0 的 hello）：清续传状态，下次全新连接。"""
+    port = free_port()
+    paths: list[str] = []
+    connection_no = 0
+
+    async def handler(ws) -> None:  # type: ignore[no-untyped-def]
+        nonlocal connection_no
+        connection_no += 1
+        paths.append(cast("str", ws.request.path))
+        if connection_no == 1:
+            # 第一次：正常握手 + 一条事件，然后服务端掐线
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-1"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "hi"}, "sn": 1})
+            )
+            await ws.close()
+        elif connection_no == 2:
+            # 第二次：不发 hello 直接掐线（网关直接拒 / 连接没建立起来）
+            await ws.close()
+        else:
+            # 第三次：全新连接成功
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-3"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "again"}, "sn": 2})
+            )
+            with suppress(Exception):
+                async for raw in ws:
+                    pass
+
+    server = await serve(handler, "127.0.0.1", port)
+    received: list[KookEvent] = []
+
+    async def on_event(event: KookEvent) -> None:
+        received.append(event)
+
+    client = KookClient(
+        KookOptions(
+            gateway=f"ws://127.0.0.1:{port}",
+            token="abc",
+            reconnect_interval=0.05,
+        ),
+        handler=on_event,
+    )
+    try:
+        await client.start()
+        assert await wait_until(lambda: len(received) >= 2, timeout=3.0)
+        assert connection_no >= 3
+        assert "resume=1" in paths[1]
+        assert "resume=1" not in paths[2]
+    finally:
+        await client.stop()
+        server.close()
+        await server.wait_closed()
 

@@ -66,6 +66,43 @@ def test_translate_unknown_channel_type_is_other() -> None:
     assert translated.chat_id == ""
 
 
+def test_translate_system_event_is_notice() -> None:
+    """系统事件（type=255）：归为 notice 而非 message——内容在 extra，不进消息路由。"""
+    event = KookEvent(
+        type=255,
+        channel_type="GROUP",
+        target_id="g-1",
+        author_id="1",
+        msg_id="m-sys",
+        self_id="bot-1",
+        content="",
+    )
+    translated = _translate(event, owner_id="u-admin")
+    assert translated.kind == "notice"
+    assert translated.user_id == "1"
+    assert translated.chat == "other"
+    assert translated.chat_id == ""
+    assert translated.text == ""  # 系统事件正文在 extra，不在 content
+
+
+def test_translate_system_account_message_is_notice() -> None:
+    """系统账号（author_id=1）发的私聊通知：不是普通消息，归为 notice 静默。"""
+    event = KookEvent(
+        type=1,
+        channel_type="PERSON",
+        target_id="3568735531",
+        author_id="1",
+        msg_id="m-1",
+        content="系统通知",
+        self_id="bot-1",
+    )
+    translated = _translate(event)
+    assert translated.kind == "notice"
+    assert translated.user_id == "1"
+    assert translated.chat == "other"
+    assert translated.chat_id == ""
+
+
 # --------------------------------------------------------------------------- 适配器胶水
 class _FakeClient:
     """假的 Kook 客户端：记下动作调用，按给定回应回执。"""
