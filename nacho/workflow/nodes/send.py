@@ -1,46 +1,45 @@
-"""send 节点：向「这条工作流归属的」在线连接按**平台路由**发一个动作（发消息 / 撤回）。
+"""send 节点：把 ``message`` 发到 ``target`` 指向的会话（去向统一走 target 值端口）。
 
-这是 ``onebot`` 节点的**平台无关版**（P3）：``onebot`` 节点直接摸 ``ctx.onebot`` 挑连接，
-``send`` 节点换成走 ``ctx.gateway``（``gateway.send(platform, owner_id, action, **params)``）
-按平台路由 —— 平台差异（OneBot 的整数号、Kook 的字符串号）由各平台的适配器翻译，节点不再
-逐平台认字段。
+这是 target 化改造后的 send：**「发给谁」不再写在 send 节点配置里**，而是从图上
+一条数据流拿 —— ``target`` 端口接的必须是**会话定位**（target 类型的值）：
 
-``platform`` 参数（``config.platform``，缺省 ``"onebot"``）选平台；动作与参数沿用 onebot 那套
-集合（现在 onebot 是唯一平台，所以动作语义 —— 群号 / 用户号 / 消息号转整数 —— 仍由节点自己
-管，那是这个平台的动作契约）。归属用 ``ctx.owner_id``（与 onebot 节点同一套 id 空间）。
+* ``start`` 的 ``target`` 出口原样透出触发消息自带的会话定位（回复触发消息就是
+  ``start.target -> send.target`` 一条线）；
+* 手动指定去向用 ``target`` 节点：填了 platform 就走 ``gateway.make_target`` 构造
+  一个平台特化 target（群聊 / 私聊都行），platform 留空就从触发消息取。
 
-动作与参数（``config.action``；参数都能**从连线来**：线上优先，手填兜底）::
+执行时调 ``ctx.gateway.reply(target, message)`` —— 平台差异（OneBot 整数号、Kook
+字符串号）由各平台适配器翻译，节点不再逐平台认字段。
 
-    send_msg         智能发消息：group_id 有值就发群，否则发私聊（user_id 要有）
-    send_group_msg   发群消息：group_id + message
-    send_private_msg 发私聊消息：user_id + message
-    delete_msg       撤回消息：message_id
-
-群号 / 用户号 / 消息号发出去前**转成整数** —— OneBot 协议里它们是整数。
+**没有 target 就不发**：``target`` 端口接了线但运行值是 None / 空串（定时触发没有
+会话指向、事件没有会话定位、target 节点自动分支产出 None）时，不发 —— ``send_ok``
+照常送 ``False`` 到下游，不抛。要「到点固定播报」就把 target 节点（手动填）接在
+send 前面。
 
 **两种失败是分开的**（与 ``http`` 节点同一口径）：
 
-* 环境 / 配置问题 —— 没接总线（``ctx.gateway`` 是 None）、没这个平台、归属下没有在线连接、
-  参数没给、号不是整数 —— 当场抛出去，整条流程停在这里，看得出是没配好；
-* 对方收下了但回执不成功（``ActionResult.ok`` 为 False）—— 记一条 warning 照常往下走，
-  回执从 ``send_ok`` / ``send_data`` 送下去（要不要处理交给下游，比如接 ``condition`` 按
-  ``send_ok`` 分流）。
+* 环境 / 配置问题 —— 没接总线（``ctx.gateway`` 是 None）—— 当场抛出去，整条流程
+  停在这里，看得出是没配好；
+* 对方收下了但回执不成功（``ActionResult.ok`` 为 False）—— 记一条 warning 照常往下
+  走，回执从 ``send_ok`` / ``send_data`` 送下去（要不要处理交给下游，比如接
+  ``condition`` 按 ``send_ok`` 分流）。
 
 小抄::
 
-    群播报:   platform="onebot" action="send_group_msg" group_id="123456" message="巡检完成 {{now_text}}"
-    私聊提醒: platform="onebot" action="send_private_msg" user_id="{{u}}" message="验证码 {{code}}"
+    回复触发消息: start.target -> send.target, start.message -> send.message
+    群播报:      target 节点（platform="onebot" chat="group" chat_id="123456"）-> send.target,
+                 message 手填或接常量
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from ..models import ValidationIssue, WorkflowNode
+from ..models import WorkflowNode
 from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
 
-#: onebot 支持的动作，**顺序即画布下拉顺序**
+#: onebot 支持的动作，**顺序即画布下拉顺序**（onebot 别名节点沿用这份动作集）
 SEND_ACTION_ORDER: tuple[str, ...] = (
     "send_msg",
     "send_group_msg",
@@ -55,7 +54,7 @@ KOOK_ACTION_ORDER: tuple[str, ...] = (
     "delete_msg",
 )
 
-#: 平台 -> 动作组：send 节点按 platform 决定「认哪些动作 / 怎么转参数」
+#: 平台 -> 动作组：onebot 别名节点按平台决定「认哪些动作 / 怎么转参数」
 ACTIONS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
     "onebot": SEND_ACTION_ORDER,
     "kook": KOOK_ACTION_ORDER,
@@ -63,27 +62,6 @@ ACTIONS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
 
 #: 平台参数的缺省值：现在唯一平台是 onebot
 DEFAULT_PLATFORM: str = "onebot"
-
-
-def validate_send_node(node: WorkflowNode) -> list[ValidationIssue]:
-    """动作必须是**这个平台**枚举里的一个（拼错保存时就拦，运行时不猜）。
-
-    参数是否齐（频道号 / 用户号 / 消息号）取决于动作，做不到表格里的「必填」，留给运行期抛
-    —— 见模块文档的失败口径。
-    """
-    platform = _platform_of(node)
-    allowed = ACTIONS_BY_PLATFORM.get(platform, SEND_ACTION_ORDER)
-    action = node.config.get("action")
-    if isinstance(action, str) and action.strip() and action.strip() not in allowed:
-        return [
-            ValidationIssue(
-                node_id=node.id,
-                code="INVALID_SEND_ACTION",
-                message=f"send 节点 {node.id} 的动作 {action!r} 不合法（平台 {platform}）",
-                suggestion=f"可选：{' '.join(allowed)}",
-            )
-        ]
-    return []
 
 
 def _platform_of(node: WorkflowNode) -> str:
@@ -192,8 +170,8 @@ async def send_response(
 ) -> Any:
     """按平台路由发动作，返回**平台回执**（``ActionResult``）；环境问题当场抛。
 
-    这是 ``send`` 节点与 ``onebot`` 别名共用的发送口：``onebot`` 节点借它发、再按老端口
-    （``onebot_retcode`` / ``onebot_data``）转述回执。
+    这是 ``onebot`` 别名节点的发送口（send 节点自己走 ``ctx.gateway.reply``，不经过这里）：
+    ``onebot`` 节点借它发、再按老端口（``onebot_retcode`` / ``onebot_data``）转述回执。
     """
     gateway = ctx.gateway
     if gateway is None:
@@ -209,14 +187,11 @@ async def send_response(
     label="发送",
     order=120,
     category="action",
-    # 参数是否必填取决于动作（发群要群号、撤回要消息号），做不到「表格必填」，
-    # 所以入口都不标 required，缺什么运行期抛（见模块文档）
+    # 去向（target）与内容（message）都要有来源：接线或手填（message 可手填，target 只能接线）
     inputs=[
         TRIGGER_PORT,
-        PortSpec("message", "message", "消息内容"),
-        PortSpec("group_id", "message", "群号"),
-        PortSpec("user_id", "message", "用户号"),
-        PortSpec("message_id", "message", "消息号"),
+        PortSpec("target", "target", "会话定位", required=True),
+        PortSpec("message", "message", "消息内容", required=True),
     ],
     outputs=[
         TRIGGER_PORT,
@@ -224,39 +199,36 @@ async def send_response(
         PortSpec("send_data", "message", "回执数据"),
     ],
     fields=[
-        ConfigField("platform", "平台", default=DEFAULT_PLATFORM),
-        ConfigField("action", "动作", default="send_msg", options=SEND_ACTION_ORDER),
         ConfigField("message", "消息内容"),
-        ConfigField("group_id", "群号"),
-        ConfigField("user_id", "用户号"),
-        ConfigField("message_id", "消息号"),
     ],
-    validator=validate_send_node,
 )
 async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
-    """按平台路由向归属连接发动作，把回执从 ``send_ok`` / ``send_data`` 送下去。"""
-    platform = _platform_of(node)
-    allowed = ACTIONS_BY_PLATFORM.get(platform, SEND_ACTION_ORDER)
-    action = str(node.config.get("action", "")).strip() or allowed[0]
-    if action not in allowed:
-        # 保存时会被校验拦住；这里兜住「没走过校验」的图
-        raise ValueError(
-            f"[send:{node.id}] 动作 {action!r} 不在支持列表里（平台 {platform}）"
-            f"（可选 {' '.join(allowed)}）"
+    """把 ``message`` 发到 ``target`` 指向的会话；没有会话定位就不发，回执照常送下游。"""
+    target = input_value(node, ctx, "target", default=None)
+    if not target:
+        # 没有会话定位：不发（target 节点文档口径：没有 target 就不发），send_ok=False 照常送下游
+        ctx.logger.info(f"[send:{node.id}] 没有会话定位，跳过发送", node_id=node.id)
+        ctx.log.append(f"[send] {node.id}: 没有会话定位，跳过")
+        return {"send_ok": False, "send_data": ""}
+
+    message = str(input_value(node, ctx, "message", default=""))
+    gateway = ctx.gateway
+    if gateway is None:
+        raise ConnectionError(
+            f"[send:{node.id}] 需要平台总线：装配时把 Gateway 交给工作流运行时（ctx.gateway）"
         )
 
-    params = _params_of(action, node, ctx)
-    response = await send_response(node, ctx, action, params)
+    response = await gateway.reply(target, message)
     ok = bool(response.ok)
     data = _dump(response.data)
 
     # 回执不成功只是「对方的回答」：记 warning 照常往下走（连不上 / 没连接那种才抛，见模块文档）
     report = ctx.logger.info if ok else ctx.logger.warning
     report(
-        f"[send:{node.id}] {platform}:{action} -> {'ok' if ok else 'failed'}",
-        platform=platform,
+        f"[send:{node.id}] reply -> {'ok' if ok else 'failed'}",
+        target_platform=getattr(target, "platform", ""),
         ok=ok,
         data=data,
     )
-    ctx.log.append(f"[send] {node.id}: {platform}:{action} -> {'ok' if ok else 'failed'}")
+    ctx.log.append(f"[send] {node.id}: reply -> {'ok' if ok else 'failed'}")
     return {"send_ok": ok, "send_data": data}

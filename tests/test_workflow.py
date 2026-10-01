@@ -1635,7 +1635,7 @@ class _FakeActionResponse:
 
 
 class _FakeGateway:
-    """假的平台总线：``send(platform, owner_id, action, **params)`` 返回**规范化回执**。
+    """假的平台总线：``send(platform, owner_id, action, **params)`` / ``reply(target, content)`` 返回**规范化回执**。
 
     与生产一致：``send`` / ``onebot`` 节点读 ``ok`` / ``data``，``onebot`` 别名还下探 ``raw``
     取 retcode —— 所以这里把 ``_FakeActionResponse`` 包成 ``ActionResult``（``raw`` = 那条假回执）。
@@ -1643,6 +1643,7 @@ class _FakeGateway:
 
     def __init__(self, response: _FakeActionResponse | None = None) -> None:
         self.calls: list[tuple[str, str, str, dict[str, object]]] = []
+        self.reply_calls: list[tuple[object, str]] = []
         self.target_calls: list[tuple[str, dict[str, object]]] = []
         self._response = response if response is not None else _FakeActionResponse()
 
@@ -1652,6 +1653,18 @@ class _FakeGateway:
         from nacho.platforms.bridge.models import ActionResult
 
         self.calls.append((platform, owner_id, action, dict(params)))
+        resp = self._response
+        return ActionResult(
+            ok=resp.ok,
+            message="" if resp.ok else f"retcode={resp.retcode}",
+            data=resp.data,
+            raw=resp,
+        )
+
+    async def reply(self, target: object, content: str) -> Any:
+        from nacho.platforms.bridge.models import ActionResult
+
+        self.reply_calls.append((target, content))
         resp = self._response
         return ActionResult(
             ok=resp.ok,
@@ -1831,39 +1844,42 @@ async def test_target_node_builds_manual_target_via_gateway() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_routes_via_gateway_by_platform() -> None:
-    """send 节点走 ``ctx.gateway`` 按平台路由发动作：参数按动作组装，回执从 send_ok / send_data 送下去。"""
+async def test_send_replies_via_gateway_to_target() -> None:
+    """send 节点把 message 发到 target 指向的会话：走 ``ctx.gateway.reply(target, message)``，回执从 send_ok / send_data 送下去。"""
     from nacho.workflow.nodes import exec_send
 
     gateway = _FakeGateway(response=_FakeActionResponse(data={"message_id": 7}))
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(
-        id="snd1", type="send", config={"platform": "onebot", "action": "send_group_msg"}
-    )
-    ctx_.inputs = {"group_id": "123", "message": "hi"}
+    node_ = WorkflowNode(id="snd1", type="send")
+    target = gateway.make_target("onebot", chat="group", chat_id="123")
+    ctx_.inputs = {"target": target, "message": "hi"}
     result = await exec_send(node_, ctx_)
 
-    assert gateway.calls == [
-        ("onebot", "u-admin", "send_group_msg", {"group_id": 123, "message": "hi"})
-    ]
+    assert gateway.reply_calls == [(target, "hi")]
     assert result == {"send_ok": True, "send_data": '{"message_id":7}'}
 
 
 @pytest.mark.asyncio
-async def test_send_defaults_platform_to_onebot_and_requires_gateway() -> None:
-    """platform 缺省 onebot；没接总线（ctx.gateway 是 None）是环境问题，当场抛。"""
+async def test_send_without_target_skips_and_requires_gateway() -> None:
+    """没有会话定位（target 是 None / 空）就不发：send_ok=False 照常送下游，也不碰网关；有 target 但没接总线是环境问题，当场抛。"""
     from nacho.workflow.nodes import exec_send
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="snd1", type="send", config={"action": "send_private_msg"})
-    ctx_.inputs = {"user_id": "7", "message": "hi"}
-    await exec_send(node_, ctx_)
-    assert gateway.calls == [("onebot", "u-admin", "send_private_msg", {"user_id": 7, "message": "hi"})]
+    node_ = WorkflowNode(id="snd1", type="send")
 
-    # 没接总线：环境问题当场抛
+    # 没有 target：不发
+    ctx_.inputs = {"message": "hi"}
+    result = await exec_send(node_, ctx_)
+    assert result == {"send_ok": False, "send_data": ""}
+    assert gateway.reply_calls == []
+
+    # 有 target 但没接总线：环境问题当场抛
     no_gateway = NodeExecutionContext(owner_id="u-admin")
-    no_gateway.inputs = {"user_id": "7", "message": "hi"}
+    no_gateway.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="7"),
+        "message": "hi",
+    }
     with pytest.raises(ConnectionError, match="需要平台总线"):
         await exec_send(node_, no_gateway)
 
@@ -1877,14 +1893,17 @@ async def test_send_failed_receipt_warns_but_flows_on() -> None:
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "被禁言"})
     )
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="snd1", type="send", config={"action": "send_group_msg"})
-    ctx_.inputs = {"group_id": "1", "message": "hi"}
+    node_ = WorkflowNode(id="snd1", type="send")
+    ctx_.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
+        "message": "hi",
+    }
     result = await exec_send(node_, ctx_)  # 不抛
     assert result == {"send_ok": False, "send_data": '{"msg":"被禁言"}'}
 
 
-def test_send_action_is_validated() -> None:
-    """动作枚举在语义阶段拦住（拼错保存就报 INVALID_SEND_ACTION），合法值放行。"""
+def test_send_requires_a_target_source() -> None:
+    """target 是 send 的必填入口：没接线也没手填，语义阶段报 INPUT_NOT_CONNECTED。"""
 
     def graph_with(**config: object) -> dict[str, object]:
         return {
@@ -1896,66 +1915,24 @@ def test_send_action_is_validated() -> None:
             "edges": [edge("s", "snd"), edge("snd", "e")],
         }
 
-    assert validate_graph(graph_with(action="send_group_msg", group_id="1", message="hi")).valid
-    report = validate_graph(graph_with(action="发消息", group_id="1", message="hi"))
+    report = validate_graph(graph_with(message="hi"))
     assert not report.valid and report.stage == STAGE_SEMANTIC
-    assert [issue.code for issue in report.errors] == ["INVALID_SEND_ACTION"]
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
 
 
 @pytest.mark.asyncio
-async def test_send_kook_actions_keep_ids_as_strings() -> None:
-    """kook 平台：独立动作组，id 一律字符串不转整数，参数名转述成 Kook 的 target_id/content。"""
+async def test_send_passes_target_through_untranslated() -> None:
+    """send 不碰 target 内部结构：适配器构造的 target 原样透传给 ``gateway.reply``（id 转不转整数由适配器管，这里验证的是「不拆、不转、不过手」）。"""
     from nacho.workflow.nodes import exec_send
 
     gateway = _FakeGateway()
-    ctx_ = NodeExecutionContext(owner_id="bot-1", gateway=gateway)
-
-    node_ = WorkflowNode(
-        id="snd1", type="send", config={"platform": "kook", "action": "send_channel_msg"}
-    )
-    ctx_.inputs = {"group_id": "ch-123", "message": "hi"}
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="snd1", type="send")
+    # 用 kook 的 target（id 是字符串）验证：send 节点不按平台认字段，原样发
+    target = gateway.make_target("kook", chat="group", chat_id="ch-123")
+    ctx_.inputs = {"target": target, "message": "hi"}
     await exec_send(node_, ctx_)
-    # channel_id 保持字符串，参数名是 Kook 的 target_id / content
-    assert gateway.calls == [
-        ("kook", "bot-1", "send_channel_msg", {"target_id": "ch-123", "content": "hi"})
-    ]
-
-    node_ = WorkflowNode(
-        id="snd2", type="send", config={"platform": "kook", "action": "send_dm_msg"}
-    )
-    ctx_.inputs = {"user_id": "u-456", "message": "悄悄话"}
-    await exec_send(node_, ctx_)
-    assert gateway.calls[-1] == (
-        "kook",
-        "bot-1",
-        "send_dm_msg",
-        {"target_id": "u-456", "content": "悄悄话"},
-    )
-
-
-def test_send_kook_action_is_validated() -> None:
-    """kook 平台的动作枚举独立校验：onebot 动作在 kook 下不合法，反之亦然。"""
-
-    def graph_with(**config: object) -> dict[str, object]:
-        return {
-            "nodes": [
-                node("s", "start"),
-                node("snd", "send", **config),
-                node("e", "end"),
-            ],
-            "edges": [edge("s", "snd"), edge("snd", "e")],
-        }
-
-    # kook 动作在 kook 平台下合法
-    assert validate_graph(
-        graph_with(platform="kook", action="send_channel_msg", group_id="ch-1", message="hi")
-    ).valid
-    # onebot 动作在 kook 平台下不合法（动作组独立）
-    report = validate_graph(
-        graph_with(platform="kook", action="send_group_msg", group_id="1", message="hi")
-    )
-    assert not report.valid and report.stage == STAGE_SEMANTIC
-    assert [issue.code for issue in report.errors] == ["INVALID_SEND_ACTION"]
+    assert gateway.reply_calls == [(target, "hi")]
 
 
 # ------------------------------------------------------------- ④-G 运算节点
@@ -3386,10 +3363,16 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
     graph = {
         "nodes": [
             node("s", "start"),
-            node("snd", "send", action="send_private_msg", user_id="10001", message="到点提醒"),
+            node("t", "target", platform="onebot", chat="private", user_id="10001"),
+            node("snd", "send", message="到点提醒"),
             node("e", "end"),
         ],
-        "edges": [edge("s", "snd"), edge("snd", "e")],
+        "edges": [
+            edge("s", "t"),
+            edge("t", "snd"),
+            edge("t", "snd", source_port="target", target_port="target"),
+            edge("snd", "e"),
+        ],
     }
     definition = await store.create("u-admin", "发私聊的流")
     await store.add_version(
@@ -3404,9 +3387,11 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
     trigger = make_trigger(definition.id, 1, store, scheduler, gateway=gateway)
     try:
         await trigger()
-        assert gateway.calls == [
-            ("onebot", "u-admin", "send_private_msg", {"user_id": 10001, "message": "到点提醒"})
-        ]
+        assert len(gateway.reply_calls) == 1
+        reply_target, content = gateway.reply_calls[0]
+        assert content == "到点提醒"
+        assert getattr(reply_target, "platform", "") == "onebot"
+        assert getattr(reply_target, "user_id", "") == "10001"
     finally:
         await engine.dispose()
 
@@ -3427,10 +3412,16 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
     graph = {
         "nodes": [
             node("s", "start", trigger="time", cron="*/5 * * * *"),
-            node("snd", "send", action="send_group_msg", group_id="9", message="到点了"),
+            node("t", "target", platform="onebot", chat="group", chat_id="9"),
+            node("snd", "send", message="到点了"),
             node("e", "end"),
         ],
-        "edges": [edge("s", "snd"), edge("snd", "e")],
+        "edges": [
+            edge("s", "t"),
+            edge("t", "snd"),
+            edge("t", "snd", source_port="target", target_port="target"),
+            edge("snd", "e"),
+        ],
     }
     definition = await store.create("u-admin", "定时播报流")
     await store.add_version(
@@ -3447,14 +3438,17 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
             definition.id, 1, store, scheduler, gateway=gateway
         )
         assert primed == 1
-        assert gateway.calls == []  # 登记只给 start 点名，不碰连接
+        assert gateway.reply_calls == []  # 登记只给 start 点名，不碰连接
 
         # 模拟「到点」：调度器到点执行的就是登记那一趟构造的闭包（Task.func 是协程）
         func: Any = scheduler.get(f"wf-{definition.id}-s").func
         await func()
-        assert gateway.calls == [
-            ("onebot", "u-admin", "send_group_msg", {"group_id": 9, "message": "到点了"})
-        ]
+        assert len(gateway.reply_calls) == 1
+        reply_target, content = gateway.reply_calls[0]
+        assert content == "到点了"
+        assert getattr(reply_target, "platform", "") == "onebot"
+        assert getattr(reply_target, "chat", "") == "group"
+        assert getattr(reply_target, "chat_id", "") == "9"
     finally:
         await engine.dispose()
 
