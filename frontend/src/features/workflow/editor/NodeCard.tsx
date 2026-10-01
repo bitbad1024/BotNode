@@ -16,6 +16,7 @@ import {
   PORT_ROW_H,
   nodeDef,
   truncate,
+  type PortType,
   type ValidationIssue,
   type WorkflowNode,
 } from './catalog'
@@ -40,14 +41,14 @@ export interface NodeCardProps {
     event: React.MouseEvent,
     nodeId: string,
     portId: string,
-    portType: 'trigger' | 'message',
+    portType: PortType,
     direction: 'in' | 'out',
   ) => void
   onPortMouseUp: (
     event: React.MouseEvent,
     nodeId: string,
     portId: string,
-    portType: 'trigger' | 'message',
+    portType: PortType,
     direction: 'in' | 'out',
   ) => void
 }

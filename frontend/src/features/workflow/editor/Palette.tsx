@@ -49,6 +49,10 @@ export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
           <span className={styles.legendDot} style={{ background: PORT_COLORS.message }} />
           消息（数据流）
         </div>
+        <div className={styles.legendRow}>
+          <span className={styles.legendDot} style={{ background: PORT_COLORS.target }} />
+          会话定位（target）
+        </div>
       </div>
     </aside>
   )

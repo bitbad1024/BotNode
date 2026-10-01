@@ -2205,7 +2205,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     from nacho.workflow import get_spec
 
     expected: dict[str, tuple[int, str, list[str], list[str]]] = {
-        "start": (10, "开始", [], ["trigger", "message"]),
+        "start": (10, "开始", [], ["trigger", "message", "target"]),
         "end": (20, "结束", ["trigger"], []),
         "constant": (30, "常量", ["trigger"], ["trigger", "value"]),
         "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
@@ -3535,6 +3535,32 @@ async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None
         await engine.dispose()
 
 
+async def test_start_node_passes_target_through_to_downstream() -> None:
+    """start 把装配层放进 trigger_data 的会话定位（ChatTarget）原样透出 target 出口。
+
+    target 出口是**数据流**：start 把它送下去，下游节点（target 节点 / send 节点）拿到同一个
+    对象直接可用。没装配（定时触发 / 离线跑 / 没造事件）就 None，由下游自己处理分支。
+    """
+    from nacho.workflow import WorkflowNode
+    from nacho.workflow.nodes.start import exec_start
+
+    class FakeTarget:  # 鸭子形状：workflow 只认「有 platform 的东西」，不 import bridge
+        platform = "onebot"
+
+    start_node = WorkflowNode.model_validate({"id": "s", "type": "start", "config": {"trigger": "message"}})
+    fake_target = FakeTarget()
+    ctx = NodeExecutionContext()
+    ctx.trigger_data = {"message": "你好", "target": fake_target}
+    outputs = await exec_start(start_node, ctx)
+    assert outputs["message"] == "你好"
+    assert outputs["target"] is fake_target  # 同一个对象，原样透出
+
+    # 没装配 target 时是 None，不炸
+    empty = NodeExecutionContext()
+    empty.trigger_data = {"message": "hi"}
+    assert (await exec_start(start_node, empty))["target"] is None
+
+
 async def test_message_router_dispatches_by_owner_and_isolates_failures() -> None:
     """消息路由：按 owner_id 找匹配工作流、逐个跑，单个失败不淹其它。
 
@@ -3717,6 +3743,7 @@ async def test_on_platform_event_dispatches_message_to_router() -> None:
                     "chat": "group",
                     "chat_id": "123",
                     "message_id": "42",
+                    "target": None,  # 这次没造会话定位，None
                 },
             )
         ]

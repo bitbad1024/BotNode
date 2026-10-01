@@ -64,8 +64,10 @@ NodeCategory = Literal[
 #: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
 NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
 
-#: 端口类型：trigger（控制流）决定「什么时候执行下一个节点」/ message（数据流）传内容
-PortType = Literal["trigger", "message"]
+#: 端口类型：trigger（控制流）决定「什么时候执行下一个节点」/ message（数据流）传内容 /
+#: target（数据流）传「发到哪」的会话定位值（:class:`~nacho.platforms.bridge.models.ChatTarget`
+#: 或平台特化 target；workflow 本身不 import bridge，值由装配层放进 ``trigger_data``）
+PortType = Literal["trigger", "message", "target"]
 
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()
