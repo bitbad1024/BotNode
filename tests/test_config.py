@@ -131,7 +131,7 @@ class TestCacheRegion:
         cache = settings.cache
         assert cache.backend == "memory"
         assert cache.namespace == "nacho"
-        assert (cache.default_ttl, cache.fallback_to_memory) == (0.0, True)
+        assert (cache.default_ttl, cache.fallback_to_memory) == (0.0, False)  # 默认不降级
         assert cache.redis.port == 6379
 
     def test_redis_backend_reads_connection(self, tmp_path: Path) -> None:

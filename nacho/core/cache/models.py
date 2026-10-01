@@ -40,6 +40,12 @@ class RedisOptions:
     username: str = ""  # Redis 6+ 的 ACL 用户名；空 = 默认用户
     password: str = ""  # 空 = 不认证
     socket_timeout: float = 5.0  # 单条命令的超时（秒），卡住时别拖着上层
+    #: TCP 建连超时（秒）：不设的话走系统默认（Windows 上实测要干等二十几秒才报错），
+    #: 显式给个短超时，Redis 起不来时能尽快报出来
+    socket_connect_timeout: float = 5.0
+    #: 建连失败后的重试次数：驱动默认 10 次指数退避重试（连不上时要等二十几秒），
+    #: 这里默认只补一次，宁可失败也不要干等
+    connect_retries: int = 1
     max_connections: int = 10  # 连接池上限
 
     @classmethod
@@ -55,7 +61,9 @@ class CacheOptions:
     backend: BackendName = "memory"  # 默认本地内存：不启用 Redis 也能直接用
     namespace: str = "nacho"  # Redis 上的键前缀，共用一个实例时用来隔离
     default_ttl: float = 0.0  # set() 没给 ttl 时用；0 = 永不过期
-    fallback_to_memory: bool = True  # Redis 连不上时退回内存（只记 warning），False 则当场报错
+    # Redis 连不上时默认**当场报错**（配了 Redis 却起不来，多半是配置/服务有问题，
+    # 静默退回本地缓存会掩盖掉）；只有显式打开才退回内存
+    fallback_to_memory: bool = False
     sweep_interval: float = 30.0  # 内存后端扫过期键的间隔（秒）
     #: 只有 ``backend="redis"`` 时才用得上（不可变 dataclass 不能直接当默认值，用工厂）
     redis: RedisOptions = field(default_factory=RedisOptions)

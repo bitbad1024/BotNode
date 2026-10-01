@@ -13,6 +13,11 @@ HTTP、OneBot 反向 WS、调度器、工作流），并在停机时先收业务
 配置不在这里：TOML 读取、取值校验、:class:`Settings` 都在同目录的 ``config.py``，本文件只管
 流程——取一份设置，照它把日志核心拉起来，把业务交给包内装配，停机收尾。
 
+**连不上数据库会当场报错**：引擎建好后立即 ``SELECT 1`` 探测（``_probe_database``）——SQLAlchemy
+引擎是惰性的，不主动探一下，连库失败会推迟到日志出口建表时，被日志核心吞掉只剩一行乱码 traceback
+（用户视角就是"什么提示都没有"）。探测失败抛带 target 的异常，入口统一打成 ``[初始化错误]``
+干净退出；mariadb 连接带 ``connect_timeout=5``，连不上 5 秒内报错，不干等系统级超时。
+
 初始化沿用 ``nacho/core/logger/__init__.py`` 里「进程门面」的用法——这里只用这两个::
 
     configure(...)        # 建（或复用）进程默认核心
@@ -43,6 +48,7 @@ from collections.abc import Sequence
 from typing import cast
 from urllib.parse import quote_plus
 
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -83,7 +89,13 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     file_log, db_log = log.file, log.database  # 子区域：[logging.file] / [logging.database]
     #(TODO)用models包装logger的配置,几个模块对齐一下
     url, db_target = _engine_url(settings.database)  # 顺带把 sqlite 的目录建出来
-    engine: AsyncEngine = create_async_engine(url)
+    engine: AsyncEngine = create_async_engine(
+        url,
+        # mariadb 连不上时别干等：默认驱动会一直重试到系统级超时（实测十几秒才报错），
+        # 给个明确的 connect_timeout 让它尽快失败（sqlite 不受此参数影响）
+        connect_args={"connect_timeout": 5} if settings.database.driver == "mariadb" else {},
+    )
+    await _probe_database(engine, db_target, settings.database.driver)
 
     # 片名前缀：配置留空就跟进程名，于是片名与进程名对得上（nacho-2026-09-28.log）
     file_prefix: str = file_log.prefix or app.name
@@ -112,7 +124,17 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
         log_url, log_target = _engine_url(db_log.connection)
         log_engine: AsyncEngine = engine
         if db_log.connection != settings.database:
-            log_engine = create_async_engine(log_url)
+            log_engine = create_async_engine(
+                log_url,
+                connect_args=(
+                    {"connect_timeout": 5}
+                    if db_log.connection.driver == "mariadb"
+                    else {}
+                ),
+            )
+            # 日志库单独配了另一个库：它连不上也该当场报错，别等到 core.start() 里被吞成
+            # 一行乱码兜底日志（见 base.py 的「处理机启动失败，已跳过」分支）
+            await _probe_database(log_engine, log_target, db_log.connection.driver)
             _log_engines.append(log_engine)
         processors.append(
             DatabaseLogProcessor(
@@ -159,6 +181,24 @@ def _engine_url(db_settings: DatabaseSettings) -> tuple[str, str]:
     db_settings.path.parent.mkdir(parents=True, exist_ok=True)  # sqlite：目录要先在
     target = db_settings.path.as_posix()
     return f"sqlite+aiosqlite:///{target}", target
+
+
+async def _probe_database(engine: AsyncEngine, target: str, driver: str) -> None:
+    """启动阶段主动连一次库：**连不上当场报错**，别等第一个请求 / 建表时才炸。
+
+    SQLAlchemy 引擎是惰性的（``create_async_engine`` 只建连接池，第一次真正用到才连库），
+    不主动探一下，连库失败会推迟到 :meth:`core.start` 里日志出口建表时——那里异常被日志
+    核心吞掉只剩一行乱码 traceback，用户只看到"没提示"。这里当场 ``SELECT 1``，连不上抛
+    带 target（host:port/db）的异常并提示检查配置，由入口统一打成 ``[初始化错误]`` 干净退出。
+    """
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise RuntimeError(
+            f"连不上数据库（{driver} @ {target}）：{exc}"
+            "（请检查 config.toml 的 [database] 配置，以及数据库服务是否在监听）"
+        ) from exc
 
 
 # --------------------------------------------------------------------------- 入口
@@ -241,6 +281,16 @@ async def _main(argv: Sequence[str] | None = None) -> None:
 
 def main(argv: Sequence[str] | None = None) -> None:
     """同步入口：``python app.py`` 走这里。"""
+    # Windows 下 stderr 默认按本地代码页（GBK）写，而终端/捕获端按 UTF-8 读——中文全变乱码。
+    # 启动前把 stderr 统一成 UTF-8（nacho 自己的 console 出口就是 UTF-8），
+    # 这样启动失败时的「打印到 stderr」和日志核心的兜底（lastResort）都不再是乱码。
+    try:
+        if sys.stderr is not None:
+            reconfigure = getattr(sys.stderr, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(encoding="utf-8")
+    except (OSError, ValueError):  # 非文本流（重定向成二进制等）别硬改
+        pass
     try:
         asyncio.run(_main(argv))
     except (KeyboardInterrupt, asyncio.CancelledError):

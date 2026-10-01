@@ -344,21 +344,26 @@ class RedisCacheSettings(_Region):
     username: str = ""  # Redis 6+ 的 ACL 用户名；空 = 默认用户
     password: str = ""  # config.toml 不入库，密码写这里不会进 git
     socket_timeout: float = Field(default=5.0, gt=0, description="大于 0 的秒数")
+    # TCP 建连超时（秒）：不设的话走系统默认，连不上时实测要干等二十几秒
+    socket_connect_timeout: float = Field(default=5.0, gt=0, description="大于 0 的秒数")
+    # 建连失败后的重试次数：驱动默认 10 次指数退避，连不上时会白等很久；默认只补一次
+    connect_retries: int = Field(default=1, ge=0, description="不小于 0 的整数")
     max_connections: int = Field(default=10, ge=1, description="不小于 1 的整数")
 
 
 class CacheSettings(_Region):
-    """``[cache]``：缓存总控 —— 用哪个后端、怎么降级；连接参数在 ``[cache.redis]``。
+    """``[cache]``：缓存总控 —— 用哪个后端、怎么处理连不上；连接参数在 ``[cache.redis]``。
 
     默认 ``backend = "memory"``（进程内存），所以**不装 Redis、不写这一节也能用**；
-    换成 ``"redis"`` 之后连不上时，``fallback_to_memory`` 决定是退回内存（记 warning）
-    还是当场报错。两项都只影响后端怎么建，不影响上层看到的接口。
+    换成 ``"redis"`` 之后连不上时默认**当场报错**（报错信息会提示去配置里改），只有显式
+    打开 ``fallback_to_memory`` 才退回内存（记 warning）。两项都只影响后端怎么建，不影响
+    上层看到的接口。
     """
 
     backend: CacheBackendName = "memory"  # memory（进程内存）/ redis
     namespace: str = "nacho"  # Redis 上的键前缀（共用实例时隔离）
     default_ttl: float = Field(default=0.0, ge=0, description="不小于 0 的秒数")
-    fallback_to_memory: bool = True  # Redis 连不上时退回内存；false = 启动阶段就报错
+    fallback_to_memory: bool = False  # Redis 连不上时默认当场报错；true = 退回内存（记 warning）
     sweep_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     redis: RedisCacheSettings = Field(default_factory=RedisCacheSettings)
 

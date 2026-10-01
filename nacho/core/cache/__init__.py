@@ -29,8 +29,9 @@
   对象、数组）用 :meth:`~nacho.core.cache.core.Cache.set_json` 存成一段 JSON —— 一个键
   只能按写入时的那种结构访问，换一种访问会抛
   :class:`~nacho.core.cache.models.CacheError`（对应 Redis 的 ``WRONGTYPE``）；
-* **降级**：配了 Redis 但连不上，``fallback_to_memory`` 为真时退回本地缓存并记一条
-  warning，业务代码无感（要上报就问 :attr:`~nacho.core.cache.core.Cache.degraded`）；
+* **连不上不静默**：配了 Redis 但连不上，默认**当场抛错**并在报错信息里提示检查
+  ``config.toml`` 的 ``[cache.redis]`` 配置；只有显式打开 ``fallback_to_memory`` 才退回本地
+  缓存并记一条 warning（要上报就问 :attr:`~nacho.core.cache.core.Cache.degraded`）；
 * **命名空间**：Redis 上所有键都带 ``<namespace>:`` 前缀（多个应用共用一个实例时隔离），
   上层看到 / 传进来的键名始终是不带前缀的那一份；
 * **不隐式启动**：没 ``start()`` 就调数据接口会抛

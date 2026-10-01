@@ -31,8 +31,9 @@
    ``clear()`` 清掉全部并返回条数；
 6. **配置冻结在 start 那一刻**：启动后再 ``configure()`` 直接抛错，要改配置先 ``stop()``；
    停机是幂等的，停机后数据接口拒绝服务；
-7. **Redis 连不上时的两条路**：默认 ``fallback_to_memory = true`` 退回内存（只记一条
-   warning，上层无感，要上报就问 ``degraded``）；关掉它则 ``start()`` 当场失败，不留半死门面；
+7. **Redis 连不上时的两条路**：默认**当场报错**，报错信息里提示去 ``config.toml`` 的
+   ``[cache.redis]`` 检查；只有显式 ``fallback_to_memory = true`` 才退回内存（记一条
+   warning，上层无感，要上报就问 ``degraded``）；
 8. **真连（可选）**：本机起了 Redis 就真跑一遍，顺带看命名空间怎么把同名键隔开。
 """
 
@@ -232,26 +233,29 @@ async def main() -> None:
         cache.configure(CacheOptions(namespace="demo"))
         print(f"  stop() 之后再 configure() 才行，现在配的是 namespace={cache.options.namespace}")
 
-        # ------------------------------------------------------------ 7. 降级两条路
-        print("\n=== 7. 配了 Redis 但连不上：默认退回内存，也可以选择直接失败 ===")
+        # ------------------------------------------------------------ 7. 连不上的两条路
+        print("\n=== 7. 配了 Redis 但连不上：默认当场报错，显式打开 fallback 才退回内存 ===")
         unreachable = RedisOptions(host="127.0.0.1", port=free_port(), socket_timeout=1.0)
         print("  用一个没人监听的端口冒充「Redis 没起」，两条路各试一遍：")
-        print("  （连接被拒后驱动还会重试，这一次要等二十几秒 —— 示例里最慢的地方就是它。）")
-        graceful = Cache(CacheOptions(backend="redis", redis=unreachable))
+        print("  （未配超时前驱动会对连接错误重试多次、建连超时走系统默认，要等二十几秒；")
+        print("   cache.redis 的 socket_connect_timeout / connect_retries 就是为缩短这个等待。）")
+        strict = Cache(CacheOptions(backend="redis", redis=unreachable))
+        try:
+            await strict.start()
+        except CacheError as exc:
+            print(f"  默认（fallback_to_memory=False）start() 当场抛：{exc}")
+        show("起不来之后", strict)
+        print("  连不上就停在没启动的状态（running 仍是 False），不留一个半死的门面。")
+        graceful = Cache(
+            CacheOptions(backend="redis", fallback_to_memory=True, redis=unreachable)
+        )
         await graceful.start()
         await settle(core)  # 等那条 warning 落地
-        show("默认（fallback_to_memory=True）", graceful)
+        show("显式 fallback_to_memory=True", graceful)
         await graceful.set("k", "v")
         print(f"  退回内存后读写照旧：get('k') = {await graceful.get('k')!r}")
         print("  上层不用为此写第二个分支，要上报就问 degraded。")
         await graceful.stop()
-        strict = Cache(CacheOptions(backend="redis", fallback_to_memory=False, redis=unreachable))
-        try:
-            await strict.start()
-        except CacheError as exc:
-            print(f"  fallback_to_memory=False 时 start() 当场抛：{exc}")
-        show("起不来之后", strict)
-        print("  连不上就停在没启动的状态（running 仍是 False），不留一个半死的门面。")
 
         # ------------------------------------------------------------ 8. 真连（可选）
         print("\n=== 8. 真连 Redis（可选）：本机有服务就真跑一遍 ===")

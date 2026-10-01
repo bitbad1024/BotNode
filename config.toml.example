@@ -149,8 +149,9 @@ backend = "memory"
 namespace = "nacho"
 # set() 没给 ttl 时用几秒过期；0 表示永不过期
 default_ttl = 0.0
-# Redis 连不上时是否退回本地缓存：true = 记一条 warning 继续跑，false = 启动阶段就报错
-fallback_to_memory = true
+# Redis 连不上时是否退回本地缓存：默认 false = 启动阶段就报错（并提示检查 [cache.redis] 配置），
+# true = 记一条 warning 继续跑（想静默降级才打开它）
+fallback_to_memory = false
 # 本地缓存清扫过期键的间隔（秒）
 sweep_interval = 30.0
 
@@ -171,6 +172,11 @@ username = ""
 password = ""
 # 单条命令的超时（秒）：连不上 / 卡住时按这个时间报错（或触发上面的降级）
 socket_timeout = 5.0
+# TCP 建连超时（秒）：不设的话走系统默认，连不上时实测要干等二十几秒
+socket_connect_timeout = 5.0
+# 建连失败后的重试次数（0 = 不重试）：驱动默认 10 次指数退避，连不上时白等很久；
+# 这里默认只补一次，Redis 起不来时能尽快报错
+connect_retries = 1
 # 连接池上限
 max_connections = 10
 

@@ -33,8 +33,8 @@ def write(tmp_path: Path, text: str) -> Path:
 def redis_reachable(host: str, port: int, timeout: float = 0.25) -> bool:
     """Redis 在不在听：一次 TCP 握手探一下（毫秒级）。
 
-    不能靠「让门面去连、连不上再跳过」来判断有没有服务：redis-py 默认带 10 次指数退避
-    重试，连不上时要白等二十几秒 —— 那是驱动在重试，不是缓存层的行为，不该让测试套件买单。
+    不能靠「让门面去连、连不上再跳过」来判断有没有服务：连不上时驱动的重试 + 建连等待
+    不可控（没 Redis 服务的环境可能白等很久），不该让测试套件买单。
     """
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -338,12 +338,57 @@ class TestRedisBackend:
         assert isinstance(MemoryCache(), CacheBackend)
         assert isinstance(RedisCache(RedisOptions()), CacheBackend)
 
-    async def test_unreachable_redis_degrades_to_memory(
+    async def test_start_passes_connect_timeout_and_retries(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """配了 Redis 但连不上：退回本地缓存，上层照旧读写，只是能问出 degraded。"""
+        """建连超时与重试次数要落到驱动上：连不上时不干等系统默认 + 驱动默认的 10 次重试。"""
+        pytest.importorskip("redis.asyncio")
+        captured: dict[str, object] = {}
+
+        class FakeRedis:  # 替掉驱动里的类：只记录构造参数，ping 当作连上了
+            def __init__(self, **kwargs: object) -> None:
+                captured.update(kwargs)
+
+            async def ping(self) -> None: ...
+
+            async def aclose(self) -> None: ...
+
+        import redis.asyncio
+
+        monkeypatch.setattr(redis.asyncio, "Redis", FakeRedis)
+        backend = RedisCache(RedisOptions(socket_connect_timeout=3.0, connect_retries=0))
+        await backend.start()
+        await backend.stop()
+        assert captured["socket_connect_timeout"] == 3.0
+        assert captured["retry"] is not None  # 显式传了重试策略，不是让驱动用默认 10 次
+
+    async def test_unreachable_redis_raises_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """默认（不写 fallback_to_memory）连不上也当场报错，报错里提示去配置里改。"""
         stub_redis_refused(monkeypatch)
         facade = Cache(CacheOptions(backend="redis"))
+        with pytest.raises(CacheError, match="连不上.*config.toml"):
+            await facade.start()
+        assert facade.running is False  # 起不来就别留个半死的门面
+
+    async def test_unreachable_redis_raises_without_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """显式关掉 fallback：start() 当场失败，不留半死门面。"""
+        stub_redis_refused(monkeypatch)
+        options = CacheOptions(backend="redis", fallback_to_memory=False)
+        facade = Cache(options)
+        with pytest.raises(CacheError, match="连不上.*config.toml"):
+            await facade.start()
+        assert facade.running is False
+
+    async def test_unreachable_redis_degrades_only_when_explicit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """显式打开 fallback_to_memory 才退回本地缓存：上层照旧读写，只是能问出 degraded。"""
+        stub_redis_refused(monkeypatch)
+        facade = Cache(CacheOptions(backend="redis", fallback_to_memory=True))
         await facade.start()
         try:
             assert facade.degraded is True
@@ -352,16 +397,6 @@ class TestRedisBackend:
             assert await facade.get("k") == "v"
         finally:
             await facade.stop()
-
-    async def test_unreachable_redis_raises_without_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        stub_redis_refused(monkeypatch)
-        options = CacheOptions(backend="redis", fallback_to_memory=False)
-        facade = Cache(options)
-        with pytest.raises(CacheError, match="连不上"):
-            await facade.start()
-        assert facade.running is False  # 起不来就别留个半死的门面
 
     async def test_real_redis_roundtrip_if_available(self) -> None:
         """本机有 Redis 就顺带把真后端跑一遍；没有就跳过（不强制装服务）。
@@ -373,7 +408,14 @@ class TestRedisBackend:
         options = RedisOptions(socket_timeout=1.0)
         if not redis_reachable(options.host, options.port):  # 探的就是待会儿真连的地址
             pytest.skip("本机没有可用的 Redis，跳过真连用例")
-        facade = Cache(CacheOptions(backend="redis", namespace="nacho-test", redis=options))
+        facade = Cache(
+            CacheOptions(
+                backend="redis",
+                namespace="nacho-test",
+                redis=options,
+                fallback_to_memory=True,  # 探得到却连不上时退回内存，便于下方 skip
+            )
+        )
         await facade.start()
         if facade.degraded:  # 探得到却连不上：多半是本机 Redis 要认证，这种也跳过
             await facade.stop()
