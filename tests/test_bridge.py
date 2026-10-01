@@ -142,6 +142,17 @@ class _DuckAdapter:
     async def reply(self, target: ChatTarget, content: str) -> ActionResult:
         raise ConnectionError("没有连接")
 
+    def make_target(
+        self,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        raise ConnectionError("没有连接")
+
 
 def test_duck_adapter_satisfies_protocol() -> None:
     """结构化满足：没继承协议、按形状长就能被认成 BotAdapter。"""

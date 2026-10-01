@@ -81,6 +81,7 @@ from .onebot import exec_onebot
 from .operator import exec_operator
 from .regex import exec_regex
 from .send import exec_send
+from .target import exec_target
 from .registry import (
     declare_node_type,
     get_executor,
@@ -140,6 +141,7 @@ __all__ = [
     "exec_condition",
     "exec_onebot",
     "exec_send",
+    "exec_target",
     "exec_operator",
     "exec_cache",
 ]

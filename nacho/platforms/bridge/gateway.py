@@ -129,6 +129,37 @@ class Gateway:
             raise ConnectionError(f"没有 {target.platform!r} 平台的适配器（已注册：{known}）")
         return await adapter.reply(target, content)
 
+    def make_target(
+        self,
+        platform: str,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        """从通用会话字段构造某平台的回程地址（画布手动填的 target 节点用它）。
+
+        与 :meth:`reply` 同一条「按平台路由」的路：把字段交给 ``platform`` 那个适配器按它
+        自己的口径转（OneBot 号转整数、Kook 原样字符串），调用方不碰平台字段。workflow 的
+        target 节点靠它（鸭子形状调 :attr:`~nacho.workflow.nodes.base.NodeExecutionContext.
+        gateway`，不 import bridge 类型）。
+
+        :raises ConnectionError: 没注册这个平台（与 :meth:`send` / :meth:`reply` 同口径）。
+        """
+        adapter = self._adapters.get(platform)
+        if adapter is None:
+            known = "、".join(self._adapters) or "无"
+            raise ConnectionError(f"没有 {platform!r} 平台的适配器（已注册：{known}）")
+        return adapter.make_target(
+            owner_id=owner_id,
+            chat=chat,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=message_id,
+        )
+
     # ------------------------------------------------------------------ 生命周期
     async def start(self) -> None:
         """按注册顺序起所有适配器（幂等与否由各适配器自己保证，协议如此约定）。"""

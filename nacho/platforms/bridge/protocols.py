@@ -70,3 +70,26 @@ class BotAdapter(Protocol):
         :raises ConnectionError: 环境问题当场抛（同 ``send`` 口径）。
         """
         ...
+
+    def make_target(
+        self,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        """从**通用会话字段**构造本平台的回程地址（画布手动填的 target 节点用它）。
+
+        与事件翻译那条路（适配器按平台事件自产 target）分工：这里是「没有事件、用户手动
+        指一个会话」的场合 —— 画布上填平台 + 会话类型 + 会话号，适配器按自己的口径转
+        （OneBot 号转整数、Kook 原样字符串），下游仍只认 ``ChatTarget`` 协议。
+
+        :param owner_id: 这条会话定位属于谁（回复时按它挑在线连接）；
+        :param chat: ``"group"`` / ``"private"`` / ``"other"``；
+        :param chat_id: 会话号（群号 / 对方号）；
+        :param user_id: 对方账号（私聊时兜底用，缺省回退到 ``chat_id``）；
+        :param message_id: 消息号（撤回一类动作要用）。
+        """
+        ...

@@ -1643,6 +1643,7 @@ class _FakeGateway:
 
     def __init__(self, response: _FakeActionResponse | None = None) -> None:
         self.calls: list[tuple[str, str, str, dict[str, object]]] = []
+        self.target_calls: list[tuple[str, dict[str, object]]] = []
         self._response = response if response is not None else _FakeActionResponse()
 
     async def send(
@@ -1658,6 +1659,12 @@ class _FakeGateway:
             data=resp.data,
             raw=resp,
         )
+
+    def make_target(self, platform: str, **fields: object) -> Any:
+        from types import SimpleNamespace
+
+        self.target_calls.append((platform, fields))
+        return SimpleNamespace(platform=platform, **fields)
 
 
 @pytest.mark.asyncio
@@ -1783,6 +1790,46 @@ def test_onebot_action_is_validated() -> None:
 
 
 # ------------------------------------------------------------- ④-F send 节点（P3 泛化）
+@pytest.mark.asyncio
+async def test_target_node_takes_trigger_session_when_platform_empty() -> None:
+    """target 节点：platform 留空 = 自动取触发消息的会话定位（原样透出，没有则 None）。"""
+    from nacho.workflow.nodes import exec_target
+
+    ctx_ = NodeExecutionContext()
+    ctx_.trigger_data = {"target": object()}  # 鸭子形状：透出同一个对象
+    node_ = WorkflowNode(id="tg1", type="target", config={"platform": ""})
+    result = await exec_target(node_, ctx_)
+    assert result["target"] is ctx_.trigger_data["target"]
+
+    # 没有会话定位（定时触发 / 离线跑）：None，不炸
+    ctx_.trigger_data = {}
+    assert (await exec_target(node_, ctx_))["target"] is None
+
+
+@pytest.mark.asyncio
+async def test_target_node_builds_manual_target_via_gateway() -> None:
+    """target 节点：platform 填了 = 手动构造，走 ctx.gateway.make_target 按平台路由。"""
+    from nacho.workflow.nodes import exec_target
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(
+        id="tg1",
+        type="target",
+        config={"platform": "onebot", "chat": "group", "chat_id": "70001"},
+    )
+    result = await exec_target(node_, ctx_)
+    assert gateway.target_calls == [
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001", "user_id": "", "message_id": ""})
+    ]
+    assert result["target"].platform == "onebot"  # 鸭子形状：有 platform 的东西
+
+    # 手动填但没接总线（gateway=None）：环境问题当场抛
+    bare = NodeExecutionContext(owner_id="u-admin")
+    with pytest.raises(RuntimeError, match="gateway"):
+        await exec_target(node_, bare)
+
+
 @pytest.mark.asyncio
 async def test_send_routes_via_gateway_by_platform() -> None:
     """send 节点走 ``ctx.gateway`` 按平台路由发动作：参数按动作组装，回执从 send_ok / send_data 送下去。"""

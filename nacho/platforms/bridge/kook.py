@@ -339,6 +339,28 @@ class KookAdapter:
             )
         raise ValueError(f"会话定位的会话指向不明（chat={target.chat!r}），回不了")
 
+    def make_target(
+        self,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        """从通用会话字段构造 Kook 的回程地址（id 是字符串，原样存）。
+
+        画布 target 节点手动填的会话号本来就是字符串，直接进 target：群聊用 ``chat_id``
+        当频道号、私聊用 ``user_id``（缺省回退 ``chat_id``）当对方账号。
+        """
+        return KookTarget(
+            owner_id=owner_id,
+            chat=chat,
+            chat_id=chat_id if chat == "group" else "",
+            user_id=user_id or chat_id if chat == "private" else "",
+            message_id=message_id,
+        )
+
     def _resolve_client(self, owner_id: str) -> KookClient | None:
         """按 bot_id -> 机器人号 -> 单实例兜底 的顺序找一个客户端。"""
         client = self._clients.get(owner_id)

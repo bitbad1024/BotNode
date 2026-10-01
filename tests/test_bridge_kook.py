@@ -214,6 +214,20 @@ async def test_adapter_reply_wrong_platform_target_raises() -> None:
     assert client.calls == []  # 没发出去
 
 
+def test_adapter_make_target_keeps_ids_as_strings() -> None:
+    """手动构造回程地址：Kook 的 id 是字符串，原样进 target（群聊频道号 / 私聊对方号）。"""
+    adapter = _make_adapter(_FakeClient())
+    group = adapter.make_target(owner_id="u-admin", chat="group", chat_id="ch-7")
+    assert isinstance(group, KookTarget)
+    assert group.chat == "group" and group.chat_id == "ch-7" and group.user_id == ""
+
+    private = adapter.make_target(owner_id="u-admin", chat="private", user_id="u-9", message_id="m-1")
+    assert private.chat == "private" and private.user_id == "u-9" and private.message_id == "m-1"
+
+    fallback = adapter.make_target(owner_id="u-admin", chat="private", chat_id="u-10")
+    assert fallback.user_id == "u-10"  # 没给 user_id 时回退 chat_id
+
+
 async def test_adapter_publishes_translated_event() -> None:
     """事件钩子：收到 KookEvent 翻译成 PlatformEvent 投给 publish。"""
     client = _FakeClient()

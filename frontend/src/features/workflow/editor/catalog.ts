@@ -110,6 +110,7 @@ const NODE_COLORS: Record<string, string> = {
   test: '#8b5cf6',
   http: '#0ea5e9',
   constant: '#eab308',
+  target: '#f59e0b',
   delay: '#14b8a6',
   json: '#f97316',
   regex: '#ec4899',

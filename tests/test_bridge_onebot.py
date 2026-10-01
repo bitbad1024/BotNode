@@ -285,6 +285,22 @@ async def test_reply_group_uses_group_id() -> None:
         assert got_action["params"] == {"group_id": 70001, "message": "群里的回复"}
 
 
+def test_make_target_builds_platform_target() -> None:
+    """手动构造回程地址：通用会话字段 -> OneBot 的号（转整数），协议口径一致。"""
+    adapter = OneBotAdapter(OneBotOptions(port=free_port()))
+    group = adapter.make_target(owner_id="", chat="group", chat_id="70001")
+    assert isinstance(group, OneBotTarget)
+    assert group.chat == "group" and group.group_id == 70001
+    assert group.message_id is None
+
+    private = adapter.make_target(owner_id="", chat="private", user_id="20002", message_id="9")
+    assert private.chat == "private" and private.user_id == 20002
+    assert private.message_id == 9
+
+    fallback = adapter.make_target(owner_id="", chat="private", chat_id="20003")
+    assert fallback.user_id == 20003  # 没给 user_id 时回退 chat_id
+
+
 async def test_send_without_online_connection_raises() -> None:
     """环境问题当场抛：归属下没有在线连接（口径同 onebot 节点）。"""
     async with served_adapter() as (gateway, _adapter, _inbox):

@@ -296,6 +296,34 @@ class OneBotAdapter:
             )
         raise ValueError(f"会话定位的会话指向不明（chat={target.chat!r}），回不了")
 
+    def make_target(
+        self,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        """从通用会话字段构造 OneBot 的回程地址（号转**整数**，协议口径）。
+
+        画布 target 节点手动填的会话号是字符串（表单都是文本），这里按会话指向转回整数：
+        群聊用 ``chat_id`` 当群号、私聊用 ``user_id``（缺省回退 ``chat_id``）当对方账号。
+        """
+        if chat == "group":
+            group_id = int(chat_id) if chat_id else None
+            target_user_id = int(user_id) if user_id else None
+        else:
+            group_id = None
+            target_user_id = int(user_id or chat_id) if (user_id or chat_id) else None
+        return OneBotTarget(
+            owner_id=owner_id,
+            chat=chat,
+            group_id=group_id,
+            user_id=target_user_id,
+            message_id=int(message_id) if message_id else None,
+        )
+
     # ------------------------------------------------------------------ 兼容面（透传）
     # 接口层 OneBotLike 协议 + 工作流 ctx.onebot 鸭子形状，P2 验收线：下游零改动。
     @property
