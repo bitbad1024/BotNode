@@ -49,6 +49,18 @@ NodeExecutor = Callable[[WorkflowNode, "NodeExecutionContext"], Awaitable[dict[s
 #: 节点在图中的拓扑角色：start=唯一入口 / end=终点 / normal=普通节点
 NodeRole = Literal["start", "end", "normal"]
 
+#: 节点的语义分类：画布面板按它分组（前端目录只按 ``order`` 排）。各节点标类，
+#: 新增类型不在这里白名单化 —— 前端认不出时照原样显示，不影响图能存能跑。
+NodeCategory = Literal[
+    "trigger",   # 触发：流程入口（start）
+    "target",    # 目标：产出「发到哪」的会话定位值
+    "constant",  # 常量：产出固定值
+    "action",    # 动作：对外副作用（发消息 / 发请求 / 写日志）
+    "control",   # 控制：分支 / 等待
+    "data",      # 数据：加工 / 提取 / 运算 / 存取
+    "end",       # 结束：流程终点
+]
+
 #: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
 NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
 
@@ -132,6 +144,7 @@ class NodeSpec:
         其余出口的边整段剪枝（对岸节点不执行，级联到它的下游）；普通节点永远 False；
     :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
     :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
+    :param category: 语义分类（画布面板分组用，见 :data:`NodeCategory`）；
     :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
     :param outputs: 输出端口（画布右侧圆点；执行函数返回值的键必须是这里的 id）。
     """
@@ -147,6 +160,7 @@ class NodeSpec:
     branching: bool = False
     label: str = ""
     order: int = 100
+    category: NodeCategory = "data"
     inputs: tuple[PortSpec, ...] = ()
     outputs: tuple[PortSpec, ...] = ()
 

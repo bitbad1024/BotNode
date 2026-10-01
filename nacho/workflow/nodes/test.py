@@ -19,6 +19,7 @@ from .registry import register_node
     "test",
     label="测试",
     order=50,
+    category="data",
     inputs=[TRIGGER_PORT, PortSpec("message", "message", "回显内容")],
     outputs=[TRIGGER_PORT, PortSpec("message", "message", "回显")],
     fields=[ConfigField("message", "回显内容", default="hello")],

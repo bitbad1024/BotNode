@@ -24,6 +24,7 @@ from importlib import import_module
 
 from .base import (
     ConfigField,
+    NodeCategory,
     NodeConfigValidator,
     NodeExecutor,
     NodeRole,
@@ -48,6 +49,7 @@ def register_executor(
     branching: bool = False,
     label: str = "",
     order: int = 100,
+    category: NodeCategory = "data",
     inputs: Sequence[PortSpec] = (),
     outputs: Sequence[PortSpec] = (),
 ) -> None:
@@ -67,6 +69,7 @@ def register_executor(
         branching=branching,
         label=label,
         order=order,
+        category=category,
         inputs=tuple(inputs),
         outputs=tuple(outputs),
     )
@@ -84,6 +87,7 @@ def declare_node_type(
     branching: bool = False,
     label: str = "",
     order: int = 100,
+    category: NodeCategory = "data",
     inputs: Sequence[PortSpec] = (),
     outputs: Sequence[PortSpec] = (),
 ) -> None:
@@ -104,6 +108,7 @@ def declare_node_type(
         branching=branching,
         label=label,
         order=order,
+        category=category,
         inputs=tuple(inputs),
         outputs=tuple(outputs),
     )
@@ -121,6 +126,7 @@ def register_node(
     branching: bool = False,
     label: str = "",
     order: int = 100,
+    category: NodeCategory = "data",
     inputs: Sequence[PortSpec] = (),
     outputs: Sequence[PortSpec] = (),
 ) -> Callable[[NodeExecutor], NodeExecutor]:
@@ -155,6 +161,7 @@ def register_node(
             branching=branching,
             label=label,
             order=order,
+            category=category,
             inputs=inputs,
             outputs=outputs,
         )

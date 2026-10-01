@@ -63,6 +63,41 @@ export const PORT_COLORS: Record<PortType, string> = {
   message: '#3b82f6',
 }
 
+//: 节点面板的语义分组（与后端 NodeCategory 对齐）：顺序即显示顺序，标签是中文名
+export const CATEGORY_ORDER = [
+  'trigger',
+  'target',
+  'constant',
+  'action',
+  'control',
+  'data',
+  'end',
+] as const
+
+//: 分类显示名；后端给了但这里没有的分类（认不出的）归到最后「其它」组
+export const CATEGORY_LABELS: Record<string, string> = {
+  trigger: '触发',
+  target: '目标',
+  constant: '常量',
+  action: '动作',
+  control: '控制',
+  data: '数据',
+  end: '结束',
+}
+
+/** 按语义分类给面板项分组：返回「分类 -> 该项列表」，顺序按 CATEGORY_ORDER、组内按原序。 */
+export function groupByCategory(items: NodeTypeSpec[]): Array<[string, NodeTypeSpec[]]> {
+  const buckets = new Map<string, NodeTypeSpec[]>()
+  for (const item of items) {
+    const key = item.category && CATEGORY_LABELS[item.category] ? item.category : 'other'
+    const list = buckets.get(key) ?? []
+    list.push(item)
+    buckets.set(key, list)
+  }
+  const order = [...CATEGORY_ORDER, ...(buckets.has('other') ? ['other'] : [])]
+  return order.flatMap((key) => (buckets.has(key) ? [[key, buckets.get(key)!] as [string, NodeTypeSpec[]]] : []))
+}
+
 //: 边没写端口时的口径：按「触发 -> 触发」读（与后端 graph.DEFAULT_EDGE_PORT 一致）
 export const DEFAULT_PORT = 'trigger'
 

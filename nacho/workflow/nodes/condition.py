@@ -108,6 +108,7 @@ def _compare(left: str, operator: str, right: str) -> bool | None:
     "condition",
     label="条件",
     order=110,
+    category="control",
     # 分流节点：引擎按「选中了哪个出口」剪枝，没走的出口整段跳过
     branching=True,
     # 至少接一个出口：一个分支都不接的条件没有意义

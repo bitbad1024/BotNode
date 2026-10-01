@@ -88,6 +88,7 @@ def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
     label="开始",
     order=10,
     role="start",
+    category="trigger",
     # 端口按**缺省形态**（消息触发 = 触发 + 消息）声明；时间触发只出触发端口，由画布按
     # config.trigger 切换 —— start 是唯一一个端口随配置变的类型，前端为它留了特判。
     outputs=[TRIGGER_PORT, PortSpec("message", "message", "消息")],

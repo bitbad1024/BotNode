@@ -66,6 +66,7 @@ def _retcode_of(response: Any) -> int:
     "onebot",
     label="OneBot",
     order=120,
+    category="action",
     # 参数是否必填取决于动作（发群要群号、撤回要消息号），做不到「表格必填」，
     # 所以入口都不标 required，缺什么运行期抛（见模块文档）
     inputs=[

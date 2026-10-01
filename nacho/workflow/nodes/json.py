@@ -116,6 +116,7 @@ def validate_json_node(node: WorkflowNode) -> list[ValidationIssue]:
     "json",
     label="JSON",
     order=80,
+    category="data",
     # json / path 既是字段名也是数据入口：上游把值接到这两个端口，就覆盖 config 里手填的内容
     inputs=[
         TRIGGER_PORT,

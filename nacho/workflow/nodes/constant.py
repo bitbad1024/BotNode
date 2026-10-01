@@ -23,6 +23,7 @@ from .registry import register_node
     "constant",
     label="常量",
     order=30,
+    category="constant",
     inputs=[TRIGGER_PORT],
     outputs=[TRIGGER_PORT, PortSpec("value", "message", "值")],
     fields=[ConfigField("value", "值", required=True)],

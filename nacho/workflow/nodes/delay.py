@@ -120,6 +120,7 @@ def validate_delay_node(node: WorkflowNode) -> list[ValidationIssue]:
     "delay",
     label="等待",
     order=70,
+    category="control",
     # seconds 既是字段名也是数据入口：上游把值接到这个端口就覆盖 config 里手填的秒数。
     # 入口不标 required —— 没接线还有手填兜底（与 http.url 那种「必须接线或手填」不同）
     inputs=[TRIGGER_PORT, PortSpec("seconds", "message", "等待时长（秒）")],

@@ -1,10 +1,10 @@
 /**
  * 节点面板（悬浮在画布左侧）：点一下直接添加，按住拖进画布则在松手处落子。
  *
- * 面板项**全部来自后端目录**（顺序与中文名都在里面，见 :func:`catalog.installCatalog`），
- * 前端只补颜色；底部是端口类型的图例。
+ * 面板项**全部来自后端目录**（顺序、中文名与语义分类都在里面，见 :func:`catalog.installCatalog`），
+ * 前端只补颜色并按分类分组；底部是端口类型的图例。
  */
-import { PORT_COLORS, nodeDef, type NodeTypeSpec } from './catalog'
+import { PORT_COLORS, CATEGORY_LABELS, groupByCategory, nodeDef, type NodeTypeSpec } from './catalog'
 import styles from '../WorkflowEditor.module.css'
 
 export interface PaletteProps {
@@ -16,23 +16,29 @@ export interface PaletteProps {
 }
 
 export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
+  const groups = groupByCategory(items)
   return (
     <aside className={styles.palette}>
       <div className={styles.paletteTitle}>节点</div>
-      {items.map((spec) => {
-        const def = nodeDef(spec.type)
-        return (
-          <button
-            key={spec.type}
-            className={styles.paletteItem}
-            onMouseDown={(e) => onItemMouseDown(e, spec.type)}
-            onClick={(e) => onItemClick(e, spec.type)}
-          >
-            <span className={styles.paletteDot} style={{ background: def.color }} />
-            {def.label}
-          </button>
-        )
-      })}
+      {groups.map(([category, specs]) => (
+        <div key={category} className={styles.paletteGroup}>
+          <div className={styles.paletteGroupTitle}>{CATEGORY_LABELS[category] ?? category}</div>
+          {specs.map((spec) => {
+            const def = nodeDef(spec.type)
+            return (
+              <button
+                key={spec.type}
+                className={styles.paletteItem}
+                onMouseDown={(e) => onItemMouseDown(e, spec.type)}
+                onClick={(e) => onItemClick(e, spec.type)}
+              >
+                <span className={styles.paletteDot} style={{ background: def.color }} />
+                {def.label}
+              </button>
+            )
+          })}
+        </div>
+      ))}
       <div className={styles.legend}>
         <div className={styles.legendTitle}>端口类型</div>
         <div className={styles.legendRow}>

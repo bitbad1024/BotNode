@@ -2823,6 +2823,16 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert end["max_outgoing"] == 0 and end["outputs"] == []
     orders = [item["order"] for item in payload["nodes"]]
     assert orders == sorted(orders)  # 面板顺序：接口给的就已经排好
+    # 语义分类：画布面板按它分组（触发 / 目标 / 常量 / 动作 / 控制 / 数据 / 结束）
+    assert nodes["start"]["category"] == "trigger"
+    assert nodes["end"]["category"] == "end"
+    assert nodes["constant"]["category"] == "constant"
+    assert nodes["send"]["category"] == "action"
+    assert nodes["condition"]["category"] == "control"
+    assert nodes["json"]["category"] == "data"
+    assert {item["category"] for item in payload["nodes"]} <= {
+        "trigger", "target", "constant", "action", "control", "data", "end",
+    }
 
 
 async def test_api_trace_id_is_filled_in_every_workflow_response() -> None:
