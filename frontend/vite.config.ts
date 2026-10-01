@@ -17,9 +17,12 @@ export default defineConfig({
   server: {
     // 5173 是 Vite 的默认端口，但 Windows 会随机保留一段动态端口范围
     // （netsh interface ipv4 show excludedportrange protocol=tcp 可见），
-    // 本机 5135-5234 就在保留范围内：绑上去报 EACCES（权限）而不是 EADDRINUSE（被占用），
-    // 换端口才能解决。这里取范围外的 5273；想临时换：npm run dev -- --port 5300
-    port: 5273,
+    // 且保留段不固定、每次系统/服务重启都可能变化：之前选的 5273 后来就落进了
+    // 新保留段 5241-5340，绑上去报 EACCES（权限）而不是 EADDRINUSE（被占用），
+    // 只能换端口。当前保留段为 5041-5857、27339、28385、28390、50000-50059，
+    // 这里取范围外的 15173；再撞上就 netsh 查一次换一个，或临时用：
+    // npm run dev -- --port <空闲端口>
+    port: 15173,
     proxy: {
       '/api': { target: backend, changeOrigin: true },
       '/docs': { target: backend, changeOrigin: true },
