@@ -24,7 +24,13 @@ from __future__ import annotations
 import asyncio
 
 from nacho.core.logger import BaseLogger
-from nacho.platforms.kook import KookActionResponse, KookClient, KookEvent, KookOptions
+from nacho.platforms.kook import (
+    EVENT_SYSTEM,
+    KookActionResponse,
+    KookClient,
+    KookEvent,
+    KookOptions,
+)
 
 from .gateway import EventSubscriber
 from .logging import bridge_logger
@@ -51,6 +57,24 @@ def _translate(event: KookEvent, *, owner_id: str = "") -> PlatformEvent:
     else:
         chat = "other"
         chat_id = ""
+
+    # Kook 系统事件（type=255 系统消息 / author_id=1 系统账号）不是聊天消息：
+    # 内容不在 content 而在 extra，不该进消息路由触发工作流。归为 notice（静默），
+    # 身份照译、正文留空，下游（bootstrap）见非 message 只记 debug 不触发。
+    if event.type == EVENT_SYSTEM or event.author_id == "1":
+        return PlatformEvent(
+            platform=PLATFORM,
+            owner_id=owner_id,
+            self_id=event.self_id or "",
+            kind="notice",
+            chat="other",
+            chat_id="",
+            user_id=event.author_id,
+            text="",
+            message_id=event.msg_id,
+            time=float(event.msg_timestamp) / 1000.0 if event.msg_timestamp else 0.0,
+            raw=event,
+        )
 
     return PlatformEvent(
         platform=PLATFORM,
