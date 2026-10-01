@@ -111,6 +111,8 @@ class NodeTypeData(_Frozen):
     role: str
     order: int
     has_executor: bool
+    #: 语义分类（画布面板按它分组）：trigger / target / constant / action / control / data / end
+    category: str = "data"
     min_outgoing: int
     max_outgoing: int | None = None
     inputs: list[NodePortData] = Field(default_factory=list)
@@ -125,6 +127,7 @@ class NodeTypeData(_Frozen):
             role=spec.role,
             order=spec.order,
             has_executor=spec.executor is not None,
+            category=spec.category,
             min_outgoing=spec.min_outgoing,
             max_outgoing=spec.max_outgoing,
             inputs=[NodePortData.from_port(port) for port in spec.inputs],

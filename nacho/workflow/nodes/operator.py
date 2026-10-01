@@ -100,6 +100,7 @@ def _fail(ctx: NodeExecutionContext, node_id: str, reason: str) -> dict[str, Any
     "operator",
     label="运算",
     order=130,
+    category="data",
     # left / right 既是字段名也是数据入口（同 http.url）：接线或手填都行
     inputs=[
         TRIGGER_PORT,

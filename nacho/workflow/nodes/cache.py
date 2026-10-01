@@ -115,6 +115,7 @@ def _clip(raw: str) -> str:
     "cache",
     label="缓存",
     order=140,
+    category="data",
     # key 既是字段名也是数据入口（同 http.url）：接线或手填都行，两个都没有才报错
     inputs=[
         TRIGGER_PORT,

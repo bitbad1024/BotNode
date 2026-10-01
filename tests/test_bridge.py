@@ -10,7 +10,7 @@ import dataclasses
 import pytest
 
 from nacho.platforms.bridge import Gateway
-from nacho.platforms.bridge.models import ActionResult, BotClient, PlatformEvent
+from nacho.platforms.bridge.models import ActionResult, BotClient, ChatTarget, PlatformEvent
 from nacho.platforms.bridge.protocols import BotAdapter
 
 
@@ -60,6 +60,49 @@ def test_platform_event_frozen() -> None:
         event.kind = "message"  # type: ignore[misc]
 
 
+@dataclasses.dataclass(frozen=True)
+class _ChatTarget:
+    """测试用最小 target：按「结构化满足 ChatTarget 协议」长（platform 是协议承诺）。
+
+    平台特有的定位字段（chat / chat_id / user_id / message_id）由**各适配器自己定义**
+    （如 OneBot 的 ``OneBotTarget``、Kook 的 ``KookTarget``）；这一份只是协议测试用的
+    最小实现，验证「只认路由键、形状自便」的兼容面。
+    """
+
+    platform: str
+    owner_id: str
+    chat: str = "other"
+    chat_id: str = ""
+    user_id: str = ""
+    message_id: str = ""
+
+
+def test_platform_event_target_carries_session_location() -> None:
+    """事件自带会话定位（target）：回复时原样传回就能回同一会话。
+
+    target 是**适配器翻译时塞进来的平台特有对象**（不再从规范化字段派生）——这里用
+    测试的 ``_ChatTarget`` 模拟「产 target 的适配器」，断言它原样挂在事件上。
+    """
+    target = _ChatTarget(platform="onebot", owner_id="u-admin", chat="group", chat_id="123456")
+    event = PlatformEvent(
+        platform="onebot",
+        owner_id="u-admin",
+        kind="message",
+        chat="group",
+        chat_id="123456",
+        user_id="10086",
+        message_id="7",
+        target=target,
+    )
+    assert event.target is target  # 原样回传，字段形状由产它的适配器定
+
+
+def test_chat_target_protocol_minimal_contract() -> None:
+    """ChatTarget 协议只承诺路由键：带 platform 就被认成协议，其余字段自便。"""
+    assert isinstance(_ChatTarget(platform="kook", owner_id="u-admin"), ChatTarget)
+    assert not isinstance(object(), ChatTarget)
+
+
 def test_bot_client_minimal() -> None:
     """在线列表一行：最小只需两个身份字段，其余空口径。"""
     client = BotClient(client_id="c1", owner_id="u-admin")
@@ -96,6 +139,20 @@ class _DuckAdapter:
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         raise ConnectionError("没有连接")
 
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
+        raise ConnectionError("没有连接")
+
+    def make_target(
+        self,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        raise ConnectionError("没有连接")
+
 
 def test_duck_adapter_satisfies_protocol() -> None:
     """结构化满足：没继承协议、按形状长就能被认成 BotAdapter。"""
@@ -116,6 +173,7 @@ class _FakeAdapter:
         self.platform = platform
         self._online = online
         self.calls: list[tuple[str, str, dict[str, object]]] = []  # (owner, action, params)
+        self.replies: list[tuple[ChatTarget, str]] = []  # (target, content)
         self.started = 0
         self.stopped = 0
 
@@ -133,6 +191,10 @@ class _FakeAdapter:
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         self.calls.append((owner_id, action, params))
         return ActionResult(ok=True, data={"echo_of": action})
+
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
+        self.replies.append((target, content))
+        return ActionResult(ok=True, data={"reply_to": target.chat_id})
 
 
 async def test_gateway_publish_reaches_subscribers_in_order() -> None:
@@ -203,6 +265,35 @@ async def test_gateway_send_unknown_platform_raises() -> None:
     gateway.register(_FakeAdapter("onebot"))
     with pytest.raises(ConnectionError, match="onebot"):
         await gateway.send("kook", "u-admin", "send_msg")
+
+
+async def test_gateway_reply_routes_by_target_platform() -> None:
+    """回复路由：按 target.platform 回到原适配器，内容原样转述。"""
+    gateway = Gateway()
+    onebot = _FakeAdapter("onebot")
+    kook = _FakeAdapter("kook")
+    gateway.register(onebot)
+    gateway.register(kook)
+
+    target = _ChatTarget(
+        platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1", user_id="42"
+    )
+    result = await gateway.reply(target, "收到，马上办")
+
+    assert result.ok is True and result.data == {"reply_to": "ch-1"}
+    assert kook.replies == [(target, "收到，马上办")]
+    assert onebot.replies == []  # 路由只去 kook
+
+
+async def test_gateway_reply_unknown_platform_raises() -> None:
+    """回复到没注册的平台：ConnectionError，消息里带已注册列表。"""
+    gateway = Gateway()
+    gateway.register(_FakeAdapter("onebot"))
+    with pytest.raises(ConnectionError, match="kook"):
+        await gateway.reply(
+            _ChatTarget(platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1"),
+            "hi",
+        )
 
 
 async def test_gateway_lifecycle_order() -> None:

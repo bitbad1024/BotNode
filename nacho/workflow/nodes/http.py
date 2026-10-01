@@ -90,6 +90,7 @@ def _timeout_of(raw: object) -> float | None:
     "http",
     label="HTTP",
     order=60,
+    category="action",
     # url / body 既是字段名也是数据入口：上游把值接到这两个端口，就覆盖 config 里手填的内容
     inputs=[
         TRIGGER_PORT,

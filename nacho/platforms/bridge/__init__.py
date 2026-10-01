@@ -64,20 +64,21 @@ from __future__ import annotations
 
 from .gateway import EventSubscriber, Gateway
 from .logging import BRIDGE_LOGGER_NAME, bridge_logger
-from .models import ActionResult, BotClient, PlatformEvent
+from .models import ActionResult, BotClient, ChatTarget, PlatformEvent
 from .protocols import BotAdapter
 
 __all__ = [
+    # 日志接入点
+    "BRIDGE_LOGGER_NAME",
     # 规范化模型
-    "PlatformEvent",
-    "BotClient",
     "ActionResult",
     # 协议
     "BotAdapter",
+    "BotClient",
+    "ChatTarget",
     # 总线
-    "Gateway",
     "EventSubscriber",
-    # 日志接入点
-    "BRIDGE_LOGGER_NAME",
+    "Gateway",
+    "PlatformEvent",
     "bridge_logger",
 ]

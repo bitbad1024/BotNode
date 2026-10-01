@@ -27,7 +27,7 @@ from typing import TypeAlias
 from nacho.core.logger import BaseLogger
 
 from .logging import bridge_logger
-from .models import ActionResult, PlatformEvent
+from .models import ActionResult, ChatTarget, PlatformEvent
 from .protocols import BotAdapter
 
 #: 事件订阅者：收到一条规范化事件时的回调。抛出的异常只会被记下来（见模块文档）。
@@ -112,6 +112,53 @@ class Gateway:
             known = "、".join(self._adapters) or "无"
             raise ConnectionError(f"没有 {platform!r} 平台的适配器（已注册：{known}）")
         return await adapter.send(owner_id, action, **params)
+
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
+        """回复一条消息到 ``target`` 指向的会话：按 ``target.platform`` 路由回原适配器。
+
+        事件自带会话定位（``PlatformEvent.target``，**产它那个适配器**的 target 类型），
+        回复时**原样传回**即可 —— 发到哪、按什么动作发，由产 target 的适配器自己挑，
+        调用方不碰平台字段。总线只认路由键，target 的形状它不管。
+
+        :raises ConnectionError: 没注册这个平台（装配问题当场抛，消息里带上已注册
+            平台）；归属下没有在线连接由适配器以同一口径抛。
+        """
+        adapter = self._adapters.get(target.platform)
+        if adapter is None:
+            known = "、".join(self._adapters) or "无"
+            raise ConnectionError(f"没有 {target.platform!r} 平台的适配器（已注册：{known}）")
+        return await adapter.reply(target, content)
+
+    def make_target(
+        self,
+        platform: str,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        """从通用会话字段构造某平台的回程地址（画布手动填的 target 节点用它）。
+
+        与 :meth:`reply` 同一条「按平台路由」的路：把字段交给 ``platform`` 那个适配器按它
+        自己的口径转（OneBot 号转整数、Kook 原样字符串），调用方不碰平台字段。workflow 的
+        target 节点靠它（鸭子形状调 :attr:`~nacho.workflow.nodes.base.NodeExecutionContext.
+        gateway`，不 import bridge 类型）。
+
+        :raises ConnectionError: 没注册这个平台（与 :meth:`send` / :meth:`reply` 同口径）。
+        """
+        adapter = self._adapters.get(platform)
+        if adapter is None:
+            known = "、".join(self._adapters) or "无"
+            raise ConnectionError(f"没有 {platform!r} 平台的适配器（已注册：{known}）")
+        return adapter.make_target(
+            owner_id=owner_id,
+            chat=chat,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=message_id,
+        )
 
     # ------------------------------------------------------------------ 生命周期
     async def start(self) -> None:

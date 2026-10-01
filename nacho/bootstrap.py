@@ -153,6 +153,10 @@ async def on_platform_event(event: PlatformEvent) -> None:
                 "chat": event.chat,
                 "chat_id": event.chat_id,
                 "message_id": event.message_id,
+                #: 会话定位（回程地址）：start 的 target 出口原样透给下游 target 节点 /
+                #: send 节点。workflow 只透传这个对象，不 import bridge 类型 —— 它认的是
+                #: 「有 platform 属性的东西」，路由键就够用了。没有会话指向的事件是 None。
+                "target": event.target,
             },
         )
     except Exception:  # noqa: BLE001 — 消息入口尽力而为，别让一条坏事件拖垮整条链路

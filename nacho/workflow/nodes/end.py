@@ -13,7 +13,13 @@ from .registry import register_node
 
 
 @register_node(
-    "end", role="end", max_outgoing=0, label="结束", order=20, inputs=[TRIGGER_PORT]
+    "end",
+    role="end",
+    max_outgoing=0,
+    label="结束",
+    order=20,
+    category="end",
+    inputs=[TRIGGER_PORT],
 )
 async def exec_end(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """结束节点：写一条完成日志（带上收尾入口有哪些），不产出值。"""

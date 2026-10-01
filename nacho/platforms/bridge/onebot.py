@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from nacho.core.logger import BaseLogger
@@ -34,7 +35,7 @@ from nacho.platforms.onebot.server import ClientEntry, OneBotConnection
 
 from .gateway import EventSubscriber
 from .logging import bridge_logger
-from .models import ActionResult, BotClient, PlatformEvent
+from .models import ActionResult, BotClient, ChatKind, ChatTarget, PlatformEvent
 
 if TYPE_CHECKING:
     from nacho.api.api.onebot.protocols import TokenRegistry
@@ -42,6 +43,30 @@ if TYPE_CHECKING:
 
 #: 本适配器的平台标识（路由键；Gateway 里不得与其它适配器重复）
 PLATFORM = "onebot"
+
+
+@dataclass(frozen=True)
+class OneBotTarget:
+    """OneBot 的会话定位（回程地址）：号一律**整数**（OneBot 协议口径）。
+
+    OneBot 的群号 / 用户号 / 消息号在协议里就是整数，target 直接原样存 —— 回复时
+    不用像统一 ``EventTarget`` 时代那样「翻译成字符串、再 int() 转回来」。生产与消费
+    同平台（见 :class:`ChatTarget`）：本类是适配器翻译事件时构造、塞进
+    ``PlatformEvent.target`` 的，reply 时原样传回本适配器，字段形状自己认。
+    """
+
+    #: 这条连接属于谁（回复发给「谁的」连接）
+    owner_id: str
+    #: 事件来源平台（回复时按它路由回原适配器）
+    platform: str = PLATFORM
+    #: 会话指向：群聊 / 私聊；``"other"`` 说明定位不出会话，回不了
+    chat: ChatKind = "other"
+    #: 群号（群聊）；没有是 ``None``
+    group_id: int | None = None
+    #: 对方用户号（私聊）；没有是 ``None``
+    user_id: int | None = None
+    #: 消息号（撤回一类动作要用）；没有是 ``None``
+    message_id: int | None = None
 
 
 def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
@@ -62,6 +87,13 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             message_id=str(event.message_id) if event.message_id is not None else "",
             time=float(event.time),
             raw=event,
+            target=OneBotTarget(
+                owner_id=conn.id,
+                chat=chat,
+                group_id=int(event.group_id) if event.message_type == "group" else None,
+                user_id=int(event.user_id),
+                message_id=int(event.message_id) if event.message_id is not None else None,
+            ),
         )
     if isinstance(event, NoticeEvent):
         # 通知：群通知带 group_id 算群事件，其余算不出会话指向
@@ -80,6 +112,17 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             message_id=str(recall_id) if recall_id is not None else "",
             time=float(event.time),
             raw=event,
+            target=(
+                OneBotTarget(
+                    owner_id=conn.id,
+                    chat="group",
+                    group_id=int(event.group_id),
+                    user_id=int(event.user_id) if event.user_id is not None else None,
+                    message_id=int(recall_id) if recall_id is not None else None,
+                )
+                if has_group
+                else None
+            ),
         )
     if isinstance(event, RequestEvent):
         has_group = event.group_id is not None
@@ -94,6 +137,12 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             text=event.comment,
             time=float(event.time),
             raw=event,
+            target=OneBotTarget(
+                owner_id=conn.id,
+                chat="group" if has_group else "private",
+                group_id=int(event.group_id) if has_group else None,
+                user_id=int(event.user_id) if event.user_id is not None else None,
+            ),
         )
     if isinstance(event, MetaEvent):
         # 生命周期一类，没有会话指向；文本留空
@@ -213,6 +262,66 @@ class OneBotAdapter:
             message="" if response.ok else f"status={response.status} retcode={response.retcode}",
             data=response.data,
             raw=response,
+        )
+
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
+        """回复到 ``target`` 指向的会话：群聊回群、私聊回私聊（号已是整数，直接用）。
+
+        ``target`` 是**本适配器**翻译事件时构造的 :class:`OneBotTarget`（生产与消费
+        同平台，见 :class:`ChatTarget`），回复时原样传回即可；不是本平台的 target
+        当场 ValueError（装配错位看得见）。
+        """
+        if not isinstance(target, OneBotTarget):
+            raise ValueError(
+                f"回复目标不是 OneBot 的 target（{type(target).__name__}），"
+                "生产与消费必须同平台"
+            )
+        if target.chat == "group":
+            if target.group_id is None:
+                raise ValueError("群聊回复需要 group_id（会话定位缺群号）")
+            return await self.send(
+                target.owner_id,
+                "send_group_msg",
+                group_id=target.group_id,
+                message=content,
+            )
+        if target.chat == "private":
+            if target.user_id is None:
+                raise ValueError("私聊回复需要 user_id（会话定位缺对方账号）")
+            return await self.send(
+                target.owner_id,
+                "send_private_msg",
+                user_id=target.user_id,
+                message=content,
+            )
+        raise ValueError(f"会话定位的会话指向不明（chat={target.chat!r}），回不了")
+
+    def make_target(
+        self,
+        *,
+        owner_id: str,
+        chat: str = "other",
+        chat_id: str = "",
+        user_id: str = "",
+        message_id: str = "",
+    ) -> ChatTarget:
+        """从通用会话字段构造 OneBot 的回程地址（号转**整数**，协议口径）。
+
+        画布 target 节点手动填的会话号是字符串（表单都是文本），这里按会话指向转回整数：
+        群聊用 ``chat_id`` 当群号、私聊用 ``user_id``（缺省回退 ``chat_id``）当对方账号。
+        """
+        if chat == "group":
+            group_id = int(chat_id) if chat_id else None
+            target_user_id = int(user_id) if user_id else None
+        else:
+            group_id = None
+            target_user_id = int(user_id or chat_id) if (user_id or chat_id) else None
+        return OneBotTarget(
+            owner_id=owner_id,
+            chat=chat,
+            group_id=group_id,
+            user_id=target_user_id,
+            message_id=int(message_id) if message_id else None,
         )
 
     # ------------------------------------------------------------------ 兼容面（透传）

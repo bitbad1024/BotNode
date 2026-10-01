@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from nacho.platforms.bridge.kook import KookAdapter, _translate
+from nacho.platforms.bridge.kook import KookAdapter, KookTarget, _translate
 from nacho.platforms.bridge.models import PlatformEvent
 from nacho.platforms.kook import KookEvent, KookOptions
 
@@ -39,6 +39,10 @@ def test_translate_group_message() -> None:
     assert translated.message_id == "m-789"
     assert translated.time == 1_700_000_000.0  # 毫秒转秒
     assert translated.raw is event  # 翻译不了的字段从这里兜
+    # 会话定位是 Kook 自己的 target：id 保持字符串（Kook 协议口径）
+    assert isinstance(translated.target, KookTarget)
+    assert translated.target.chat == "group"
+    assert translated.target.chat_id == "ch-123"
 
 
 def test_translate_private_message() -> None:
@@ -82,6 +86,7 @@ def test_translate_system_event_is_notice() -> None:
     assert translated.user_id == "1"
     assert translated.chat == "other"
     assert translated.chat_id == ""
+    assert translated.target is None  # 系统事件没有会话指向，target 留空
     assert translated.text == ""  # 系统事件正文在 extra，不在 content
 
 
@@ -164,6 +169,63 @@ async def test_adapter_send_failure_receipt() -> None:
     result = await adapter.send("bot-1", "send_channel_msg", target_id="ch-1", content="hi")
     assert result.ok is False
     assert result.message == "参数错误"
+
+
+async def test_adapter_reply_to_channel() -> None:
+    """回复到群聊会话：按 target 原样回频道（send_channel_msg，id 是字符串）。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+    target = KookTarget(owner_id="u-admin", chat="group", chat_id="ch-1", user_id="u-1")
+    result = await adapter.reply(target, "收到")
+    assert client.calls == [("send_channel_msg", {"target_id": "ch-1", "content": "收到"})]
+    assert result.ok is True
+
+
+async def test_adapter_reply_to_dm() -> None:
+    """回复到私聊会话：send_dm_msg，对方 id 是字符串。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+    target = KookTarget(owner_id="u-admin", chat="private", chat_id="u-1", user_id="u-1")
+    result = await adapter.reply(target, "私聊回复")
+    assert client.calls == [("send_dm_msg", {"target_id": "u-1", "content": "私聊回复"})]
+    assert result.ok is True
+
+
+async def test_adapter_reply_unknown_chat_raises() -> None:
+    """会话指向不明（chat=other）：回复不了，当场 ValueError。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+    target = KookTarget(owner_id="u-admin", chat="other")
+    with pytest.raises(ValueError, match="会话指向不明"):
+        await adapter.reply(target, "hi")
+    assert client.calls == []  # 没发出去
+
+
+async def test_adapter_reply_wrong_platform_target_raises() -> None:
+    """别家平台的 target 塞进来（生产与消费必须同平台）：当场 ValueError。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+
+    class _OtherTarget:
+        platform = "onebot"  # 只有路由键，不是 KookTarget
+
+    with pytest.raises(ValueError, match="不是 Kook 的 target"):
+        await adapter.reply(_OtherTarget(), "hi")  # type: ignore[arg-type]
+    assert client.calls == []  # 没发出去
+
+
+def test_adapter_make_target_keeps_ids_as_strings() -> None:
+    """手动构造回程地址：Kook 的 id 是字符串，原样进 target（群聊频道号 / 私聊对方号）。"""
+    adapter = _make_adapter(_FakeClient())
+    group = adapter.make_target(owner_id="u-admin", chat="group", chat_id="ch-7")
+    assert isinstance(group, KookTarget)
+    assert group.chat == "group" and group.chat_id == "ch-7" and group.user_id == ""
+
+    private = adapter.make_target(owner_id="u-admin", chat="private", user_id="u-9", message_id="m-1")
+    assert private.chat == "private" and private.user_id == "u-9" and private.message_id == "m-1"
+
+    fallback = adapter.make_target(owner_id="u-admin", chat="private", chat_id="u-10")
+    assert fallback.user_id == "u-10"  # 没给 user_id 时回退 chat_id
 
 
 async def test_adapter_publishes_translated_event() -> None:

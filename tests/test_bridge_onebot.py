@@ -21,7 +21,7 @@ from websockets.asyncio.client import connect
 
 from nacho.platforms.bridge import Gateway
 from nacho.platforms.bridge.models import PlatformEvent
-from nacho.platforms.bridge.onebot import OneBotAdapter
+from nacho.platforms.bridge.onebot import OneBotAdapter, OneBotTarget
 from nacho.platforms.onebot import OneBotOptions
 
 #: 一条私聊消息事件（同 test_onebot.py 的形状）
@@ -112,6 +112,10 @@ async def test_message_event_translated() -> None:
         # raw 兜底：整条原始事件（消息段数组 / sender 这些翻译不了的字段从这里拿）
         assert event.raw is not None
         assert event.raw.sender == {"nickname": "对方"}  # type: ignore[attr-defined]
+        # 会话定位是 OneBot 自己的 target：号保留整数（免字符串往返）
+        assert isinstance(event.target, OneBotTarget)
+        assert event.target.chat == "private"
+        assert event.target.user_id == 20002
 
 
 async def test_heartbeat_not_published() -> None:
@@ -209,6 +213,92 @@ async def test_send_via_gateway_roundtrip() -> None:
 
         assert result.ok is True
         assert result.data == {"message_id": 7}
+
+
+async def test_reply_roundtrip_private() -> None:
+    """回复到私聊会话：按 target 原样回私聊（send_private_msg，号已是整数）。"""
+    async with served_adapter() as (gateway, adapter, _inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await wait_until(lambda: len(adapter.connections) == 1)
+            answered = asyncio.get_running_loop().create_future()
+
+            async def answer() -> None:
+                raw = await ws.recv()
+                payload = json.loads(raw)
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "data": {"message_id": 8},
+                            "echo": payload["echo"],
+                        }
+                    )
+                )
+                answered.set_result(None)
+
+            worker = asyncio.create_task(answer())
+            target = OneBotTarget(owner_id="", chat="private", user_id=20002)
+            result = await gateway.reply(target, "收到，马上办")
+            await asyncio.wait_for(answered, 3.0)
+            await asyncio.wait_for(worker, 3.0)
+
+        assert result.ok is True
+        assert result.data == {"message_id": 8}
+
+
+async def test_reply_group_uses_group_id() -> None:
+    """回复到群聊会话：send_group_msg，会话定位里的 group_id 即群号（整数，不用转）。"""
+    async with served_adapter() as (gateway, adapter, _inbox):
+        port = adapter.server.options.port
+        async with connect(ws_url(port)) as ws:
+            await wait_until(lambda: len(adapter.connections) == 1)
+            got_action: dict[str, object] = {}
+
+            async def answer() -> None:
+                raw = await ws.recv()
+                payload = json.loads(raw)
+                got_action.update(
+                    {
+                        "action": payload.get("action", ""),
+                        "params": payload.get("params", {}),
+                    }
+                )
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "data": {},
+                            "echo": payload["echo"],
+                        }
+                    )
+                )
+
+            worker = asyncio.create_task(answer())
+            target = OneBotTarget(owner_id="", chat="group", group_id=70001, user_id=20002)
+            await gateway.reply(target, "群里的回复")
+            await asyncio.wait_for(worker, 3.0)
+
+        assert got_action["action"] == "send_group_msg"
+        assert got_action["params"] == {"group_id": 70001, "message": "群里的回复"}
+
+
+def test_make_target_builds_platform_target() -> None:
+    """手动构造回程地址：通用会话字段 -> OneBot 的号（转整数），协议口径一致。"""
+    adapter = OneBotAdapter(OneBotOptions(port=free_port()))
+    group = adapter.make_target(owner_id="", chat="group", chat_id="70001")
+    assert isinstance(group, OneBotTarget)
+    assert group.chat == "group" and group.group_id == 70001
+    assert group.message_id is None
+
+    private = adapter.make_target(owner_id="", chat="private", user_id="20002", message_id="9")
+    assert private.chat == "private" and private.user_id == 20002
+    assert private.message_id == 9
+
+    fallback = adapter.make_target(owner_id="", chat="private", chat_id="20003")
+    assert fallback.user_id == 20003  # 没给 user_id 时回退 chat_id
 
 
 async def test_send_without_online_connection_raises() -> None:

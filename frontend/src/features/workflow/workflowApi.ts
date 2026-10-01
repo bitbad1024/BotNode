@@ -8,7 +8,7 @@ import { http } from '../../lib/http'
  * 所以 ``type`` 就是普通字符串：认不出的类型（旧图 / 扩展没装）画成灰色未知节点，
  * 保存时会被后端校验的 ``UNKNOWN_NODE_TYPE`` 挡下。
  */
-export type PortType = 'trigger' | 'message'
+export type PortType = 'trigger' | 'message' | 'target'
 
 export interface WorkflowNode {
   id: string
@@ -75,6 +75,11 @@ export interface NodeTypeSpec {
   role: 'start' | 'end' | 'normal'
   /** 面板顺序（后端已排好：小的在前） */
   order: number
+  /**
+   * 语义分类（面板按它分组）：trigger / target / constant / action / control / data / end。
+   * 认不出的分类照原样显示，不阻断画布。
+   */
+  category: string
   /** 有没有执行器：声明了但没实现的类型也能存图，跑到它才报错 */
   has_executor: boolean
   min_outgoing: number

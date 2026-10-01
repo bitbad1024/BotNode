@@ -105,6 +105,7 @@ def validate_regex_node(node: WorkflowNode) -> list[ValidationIssue]:
     "regex",
     label="正则",
     order=90,
+    category="data",
     # text / pattern / replace 既是字段名也是数据入口：接线优先，没接线才用手填值
     inputs=[
         TRIGGER_PORT,

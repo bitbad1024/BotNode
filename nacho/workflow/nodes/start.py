@@ -88,9 +88,14 @@ def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
     label="开始",
     order=10,
     role="start",
-    # 端口按**缺省形态**（消息触发 = 触发 + 消息）声明；时间触发只出触发端口，由画布按
-    # config.trigger 切换 —— start 是唯一一个端口随配置变的类型，前端为它留了特判。
-    outputs=[TRIGGER_PORT, PortSpec("message", "message", "消息")],
+    category="trigger",
+    # 端口按**缺省形态**（消息触发 = 触发 + 消息 + target）声明；时间触发只出触发端口，
+    # 由画布按 config.trigger 切换 —— start 是唯一一个端口随配置变的类型，前端为它留了特判。
+    outputs=[
+        TRIGGER_PORT,
+        PortSpec("message", "message", "消息"),
+        PortSpec("target", "target", "会话定位"),
+    ],
     fields=[
         ConfigField("trigger", "触发方式", default="message", options=START_TRIGGER_ORDER),
         # cron / name 只在 trigger=time 时有意义（message 触发下既不校验也没用处），但仍然是
@@ -107,11 +112,14 @@ async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
         return await _register_cron(node, ctx)
 
     # 消息触发的消息是「外面送进来的」：调用方把它放在 ctx.trigger_data 里，这里原样从
-    # message 出口送下去（消息源还没接，缺省就是空串）
+    # message 出口送下去（消息源还没接，缺省就是空串）。target 出口同理：带会话定位
+    # （ChatTarget）下去给 target 节点 / send 节点用；装配层没放（定时触发 / 离线跑）就是
+    # None —— 下游节点自己处理「没有 target」的分支。
     message = ctx.trigger_data.get("message", "")
+    target = ctx.trigger_data.get("target")
     ctx.log.append(f"[start] {node.id} 流程开始（消息触发）")
     ctx.logger.info("工作流开始（消息触发，等待消息进入）", node_id=node.id)
-    return {"message": message}
+    return {"message": message, "target": target}
 
 
 def workflow_task_id(workflow_id: str, node_id: str) -> str:
