@@ -22,7 +22,7 @@ Kook 的是字符串），下游（workflow 触发、日志钩子）不该逐平
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias
+from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 #: 事件大类：消息 / 通知 / 请求 / 元（连接生命周期、心跳一类）
 EventKind: TypeAlias = Literal["message", "notice", "request", "meta"]
@@ -67,45 +67,27 @@ class PlatformEvent:
     time: float = 0.0
     #: 平台原始事件（整条引用，形状随平台）；翻译不了的字段从这里兜
     raw: object = field(default=None, repr=False)
-
-    @property
-    def target(self) -> EventTarget:
-        """这条事件的会话定位（回程地址）：回复时原样传回就能回同一会话。
-
-        身份 / 指向字段从这里派生，不重复存储 —— 事件是冻结的，定位天然一致。
-        """
-        return EventTarget(
-            platform=self.platform,
-            owner_id=self.owner_id,
-            chat=self.chat,
-            chat_id=self.chat_id,
-            user_id=self.user_id,
-            message_id=self.message_id,
-        )
+    #: 会话定位（回程地址，**平台特有**）：回复时原样传回 ``Gateway.reply`` 就能回同一
+    #: 会话。由适配器翻译事件时构造**自己的 target 类型**（见 :class:`ChatTarget`）；
+    #: 没有会话指向的事件（纯通知 / 心跳）是 ``None``。
+    target: ChatTarget | None = field(default=None, repr=False)
 
 
-@dataclass(frozen=True)
-class EventTarget:
-    """一条事件的会话定位：回复消息时的「回程地址」。
+@runtime_checkable
+class ChatTarget(Protocol):
+    """回复目标的最小形状：**只有路由键是跨平台承诺**，定位字段由各适配器自己实现。
 
-    与 :class:`PlatformEvent` 的身份 / 指向字段同口径（``platform`` / ``owner_id`` /
-    ``chat`` / ``chat_id`` / ``user_id`` / ``message_id``），但**不带正文** —— 回消息时
-    内容另给，这一份只负责「回哪」。适配器按 ``chat`` 挑动作、按平台挑参数键名
-    （OneBot 的 ``group_id`` / ``user_id``、Kook 的 ``target_id``），下游不用逐平台认字段。
+    为什么这么分：生产 target 的适配器（翻译事件时构造）和消费它的适配器（``reply``）
+    **一定是同一个平台** —— target 是「回程地址」，回复永远回到产它的适配器，从不跨
+    平台流转。所以这里刻意只承诺 ``platform``（``Gateway.reply`` 按它路由回原适配器），
+    平台特有的定位字段（OneBot 的整数群号 / 用户号、Kook 的字符串频道号 / 对方号）由
+    各适配器自己的 target 类型实现 —— 不再压进统一的字符串口径，免掉「翻译成通用字段、
+    回复时再转回」的往返。协议是 :func:`~typing.runtime_checkable` 的：适配器 ``reply``
+    里按自己平台 ``isinstance`` 下探（生产与消费同平台，这个检查只兜装配错位）。
     """
 
     #: 事件来源平台（回复时按它路由回原适配器）
     platform: str
-    #: 这条连接属于谁（回复发给「谁的」连接）
-    owner_id: str
-    #: 会话指向：群还是私聊；``"other"`` 说明定位不出会话，回不了
-    chat: ChatKind = "other"
-    #: 会话标识：群号（群聊）或对方账号（私聊）；没有是空串
-    chat_id: str = ""
-    #: 对方用户账号；没有是空串
-    user_id: str = ""
-    #: 消息号（撤回一类动作要用）；没有是空串
-    message_id: str = ""
 
 
 @dataclass(frozen=True)

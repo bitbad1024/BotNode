@@ -22,6 +22,7 @@ Kook 是正向 WS（框架当客户端），方向相反，但两边都要能塞
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from nacho.core.logger import BaseLogger
 from nacho.platforms.kook import (
@@ -34,10 +35,33 @@ from nacho.platforms.kook import (
 
 from .gateway import EventSubscriber
 from .logging import bridge_logger
-from .models import ActionResult, BotClient, EventTarget, PlatformEvent
+from .models import ActionResult, BotClient, ChatKind, ChatTarget, PlatformEvent
 
 #: 本适配器的平台标识（路由键；Gateway 里不得与其它适配器重复）
 PLATFORM = "kook"
+
+
+@dataclass(frozen=True)
+class KookTarget:
+    """Kook 的会话定位（回程地址）：id 一律**字符串**（Kook 协议口径）。
+
+    与 OneBot 的整数号相反，Kook 的频道号 / 对方号 / 消息号都是字符串，target 直接
+    原样存，reply 时原样用。生产与消费同平台（见 :class:`ChatTarget`）：本类是适配器
+    翻译事件时构造、塞进 ``PlatformEvent.target`` 的，reply 时原样传回本适配器。
+    """
+
+    #: 这条连接属于谁（回复发给「谁的」机器人）
+    owner_id: str
+    #: 事件来源平台（回复时按它路由回原适配器）
+    platform: str = PLATFORM
+    #: 会话指向：群聊（频道）/ 私聊（DM）；``"other"`` 说明定位不出会话，回不了
+    chat: ChatKind = "other"
+    #: 会话标识：频道号（群聊）或对方账号（私聊）；没有是空串
+    chat_id: str = ""
+    #: 对方用户账号；没有是空串
+    user_id: str = ""
+    #: 消息号（撤回一类动作要用）；没有是空串
+    message_id: str = ""
 
 
 def _translate(event: KookEvent, *, owner_id: str = "") -> PlatformEvent:
@@ -62,6 +86,7 @@ def _translate(event: KookEvent, *, owner_id: str = "") -> PlatformEvent:
     # 内容不在 content 而在 extra，不该进消息路由触发工作流。归为 notice（静默），
     # 身份照译、正文留空，下游（bootstrap）见非 message 只记 debug 不触发。
     if event.type == EVENT_SYSTEM or event.author_id == "1":
+        # 系统事件没有会话指向（chat=other）：target 留 None，回不了也不用回
         return PlatformEvent(
             platform=PLATFORM,
             owner_id=owner_id,
@@ -88,6 +113,13 @@ def _translate(event: KookEvent, *, owner_id: str = "") -> PlatformEvent:
         message_id=event.msg_id,
         time=float(event.msg_timestamp) / 1000.0 if event.msg_timestamp else 0.0,
         raw=event,
+        target=KookTarget(
+            owner_id=owner_id,
+            chat=chat,
+            chat_id=chat_id,
+            user_id=event.author_id,
+            message_id=event.msg_id,
+        ),
     )
 
 
@@ -280,13 +312,19 @@ class KookAdapter:
             raw=response,
         )
 
-    async def reply(self, target: EventTarget, content: str) -> ActionResult:
-        """回复到 ``target`` 指向的会话：群聊回频道、私聊回 DM（id 是字符串，不转整数）。
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
+        """回复到 ``target`` 指向的会话：群聊回频道、私聊回 DM（id 是字符串，直接用）。
 
-        ``target`` 通常来自事件（``PlatformEvent.target``），回复时原样传回即可；
-        Kook 的 id 一律字符串，动作契约与 OneBot 分开（``send_channel_msg`` /
+        ``target`` 是**本适配器**翻译事件时构造的 :class:`KookTarget`（生产与消费
+        同平台，见 :class:`ChatTarget`），回复时原样传回即可；不是本平台的 target
+        当场 ValueError（装配错位看得见）。动作契约与 OneBot 分开（``send_channel_msg`` /
         ``send_dm_msg``，参数键 ``target_id``）。
         """
+        if not isinstance(target, KookTarget):
+            raise ValueError(
+                f"回复目标不是 Kook 的 target（{type(target).__name__}），"
+                "生产与消费必须同平台"
+            )
         if target.chat == "group":
             if not target.chat_id:
                 raise ValueError("频道回复需要 chat_id（会话定位缺频道号）")

@@ -27,7 +27,7 @@ from typing import TypeAlias
 from nacho.core.logger import BaseLogger
 
 from .logging import bridge_logger
-from .models import ActionResult, EventTarget, PlatformEvent
+from .models import ActionResult, ChatTarget, PlatformEvent
 from .protocols import BotAdapter
 
 #: 事件订阅者：收到一条规范化事件时的回调。抛出的异常只会被记下来（见模块文档）。
@@ -113,11 +113,12 @@ class Gateway:
             raise ConnectionError(f"没有 {platform!r} 平台的适配器（已注册：{known}）")
         return await adapter.send(owner_id, action, **params)
 
-    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
         """回复一条消息到 ``target`` 指向的会话：按 ``target.platform`` 路由回原适配器。
 
-        事件自带会话定位（``PlatformEvent.target``），回复时**原样传回**即可 ——
-        发到哪、按什么动作发，适配器按 ``target.chat`` 自己挑，调用方不再拼参数。
+        事件自带会话定位（``PlatformEvent.target``，**产它那个适配器**的 target 类型），
+        回复时**原样传回**即可 —— 发到哪、按什么动作发，由产 target 的适配器自己挑，
+        调用方不碰平台字段。总线只认路由键，target 的形状它不管。
 
         :raises ConnectionError: 没注册这个平台（装配问题当场抛，消息里带上已注册
             平台）；归属下没有在线连接由适配器以同一口径抛。

@@ -10,7 +10,7 @@ import dataclasses
 import pytest
 
 from nacho.platforms.bridge import Gateway
-from nacho.platforms.bridge.models import ActionResult, BotClient, EventTarget, PlatformEvent
+from nacho.platforms.bridge.models import ActionResult, BotClient, ChatTarget, PlatformEvent
 from nacho.platforms.bridge.protocols import BotAdapter
 
 
@@ -60,8 +60,30 @@ def test_platform_event_frozen() -> None:
         event.kind = "message"  # type: ignore[misc]
 
 
+@dataclasses.dataclass(frozen=True)
+class _ChatTarget:
+    """测试用最小 target：按「结构化满足 ChatTarget 协议」长（platform 是协议承诺）。
+
+    平台特有的定位字段（chat / chat_id / user_id / message_id）由**各适配器自己定义**
+    （如 OneBot 的 ``OneBotTarget``、Kook 的 ``KookTarget``）；这一份只是协议测试用的
+    最小实现，验证「只认路由键、形状自便」的兼容面。
+    """
+
+    platform: str
+    owner_id: str
+    chat: str = "other"
+    chat_id: str = ""
+    user_id: str = ""
+    message_id: str = ""
+
+
 def test_platform_event_target_carries_session_location() -> None:
-    """事件自带会话定位（target）：回复时原样传回就能回同一会话。"""
+    """事件自带会话定位（target）：回复时原样传回就能回同一会话。
+
+    target 是**适配器翻译时塞进来的平台特有对象**（不再从规范化字段派生）——这里用
+    测试的 ``_ChatTarget`` 模拟「产 target 的适配器」，断言它原样挂在事件上。
+    """
+    target = _ChatTarget(platform="onebot", owner_id="u-admin", chat="group", chat_id="123456")
     event = PlatformEvent(
         platform="onebot",
         owner_id="u-admin",
@@ -70,23 +92,15 @@ def test_platform_event_target_carries_session_location() -> None:
         chat_id="123456",
         user_id="10086",
         message_id="7",
+        target=target,
     )
-    target = event.target
-    assert target.platform == "onebot"
-    assert target.owner_id == "u-admin"
-    assert target.chat == "group"
-    assert target.chat_id == "123456"
-    assert target.user_id == "10086"
-    assert target.message_id == "7"
+    assert event.target is target  # 原样回传，字段形状由产它的适配器定
 
 
-def test_event_target_minimal_defaults() -> None:
-    """会话定位最小形状：只给平台与归属，其余字段有确定空口径。"""
-    target = EventTarget(platform="onebot", owner_id="u-admin")
-    assert target.chat == "other"
-    assert target.chat_id == ""
-    assert target.user_id == ""
-    assert target.message_id == ""
+def test_chat_target_protocol_minimal_contract() -> None:
+    """ChatTarget 协议只承诺路由键：带 platform 就被认成协议，其余字段自便。"""
+    assert isinstance(_ChatTarget(platform="kook", owner_id="u-admin"), ChatTarget)
+    assert not isinstance(object(), ChatTarget)
 
 
 def test_bot_client_minimal() -> None:
@@ -125,7 +139,7 @@ class _DuckAdapter:
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         raise ConnectionError("没有连接")
 
-    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
         raise ConnectionError("没有连接")
 
 
@@ -148,7 +162,7 @@ class _FakeAdapter:
         self.platform = platform
         self._online = online
         self.calls: list[tuple[str, str, dict[str, object]]] = []  # (owner, action, params)
-        self.replies: list[tuple[EventTarget, str]] = []  # (target, content)
+        self.replies: list[tuple[ChatTarget, str]] = []  # (target, content)
         self.started = 0
         self.stopped = 0
 
@@ -167,7 +181,7 @@ class _FakeAdapter:
         self.calls.append((owner_id, action, params))
         return ActionResult(ok=True, data={"echo_of": action})
 
-    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+    async def reply(self, target: ChatTarget, content: str) -> ActionResult:
         self.replies.append((target, content))
         return ActionResult(ok=True, data={"reply_to": target.chat_id})
 
@@ -250,7 +264,7 @@ async def test_gateway_reply_routes_by_target_platform() -> None:
     gateway.register(onebot)
     gateway.register(kook)
 
-    target = EventTarget(
+    target = _ChatTarget(
         platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1", user_id="42"
     )
     result = await gateway.reply(target, "收到，马上办")
@@ -266,7 +280,7 @@ async def test_gateway_reply_unknown_platform_raises() -> None:
     gateway.register(_FakeAdapter("onebot"))
     with pytest.raises(ConnectionError, match="kook"):
         await gateway.reply(
-            EventTarget(platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1"),
+            _ChatTarget(platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1"),
             "hi",
         )
 
