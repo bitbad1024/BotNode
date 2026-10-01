@@ -34,7 +34,7 @@ from nacho.platforms.kook import (
 
 from .gateway import EventSubscriber
 from .logging import bridge_logger
-from .models import ActionResult, BotClient, PlatformEvent
+from .models import ActionResult, BotClient, EventTarget, PlatformEvent
 
 #: 本适配器的平台标识（路由键；Gateway 里不得与其它适配器重复）
 PLATFORM = "kook"
@@ -279,6 +279,27 @@ class KookAdapter:
             data=response.data,
             raw=response,
         )
+
+    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+        """回复到 ``target`` 指向的会话：群聊回频道、私聊回 DM（id 是字符串，不转整数）。
+
+        ``target`` 通常来自事件（``PlatformEvent.target``），回复时原样传回即可；
+        Kook 的 id 一律字符串，动作契约与 OneBot 分开（``send_channel_msg`` /
+        ``send_dm_msg``，参数键 ``target_id``）。
+        """
+        if target.chat == "group":
+            if not target.chat_id:
+                raise ValueError("频道回复需要 chat_id（会话定位缺频道号）")
+            return await self.send(
+                target.owner_id, "send_channel_msg", target_id=target.chat_id, content=content
+            )
+        if target.chat == "private":
+            if not target.user_id:
+                raise ValueError("私聊回复需要 user_id（会话定位缺对方账号）")
+            return await self.send(
+                target.owner_id, "send_dm_msg", target_id=target.user_id, content=content
+            )
+        raise ValueError(f"会话定位的会话指向不明（chat={target.chat!r}），回不了")
 
     def _resolve_client(self, owner_id: str) -> KookClient | None:
         """按 bot_id -> 机器人号 -> 单实例兜底 的顺序找一个客户端。"""

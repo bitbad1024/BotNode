@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from nacho.platforms.bridge.kook import KookAdapter, _translate
-from nacho.platforms.bridge.models import PlatformEvent
+from nacho.platforms.bridge.models import EventTarget, PlatformEvent
 from nacho.platforms.kook import KookEvent, KookOptions
 
 
@@ -164,6 +164,40 @@ async def test_adapter_send_failure_receipt() -> None:
     result = await adapter.send("bot-1", "send_channel_msg", target_id="ch-1", content="hi")
     assert result.ok is False
     assert result.message == "参数错误"
+
+
+async def test_adapter_reply_to_channel() -> None:
+    """回复到群聊会话：按 target 原样回频道（send_channel_msg，id 是字符串）。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+    target = EventTarget(
+        platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1", user_id="u-1"
+    )
+    result = await adapter.reply(target, "收到")
+    assert client.calls == [("send_channel_msg", {"target_id": "ch-1", "content": "收到"})]
+    assert result.ok is True
+
+
+async def test_adapter_reply_to_dm() -> None:
+    """回复到私聊会话：send_dm_msg，对方 id 是字符串。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+    target = EventTarget(
+        platform="kook", owner_id="u-admin", chat="private", chat_id="u-1", user_id="u-1"
+    )
+    result = await adapter.reply(target, "私聊回复")
+    assert client.calls == [("send_dm_msg", {"target_id": "u-1", "content": "私聊回复"})]
+    assert result.ok is True
+
+
+async def test_adapter_reply_unknown_chat_raises() -> None:
+    """会话指向不明（chat=other）：回复不了，当场 ValueError。"""
+    client = _FakeClient()
+    adapter = _make_adapter(client)
+    target = EventTarget(platform="kook", owner_id="u-admin", chat="other")
+    with pytest.raises(ValueError, match="会话指向不明"):
+        await adapter.reply(target, "hi")
+    assert client.calls == []  # 没发出去
 
 
 async def test_adapter_publishes_translated_event() -> None:

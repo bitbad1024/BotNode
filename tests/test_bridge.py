@@ -10,7 +10,7 @@ import dataclasses
 import pytest
 
 from nacho.platforms.bridge import Gateway
-from nacho.platforms.bridge.models import ActionResult, BotClient, PlatformEvent
+from nacho.platforms.bridge.models import ActionResult, BotClient, EventTarget, PlatformEvent
 from nacho.platforms.bridge.protocols import BotAdapter
 
 
@@ -60,6 +60,35 @@ def test_platform_event_frozen() -> None:
         event.kind = "message"  # type: ignore[misc]
 
 
+def test_platform_event_target_carries_session_location() -> None:
+    """事件自带会话定位（target）：回复时原样传回就能回同一会话。"""
+    event = PlatformEvent(
+        platform="onebot",
+        owner_id="u-admin",
+        kind="message",
+        chat="group",
+        chat_id="123456",
+        user_id="10086",
+        message_id="7",
+    )
+    target = event.target
+    assert target.platform == "onebot"
+    assert target.owner_id == "u-admin"
+    assert target.chat == "group"
+    assert target.chat_id == "123456"
+    assert target.user_id == "10086"
+    assert target.message_id == "7"
+
+
+def test_event_target_minimal_defaults() -> None:
+    """会话定位最小形状：只给平台与归属，其余字段有确定空口径。"""
+    target = EventTarget(platform="onebot", owner_id="u-admin")
+    assert target.chat == "other"
+    assert target.chat_id == ""
+    assert target.user_id == ""
+    assert target.message_id == ""
+
+
 def test_bot_client_minimal() -> None:
     """在线列表一行：最小只需两个身份字段，其余空口径。"""
     client = BotClient(client_id="c1", owner_id="u-admin")
@@ -96,6 +125,9 @@ class _DuckAdapter:
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         raise ConnectionError("没有连接")
 
+    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+        raise ConnectionError("没有连接")
+
 
 def test_duck_adapter_satisfies_protocol() -> None:
     """结构化满足：没继承协议、按形状长就能被认成 BotAdapter。"""
@@ -116,6 +148,7 @@ class _FakeAdapter:
         self.platform = platform
         self._online = online
         self.calls: list[tuple[str, str, dict[str, object]]] = []  # (owner, action, params)
+        self.replies: list[tuple[EventTarget, str]] = []  # (target, content)
         self.started = 0
         self.stopped = 0
 
@@ -133,6 +166,10 @@ class _FakeAdapter:
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         self.calls.append((owner_id, action, params))
         return ActionResult(ok=True, data={"echo_of": action})
+
+    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+        self.replies.append((target, content))
+        return ActionResult(ok=True, data={"reply_to": target.chat_id})
 
 
 async def test_gateway_publish_reaches_subscribers_in_order() -> None:
@@ -203,6 +240,35 @@ async def test_gateway_send_unknown_platform_raises() -> None:
     gateway.register(_FakeAdapter("onebot"))
     with pytest.raises(ConnectionError, match="onebot"):
         await gateway.send("kook", "u-admin", "send_msg")
+
+
+async def test_gateway_reply_routes_by_target_platform() -> None:
+    """回复路由：按 target.platform 回到原适配器，内容原样转述。"""
+    gateway = Gateway()
+    onebot = _FakeAdapter("onebot")
+    kook = _FakeAdapter("kook")
+    gateway.register(onebot)
+    gateway.register(kook)
+
+    target = EventTarget(
+        platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1", user_id="42"
+    )
+    result = await gateway.reply(target, "收到，马上办")
+
+    assert result.ok is True and result.data == {"reply_to": "ch-1"}
+    assert kook.replies == [(target, "收到，马上办")]
+    assert onebot.replies == []  # 路由只去 kook
+
+
+async def test_gateway_reply_unknown_platform_raises() -> None:
+    """回复到没注册的平台：ConnectionError，消息里带已注册列表。"""
+    gateway = Gateway()
+    gateway.register(_FakeAdapter("onebot"))
+    with pytest.raises(ConnectionError, match="kook"):
+        await gateway.reply(
+            EventTarget(platform="kook", owner_id="u-admin", chat="group", chat_id="ch-1"),
+            "hi",
+        )
 
 
 async def test_gateway_lifecycle_order() -> None:

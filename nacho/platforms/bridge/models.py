@@ -68,6 +68,45 @@ class PlatformEvent:
     #: 平台原始事件（整条引用，形状随平台）；翻译不了的字段从这里兜
     raw: object = field(default=None, repr=False)
 
+    @property
+    def target(self) -> EventTarget:
+        """这条事件的会话定位（回程地址）：回复时原样传回就能回同一会话。
+
+        身份 / 指向字段从这里派生，不重复存储 —— 事件是冻结的，定位天然一致。
+        """
+        return EventTarget(
+            platform=self.platform,
+            owner_id=self.owner_id,
+            chat=self.chat,
+            chat_id=self.chat_id,
+            user_id=self.user_id,
+            message_id=self.message_id,
+        )
+
+
+@dataclass(frozen=True)
+class EventTarget:
+    """一条事件的会话定位：回复消息时的「回程地址」。
+
+    与 :class:`PlatformEvent` 的身份 / 指向字段同口径（``platform`` / ``owner_id`` /
+    ``chat`` / ``chat_id`` / ``user_id`` / ``message_id``），但**不带正文** —— 回消息时
+    内容另给，这一份只负责「回哪」。适配器按 ``chat`` 挑动作、按平台挑参数键名
+    （OneBot 的 ``group_id`` / ``user_id``、Kook 的 ``target_id``），下游不用逐平台认字段。
+    """
+
+    #: 事件来源平台（回复时按它路由回原适配器）
+    platform: str
+    #: 这条连接属于谁（回复发给「谁的」连接）
+    owner_id: str
+    #: 会话指向：群还是私聊；``"other"`` 说明定位不出会话，回不了
+    chat: ChatKind = "other"
+    #: 会话标识：群号（群聊）或对方账号（私聊）；没有是空串
+    chat_id: str = ""
+    #: 对方用户账号；没有是空串
+    user_id: str = ""
+    #: 消息号（撤回一类动作要用）；没有是空串
+    message_id: str = ""
+
 
 @dataclass(frozen=True)
 class BotClient:

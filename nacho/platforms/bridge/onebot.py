@@ -34,7 +34,7 @@ from nacho.platforms.onebot.server import ClientEntry, OneBotConnection
 
 from .gateway import EventSubscriber
 from .logging import bridge_logger
-from .models import ActionResult, BotClient, PlatformEvent
+from .models import ActionResult, BotClient, EventTarget, PlatformEvent
 
 if TYPE_CHECKING:
     from nacho.api.api.onebot.protocols import TokenRegistry
@@ -214,6 +214,32 @@ class OneBotAdapter:
             data=response.data,
             raw=response,
         )
+
+    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+        """回复到 ``target`` 指向的会话：群聊回群、私聊回私聊（号转整数）。
+
+        ``target`` 通常来自事件（``PlatformEvent.target``），回复时原样传回即可；
+        群号 / 用户号在发送前转整数（OneBot 协议口径，同 ``send`` 节点的约定）。
+        """
+        if target.chat == "group":
+            if not target.chat_id:
+                raise ValueError("群聊回复需要 chat_id（会话定位缺群号）")
+            return await self.send(
+                target.owner_id,
+                "send_group_msg",
+                group_id=int(target.chat_id),
+                message=content,
+            )
+        if target.chat == "private":
+            if not target.user_id:
+                raise ValueError("私聊回复需要 user_id（会话定位缺对方账号）")
+            return await self.send(
+                target.owner_id,
+                "send_private_msg",
+                user_id=int(target.user_id),
+                message=content,
+            )
+        raise ValueError(f"会话定位的会话指向不明（chat={target.chat!r}），回不了")
 
     # ------------------------------------------------------------------ 兼容面（透传）
     # 接口层 OneBotLike 协议 + 工作流 ctx.onebot 鸭子形状，P2 验收线：下游零改动。

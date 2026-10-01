@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .models import ActionResult, BotClient
+from .models import ActionResult, BotClient, EventTarget
 
 
 @runtime_checkable
@@ -56,5 +56,16 @@ class BotAdapter(Protocol):
         :raises ConnectionError: 环境问题当场抛（没这个归属的在线连接）——与 onebot
             节点「没配好看得见」同一口径；走到 :class:`~nacho.platforms.bridge.models.ActionResult`
             里的失败是「发出去、对方答了不成功」，两者分开。
+        """
+        ...
+
+    async def reply(self, target: EventTarget, content: str) -> ActionResult:
+        """回复一条消息到 ``target`` 指向的会话（原样路径原样返回）。
+
+        适配器按 ``target.chat`` 挑动作与参数键（OneBot 的 ``send_group_msg`` /
+        ``send_private_msg``、Kook 的 ``send_channel_msg`` / ``send_dm_msg``），
+        下游（工作流 / 接口层）不再逐平台拼 ``group_id`` / ``user_id``。
+
+        :raises ConnectionError: 环境问题当场抛（同 ``send`` 口径）。
         """
         ...
