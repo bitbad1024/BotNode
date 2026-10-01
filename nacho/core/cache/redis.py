@@ -44,7 +44,9 @@ class RedisCache:
             return
         try:
             from redis.asyncio import Redis
+            from redis.backoff import ExponentialBackoff
             from redis.exceptions import RedisError
+            from redis.retry import Retry
         except ImportError as exc:
             hint = "RedisCache 需要 redis 包：pip install redis（或 pip install 'nacho[redis]'）"
             raise CacheError(hint) from exc
@@ -57,6 +59,10 @@ class RedisCache:
             username=options.username or None,  # Redis 6+ ACL；空 = 默认用户
             password=options.password or None,  # 空 = 不认证
             socket_timeout=options.socket_timeout,
+            # 驱动默认对连接错误做 10 次指数退避重试、建连超时走系统默认（实测要干等
+            # 二十几秒才报错）；这里显式给短建连超时 + 少重试，Redis 起不来时尽快失败
+            socket_connect_timeout=options.socket_connect_timeout,
+            retry=Retry(ExponentialBackoff(), retries=options.connect_retries),
             max_connections=options.max_connections,
             decode_responses=True,  # 读回来就是 str，和内存后端一致
         )

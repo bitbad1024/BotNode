@@ -7,8 +7,9 @@
 唯一多做的一件事是把「``ttl=None`` 该用哪个 TTL」按配置定下来。
 
 于是上层拿到的服务与后端无关：同一个 ``get`` / ``set`` / ``ttl`` 语义，同一套
-:class:`~nacho.core.cache.models.CacheError` 异常；配了 Redis 而它连不上时还能退回内存
-（``fallback_to_memory``），业务代码不必写第二个分支，也不必知道这件事。
+:class:`~nacho.core.cache.models.CacheError` 异常；配了 Redis 而它连不上时默认**当场报错**
+并提示去配置里改（只有显式打开 ``fallback_to_memory`` 才退回内存，业务代码不必写第二个
+分支，也不必知道这件事）。
 """
 from __future__ import annotations
 
@@ -67,9 +68,10 @@ class Cache:
     async def start(self) -> None:
         """按选项建后端并连上；重复调用是空操作。
 
-        ``backend="redis"`` 而 Redis 连不上时：``fallback_to_memory`` 为真就退回内存并记一条
-        warning（上层无感），为假则把 :class:`CacheError` 抛出去让启动阶段直接失败。
-        降级只在这一刻判断一次，之后不自动重连 —— 要重新试就 ``stop()`` 再 ``start()``。
+        ``backend="redis"`` 而 Redis 连不上时：默认**直接抛** :class:`CacheError`（报错信息里
+        带「检查配置」的提示）让启动阶段失败；只有显式打开 ``fallback_to_memory`` 才退回内存
+        并记一条 warning（上层无感）。降级只在这一刻判断一次，之后不自动重连 —— 要重新试就
+        ``stop()`` 再 ``start()``。
         """
         if self._backend is not None:
             return
@@ -83,7 +85,10 @@ class Cache:
                 await redis_backend.start()
             except CacheError as exc:
                 if not options.fallback_to_memory:
-                    raise
+                    raise CacheError(
+                        f"{exc}（请检查 config.toml 的 [cache.redis] 配置；"
+                        "若确实想退回本地缓存，可在 [cache] 里设 fallback_to_memory = true）"
+                    ) from exc
                 self._degraded = True
                 self._log().warning("Redis 起不来，退回本地缓存", error=str(exc))
                 backend = MemoryCache(sweep_interval=options.sweep_interval, logger=self._log())

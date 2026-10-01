@@ -193,7 +193,8 @@ async def run(
     # 再调便捷函数就直接落进这份核心，未装配则当场抛错（fail fast），而不是各自 default_core()
     wire_loggers(default_core())
 
-    # 缓存：默认（memory）就是本地内存，配了 redis 而连不上时按 fallback_to_memory 处理
+    # 缓存：默认（memory）就是本地内存；配了 redis 而连不上时默认当场报错（提示改配置），
+    # 只有 fallback_to_memory = true 才退回内存
     cache.configure(CacheOptions.from_mapping(cache_config))
     await cache.start()
 
