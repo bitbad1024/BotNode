@@ -490,3 +490,122 @@ async def test_client_heartbeat_pings_latest_sn() -> None:
         server.close()
         await server.wait_closed()
 
+
+async def test_client_resume_rejected_falls_back_to_fresh_connection() -> None:
+    """续传被拒（hello code != 0）后清掉续传状态：下次重连走全新连接，不死循环。
+
+    复现线上问题：重连一直带着失效的 ``resume=1&sn=..&session_id=..`` 参数，网关连上就断、
+    断了又连。修复后第二次（续传被拒）必须清状态，第三次是全新连接并正常收到事件。
+    """
+    port = free_port()
+    paths: list[str] = []
+    connection_no = 0
+
+    async def handler(ws) -> None:  # type: ignore[no-untyped-def]
+        nonlocal connection_no
+        connection_no += 1
+        paths.append(cast("str", ws.request.path))
+        if connection_no == 1:
+            # 第一次：正常握手 + 一条事件，然后服务端掐线
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-1"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "hi"}, "sn": 1})
+            )
+            await ws.close()
+        elif connection_no == 2:
+            # 第二次：网关拒绝续传（hello code != 0），然后掐线
+            await ws.send(json.dumps({"s": 1, "d": {"code": 40100, "session_id": ""}}))
+            await ws.close()
+        else:
+            # 第三次：全新连接成功，正常收事件
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-3"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "again"}, "sn": 2})
+            )
+            with suppress(Exception):
+                async for raw in ws:
+                    pass
+
+    server = await serve(handler, "127.0.0.1", port)
+    received: list[KookEvent] = []
+
+    async def on_event(event: KookEvent) -> None:
+        received.append(event)
+
+    client = KookClient(
+        KookOptions(
+            gateway=f"ws://127.0.0.1:{port}",
+            token="abc",
+            reconnect_interval=0.05,  # 别等默认 3 秒
+        ),
+        handler=on_event,
+    )
+    try:
+        await client.start()
+        # 第三次连接（全新）收到事件，说明没死循环
+        assert await wait_until(lambda: len(received) >= 2, timeout=3.0)
+        assert connection_no >= 3
+        # 第二次是续传尝试（带 resume），第三次是全新连接（不带）
+        assert "resume=1" in paths[1]
+        assert "resume=1" not in paths[2]
+    finally:
+        await client.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_client_disconnect_before_hello_clears_resume_state() -> None:
+    """连上但没完成握手就被掐（没收到 code==0 的 hello）：清续传状态，下次全新连接。"""
+    port = free_port()
+    paths: list[str] = []
+    connection_no = 0
+
+    async def handler(ws) -> None:  # type: ignore[no-untyped-def]
+        nonlocal connection_no
+        connection_no += 1
+        paths.append(cast("str", ws.request.path))
+        if connection_no == 1:
+            # 第一次：正常握手 + 一条事件，然后服务端掐线
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-1"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "hi"}, "sn": 1})
+            )
+            await ws.close()
+        elif connection_no == 2:
+            # 第二次：不发 hello 直接掐线（网关直接拒 / 连接没建立起来）
+            await ws.close()
+        else:
+            # 第三次：全新连接成功
+            await ws.send(json.dumps({"s": 1, "d": {"code": 0, "session_id": "sess-3"}}))
+            await ws.send(
+                json.dumps({"s": 0, "d": {"type": EVENT_TEXT, "content": "again"}, "sn": 2})
+            )
+            with suppress(Exception):
+                async for raw in ws:
+                    pass
+
+    server = await serve(handler, "127.0.0.1", port)
+    received: list[KookEvent] = []
+
+    async def on_event(event: KookEvent) -> None:
+        received.append(event)
+
+    client = KookClient(
+        KookOptions(
+            gateway=f"ws://127.0.0.1:{port}",
+            token="abc",
+            reconnect_interval=0.05,
+        ),
+        handler=on_event,
+    )
+    try:
+        await client.start()
+        assert await wait_until(lambda: len(received) >= 2, timeout=3.0)
+        assert connection_no >= 3
+        assert "resume=1" in paths[1]
+        assert "resume=1" not in paths[2]
+    finally:
+        await client.stop()
+        server.close()
+        await server.wait_closed()
+

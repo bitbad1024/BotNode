@@ -143,6 +143,12 @@ class KookClient:
         self._sn: int = 0
         #: hello 下发的 session_id：断线重连 resume 时拼回网关地址
         self._session_id: str = ""
+        #: 正在用的网关地址（不含 resume 参数）：续传必须复用同一个地址——每次都重新
+        #: discover 会拿到带新 token 的地址，token 和 session 对不上，续传必被网关拒绝
+        self._gateway_url: str = ""
+        #: 本次连接有没有完成握手（收到 code==0 的 hello）：没握手就断开 = 续传被拒 /
+        #: 网关直接掐线，收尾时要清掉续传状态，让下轮重连走全新连接
+        self._greeted: bool = False
         #: 连上后从事件里学到的机器人自身 id；没学到是空串
         self.self_id: str = ""
         #: 最近一次连上的时刻（Unix 秒）；没连过是 0
@@ -334,9 +340,13 @@ class KookClient:
     async def _connect_once(self) -> None:
         """建一条连接并跑它的收报文循环；连接断开 / 出错时返回（由 _run_loop 决定重连）。"""
         token = self._options.token
-        gateway = self._options.gateway or await self._discover_gateway()
+        # 网关地址只取一次、断线复用：续传必须用同一地址（同 token 才配得上 session_id）；
+        # 每次都重新 discover 会拿新 token，resume 必被拒，形成「连上就断、断了又连」的死循环
+        if not self._gateway_url:
+            self._gateway_url = self._options.gateway or await self._discover_gateway()
         # 断线重连：把已处理的最大 sn 和上一连接的 session_id 拼进去，让网关续传而不是重放
-        gateway = _with_resume(gateway, self._sn, self._session_id)
+        gateway = _with_resume(self._gateway_url, self._sn, self._session_id)
+        self._greeted = False
         self._log.info("kook 正在连接网关", gateway=gateway, token_set=bool(token))
         async with ws_connect(
             gateway,
@@ -367,6 +377,13 @@ class KookClient:
                         await self._consume_task
                     self._consume_task = None
                 self._ws = None
+        # 连接收尾：没完成握手就断了（resume 被拒 / 网关直接掐线）——清掉续传状态，
+        # 让下轮重连走全新连接；否则会拿失效的 session_id 无限重试
+        if not self._greeted:
+            self._log.warning("kook 网关握手未完成（续传被拒或连接被掐），下次全新连接")
+            self._session_id = ""
+            self._sn = 0
+            self._gateway_url = ""
 
     async def _heartbeat(self) -> None:
         """定期发 signal 2（ping，带最近 sn），保活连接。"""
@@ -395,8 +412,20 @@ class KookClient:
         signal = loaded.get("s")
         data = loaded.get("d")
         if signal == 1:  # hello：记下 session_id（断线重连 resume 要用），立刻 ping 一次
+            code = data.get("code", 0) if isinstance(data, dict) else 0
+            if code != 0:
+                # 续传被拒（session 失效 / token 不对 / 网关不认这条续传）：清掉续传状态，
+                # 下轮重连走全新连接；否则会拿失效 session_id 无限重试
+                self._log.warning(
+                    "kook 网关拒绝续传（hello code=%s），下次将全新连接", code=code
+                )
+                self._session_id = ""
+                self._sn = 0
+                self._gateway_url = ""
+                return
             if isinstance(data, dict) and isinstance(data.get("session_id"), str):
                 self._session_id = data["session_id"]
+            self._greeted = True
             self._ping_now()
             return
         if signal == 3:  # pong：心跳回应，不推进 sn
