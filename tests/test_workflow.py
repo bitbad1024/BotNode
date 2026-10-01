@@ -1681,58 +1681,42 @@ class _FakeGateway:
 
 
 @pytest.mark.asyncio
-async def test_onebot_sends_via_owned_connection_and_shows_receipt() -> None:
-    """onebot 别名走 ``ctx.gateway``（platform 锁死 onebot）：参数按动作组装，回执转老端口名。"""
+async def test_onebot_replies_via_gateway_to_target() -> None:
+    """onebot 别名与 send 同款输入：把 message 发到 target 指向的会话，回执转老端口名。"""
     gateway = _FakeGateway(response=_FakeActionResponse(data={"message_id": 7}))
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="ob1", type="onebot")
+    target = gateway.make_target("onebot", chat="group", chat_id="123456")
+    ctx_.inputs = {"target": target, "message": "开播了"}
+    result = await exec_onebot(node_, ctx_)
 
-    async def run(action: str, **inputs: str) -> dict[str, Any]:
-        gateway.calls.clear()
-        node_ = WorkflowNode(id="ob1", type="onebot", config={"action": action})
-        ctx_.inputs = dict(inputs)
-        return await exec_onebot(node_, ctx_)
-
-    result = await run("send_group_msg", message="开播了", group_id="123456")
-    assert gateway.calls == [
-        ("onebot", "u-admin", "send_group_msg", {"group_id": 123456, "message": "开播了"})
-    ]
+    assert gateway.reply_calls == [(target, "开播了")]
     assert result["onebot_retcode"] == 0
     assert result["onebot_data"] == '{"message_id":7}'  # 回执数据：紧凑 JSON
-    assert any("[onebot] ob1: send_group_msg -> retcode 0" in line for line in ctx_.log)
-
-    await run("send_private_msg", message="悄悄话", user_id="10001")
-    assert gateway.calls == [
-        ("onebot", "u-admin", "send_private_msg", {"user_id": 10001, "message": "悄悄话"})
-    ]
-
-    await run("delete_msg", message_id="42")
-    assert gateway.calls == [("onebot", "u-admin", "delete_msg", {"message_id": 42})]  # 号转整数
+    assert any("[onebot] ob1: reply -> retcode 0" in line for line in ctx_.log)
 
 
 @pytest.mark.asyncio
-async def test_onebot_send_msg_prefers_group_then_private() -> None:
-    """send_msg 智能分流：填了群号发群，群号空则发私聊；两样都没给当场抛。"""
+async def test_onebot_without_target_skips_and_requires_gateway() -> None:
+    """没有会话定位就不发（retcode 记 1 送下游，不碰网关）；有 target 但没接总线是环境问题，当场抛。"""
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="ob1", type="onebot")
 
-    async def run(**inputs: str) -> None:
-        gateway.calls.clear()
-        node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_msg"})
-        ctx_.inputs = dict(inputs)
-        await exec_onebot(node_, ctx_)
+    # 没有 target：不发
+    ctx_.inputs = {"message": "hi"}
+    result = await exec_onebot(node_, ctx_)
+    assert result == {"onebot_retcode": 1, "onebot_data": ""}
+    assert gateway.reply_calls == []
 
-    await run(message="hi", group_id="9", user_id="7")
-    assert gateway.calls == [
-        ("onebot", "u-admin", "send_msg", {"message_type": "group", "group_id": 9, "message": "hi"})
-    ]
-
-    await run(message="hi", user_id="7")
-    assert gateway.calls == [
-        ("onebot", "u-admin", "send_msg", {"message_type": "private", "user_id": 7, "message": "hi"})
-    ]
-
-    with pytest.raises(ValueError, match="至少要给"):
-        await run(message="hi")
+    # 有 target 但没接总线：环境问题当场抛
+    no_gateway = NodeExecutionContext(owner_id="u-admin")
+    no_gateway.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="7"),
+        "message": "hi",
+    }
+    with pytest.raises(ConnectionError, match="需要平台总线"):
+        await exec_onebot(node_, no_gateway)
 
 
 @pytest.mark.asyncio
@@ -1742,48 +1726,20 @@ async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"})
     )
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(
-        id="ob1", type="onebot", config={"action": "send_group_msg", "group_id": "1"}
-    )
-    ctx_.inputs = {"message": "hi"}
+    node_ = WorkflowNode(id="ob1", type="onebot")
+    ctx_.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
+        "message": "hi",
+    }
     result = await exec_onebot(node_, ctx_)  # 不抛
 
     assert result["onebot_retcode"] == 1200  # retcode 从回执 raw 下探出来
     assert "账号被禁言" in result["onebot_data"]
-    assert any("[onebot] ob1: send_group_msg -> retcode 1200" in line for line in ctx_.log)
+    assert any("[onebot] ob1: reply -> retcode 1200" in line for line in ctx_.log)
 
 
-@pytest.mark.asyncio
-async def test_onebot_raises_when_gateway_missing() -> None:
-    """环境问题当场抛：没注入平台总线（ctx.gateway 是 None）。"""
-    node_ = WorkflowNode(
-        id="ob1", type="onebot", config={"action": "send_group_msg", "group_id": "1"}
-    )
-    ctx_ = NodeExecutionContext(owner_id="u-admin")  # 装配层没接总线
-    ctx_.inputs = {"message": "hi"}
-    with pytest.raises(ConnectionError, match="需要平台总线"):
-        await exec_onebot(node_, ctx_)
-
-
-@pytest.mark.asyncio
-async def test_onebot_rejects_bad_params() -> None:
-    """配置问题当场抛：参数没给 / 号不是整数。"""
-    gateway = _FakeGateway()
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-
-    ctx_.inputs = {"message": "hi"}  # 群号没接线也没手填
-    node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "send_group_msg"})
-    with pytest.raises(ValueError, match="group_id"):
-        await exec_onebot(node_, ctx_)
-
-    ctx_.inputs = {"message_id": "四十二"}  # 线上送来的号不像整数
-    node_ = WorkflowNode(id="ob1", type="onebot", config={"action": "delete_msg"})
-    with pytest.raises(ValueError, match="不是整数"):
-        await exec_onebot(node_, ctx_)
-
-
-def test_onebot_action_is_validated() -> None:
-    """动作枚举在语义阶段拦住（拼错保存就报 INVALID_ONEBOT_ACTION），合法值放行。"""
+def test_onebot_requires_a_target_source() -> None:
+    """target 是 onebot 的必填入口（与 send 同款）：没接线也没手填，语义阶段报 INPUT_NOT_CONNECTED。"""
 
     def graph_with(**config: object) -> dict[str, object]:
         return {
@@ -1795,11 +1751,9 @@ def test_onebot_action_is_validated() -> None:
             "edges": [edge("s", "ob"), edge("ob", "e")],
         }
 
-    assert validate_graph(graph_with(action="send_group_msg", group_id="1", message="hi")).valid
-
-    report = validate_graph(graph_with(action="发消息", group_id="1", message="hi"))
+    report = validate_graph(graph_with(message="hi"))
     assert not report.valid and report.stage == STAGE_SEMANTIC
-    assert [issue.code for issue in report.errors] == ["INVALID_ONEBOT_ACTION"]
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
 
 
 # ------------------------------------------------------------- ④-F send 节点（P3 泛化）
@@ -2243,7 +2197,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "onebot": (
             120,
             "OneBot",
-            ["trigger", "message", "group_id", "user_id", "message_id"],
+            ["trigger", "target", "message"],
             ["trigger", "onebot_retcode", "onebot_data"],
         ),
         "operator": (130, "运算", ["trigger", "left", "right"], ["trigger", "operator_result"]),
@@ -2328,7 +2282,8 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     onebot = get_spec("onebot")
     assert onebot is not None
     onebot_inputs = {p.id: p for p in onebot.inputs}
-    assert onebot_inputs["message"].required is False  # 参数按动作在运行期查，入口都不标必填
+    assert onebot_inputs["target"].required is True  # 去向：与 send 同款，只能接线
+    assert onebot_inputs["message"].required is True  # 内容：接线或手填
     assert [(p.id, p.type) for p in onebot.outputs] == [
         ("trigger", "trigger"),
         ("onebot_retcode", "message"),
