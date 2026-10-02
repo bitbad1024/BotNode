@@ -1,18 +1,12 @@
 """Scheduler：时间驱动的执行循环。
 
 只认登记簿里 ``enabled=True`` 的任务：把它们的下一次触发点排进
-:class:`~nacho.core.scheduler.timeline.TaskTimeline`（红黑树 + 哈希表二合一），
-睡到最近那一刻，把到点的任务并发派发出去。增删改任务后唤醒循环立即重排，
-不靠固定间隔轮询。
+:class:`~nacho.core.scheduler.timeline.TaskTimeline`，睡到最近那一刻并发派发；
+增删改任务后唤醒循环立即重排，不靠固定间隔轮询。
 
-排程索引的代价：取最近触发点 O(1)（缓存最左节点）、按任务改排程 O(log n)；
-O(n) 的全量对账只在启动和 :meth:`wake`（外部绕过 set_* 直接改了任务字段）时走。
-
-行为约定：
-- **单 / 多实例**：默认单实例 —— 上次还没跑完又到触发点就跳过本次并记一条 warning；
-  ``multi_instance=True`` 的任务不受此限，到点照样开新实例，允许叠加；
-- **错过不补**：停机 / 卡顿期间错过的触发点不补跑，醒来后从 ``next_after(now)`` 重排；
-- **失败隔离**：任务抛异常只更新 :class:`Task` 的失败状态并打 error 日志，绝不带崩循环。
+行为约定：**默认单实例**（上次没跑完又到点就跳过本次）、**错过不补**（醒来从
+``next_after(now)`` 重排）、**失败隔离**（任务抛异常只记状态不崩循环）。排程索引
+的代价与更多约定见 ``docs/scheduler/scheduler.md``。
 """
 from __future__ import annotations
 

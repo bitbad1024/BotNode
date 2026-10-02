@@ -1,19 +1,9 @@
-"""时间线：红黑树 + 哈希表二合一的任务索引。
+"""时间线：红黑树 + 哈希表二合一的任务索引（仿 Linux CFS 的 ``rb_root`` + 任务哈希表）。
 
-仿 Linux CFS 调度器的组织方式：任务按触发时间挂进一棵红黑树（内核的
-``struct rb_root``），树额外缓存最左节点（``rb_leftmost``），所以「下一个该跑谁」
-是 O(1)；同时每个节点还被一张哈希表（task_id -> 节点）引用着，按 ID 定位是 O(1)，
-改一次排程是 O(log n)。**一个节点同时挂在两个结构里** —— 既按时间有序，又能按 ID
-直接点名，两种查法都快。
-
-跟内核一样，这棵树是**专用**的：key 就是 :data:`Key`（触发时刻 + task_id），value
-就是 :class:`~nacho.core.scheduler.models.Task`，不做成泛型容器。
-
-- :meth:`RBTree.insert` / :meth:`RBTree.remove`：O(log n)，插入修复沿用 CLRS 的写法；
-  删除时「孩子可能为空」这点显式传进修复函数（内核用 NIL 哨兵，这里用 None + 父节点
-  参数代替）；
-- :attr:`RBTree.first`：O(1)，最左节点缓存，调度循环每圈都要问它；
-- :class:`TaskTimeline`：面向任务的门面，调度器只跟它打交道。
+一个节点同时挂在两个结构里 —— 既按时间有序，又能按 ID 直接点名：取最近触发点 O(1)
+（缓存最左节点）、按 task_id 定位 O(1)、改一次排程 O(log n)。:class:`TaskTimeline`
+是面向任务的门面，调度器只跟它打交道。结构与代价的详情见
+``docs/scheduler/scheduler.md``。
 """
 from __future__ import annotations
 

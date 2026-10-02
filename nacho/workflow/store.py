@@ -1,33 +1,10 @@
 """工作流的落库实现：定义 / 版本两张表，用 SQLModel 描述、AsyncSession 读写。
 
-表结构（类型 / 约束写在 Python 里，DDL 按方言生成，sqlite 与 mariadb 共用一份）::
-
-    workflow_definitions          一个工作流一行（元数据 + 版本指针 + 暂存区）
-        id                 VARCHAR(64)  PRIMARY KEY
-        owner_id           VARCHAR(64)  INDEX            归属用户（多用户隔离的过滤列）
-        name               VARCHAR(128)                  同归属下唯一
-        status             VARCHAR(16)  DEFAULT 'draft'  draft / published
-        current_version    INTEGER      DEFAULT 0        最近提交的版本号
-        published_version  INTEGER      DEFAULT 0        已发布版本号（0 = 没发布过）
-        enabled            BOOLEAN      DEFAULT 0        运行开关（发布 ≠ 运行，默认不跑）
-        draft_graph_json   TEXT         DEFAULT ''       暂存区图（编辑中，未提交）
-        draft_updated_at   FLOAT        DEFAULT 0        暂存区最近保存时间
-        current_ref        VARCHAR(16)  DEFAULT 'draft'  当前指针 draft / version
-        created_at / updated_at        FLOAT             Unix 秒
-        UNIQUE(owner_id, name)
-
-    workflow_versions             每次保存一张不可变图快照
-        id            VARCHAR(64)  PRIMARY KEY
-        workflow_id   VARCHAR(64)  INDEX
-        owner_id      VARCHAR(64)  INDEX  冗余归属，列表 / 鉴权少一次 join
-        version       INTEGER             同一工作流内自增
-        graph_json    TEXT                规范 JSON 快照
-        checksum      VARCHAR(64)         graph_json 的 sha256（内容没变不新增版本）
-        note          VARCHAR(255)
-        created_at    FLOAT
-        UNIQUE(workflow_id, version)
-
-引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），本模块不建引擎、不读配置。
+一个工作流一行（元数据 + 版本指针 + 暂存区 + **运行开关** ``enabled`` + **实例策略**
+``multi_instance``），每次保存一张**不可变**版本快照（``UNIQUE(workflow_id, version)``，
+内容没变不新增版本），按 ``owner_id`` 隔离。表结构与字段说明见
+``docs/workflow/workflow.md`` 第 3 节。引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），
+本模块不建引擎、不读配置。
 """
 from __future__ import annotations
 

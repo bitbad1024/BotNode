@@ -16,7 +16,7 @@
   ``buffer_size`` / ``flush_interval`` 决定，互不牵制。
 
 职责一句话：``write`` 入队（非阻塞）、``bind`` 出视图、``flush`` / ``search`` 聚合
-各出口。完整的使用说明见 ``docs/logger.md``。
+各出口。完整的使用说明见 ``docs/logger/logger.md``。
 """
 from __future__ import annotations
 

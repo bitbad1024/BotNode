@@ -1,22 +1,12 @@
 """适配器协议：一个平台接入器长什么样（**结构化协议**，不 import 任何平台包）。
 
-为什么是 Protocol 而不是基类：同 :mod:`nacho.api.api.onebot.protocols` 的路数 ——
-桥接层只声明「Gateway 需要哪些能力」，由各平台的适配器**结构化满足**；
-``nacho.platforms.bridge`` 因此不 import ``nacho.platforms.onebot``（onebot 是可选依赖
-``pip install "nacho[onebot]"``），写第二个适配器（Kook）也不必动这里。
+桥接层只声明「Gateway 需要哪些能力」，由各平台适配器**结构化满足** —— 所以本包不
+import ``nacho.platforms.onebot``（可选依赖），写第二个适配器也不必动这里。Gateway 依赖
+的就四样：``platform``（路由键，同 Gateway 里不得重复）、``start`` / ``stop``（幂等）、
+``clients()``（在线快照）、``send()``（发动作等回执）。
 
-方法口径（Gateway 依赖的就这几样）：
-
-* ``platform`` —— 平台标识（事件路由 / 发送路由的键）；同一 Gateway 里不得重复；
-* ``start`` / ``stop`` —— 生命周期（幂等，语义对齐
-  :meth:`nacho.platforms.onebot.server.OneBotServer.start` / ``stop``）；
-* ``clients()`` —— 在线列表快照（路由器「已连接设备」那张表）；
-* ``send()`` —— 给某个归属的在线连接发一个动作并等回执。
-
-适配器自己的事件怎么进 Gateway：构造时 Gateway 把投递口（``publish``）交给适配器
-（见 :mod:`nacho.platforms.bridge.gateway`），适配器收到平台事件、翻译成
-:class:`~nacho.platforms.bridge.models.PlatformEvent` 后调它 —— 协议里不体现这一面，
-那是构造约定，不是能力约定。
+适配器自己的事件怎么进 Gateway 不在协议里：构造时 Gateway 把投递口 ``publish`` 交给
+适配器，适配器翻译完调它 —— 那是构造约定，不是能力约定。详见 ``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 

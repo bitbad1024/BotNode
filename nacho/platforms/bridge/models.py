@@ -1,23 +1,11 @@
 """规范化数据形状：跨平台统一的事件 / 在线列表 / 动作回执。
 
-为什么要有这一层形状：各平台的事件模型差异很大（OneBot 的 ``user_id`` 是整数、
-Kook 的是字符串），下游（workflow 触发、日志钩子）不该逐平台认字段。适配器把
-平台事件**翻译**成这里的 :class:`PlatformEvent`，下游只认这一份。
-
-口径（谁定的谁维护）：
-
-* 身份一律**字符串**：``owner_id``（谁的，与令牌记录同一套 id 空间）、``self_id``
-  （机器人自身账号）、``user_id`` / ``chat_id``（对方 / 会话）。数字平台的适配器
-  负责转成字符串；
-* 「归属」跨平台不再唯一：同一套 ``owner_id`` 在不同平台各有一条连接，所以
-  :class:`PlatformEvent` 带着 ``platform``，Gateway 内部按 ``(platform, owner_id)``
-  复合键路由。**本阶段复合键不落库、不进接口层**（令牌仍是 onebot 专属，Kook 的
-  令牌形态留给 P4）；
-* 翻译不了的字段不去硬翻：平台原始事件整条挂在 ``raw`` 上（OneBot 来的就是
-  :class:`~nacho.platforms.onebot.models.OneBotEvent`），下游要用细节就下探到 ``raw``，
-  但下探就意味着绑平台 —— 能用规范化字段就别用 ``raw``。
-
-三个模型都是**冻结**的：事件是已发生的事，不改写。
+各平台事件模型差异很大（OneBot 的 ``user_id`` 是整数、Kook 的是字符串），下游不该逐
+平台认字段 —— 适配器把平台事件**翻译**成 :class:`PlatformEvent`，下游只认这一份。口径：
+身份一律**字符串**（数字平台的适配器负责转）、事件带 ``platform`` 且 Gateway 内部按
+``(platform, owner_id)`` 复合键路由、翻译不了的字段整条挂在 ``raw`` 上（下探 ``raw`` 就
+意味着绑平台）。三个模型都是**冻结**的：事件是已发生的事，不改写。完整口径见
+``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 

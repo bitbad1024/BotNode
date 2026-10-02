@@ -1,17 +1,8 @@
 """TaskManager：任务管理器 —— 登记、增删改查、启停，以及 Scheduler 的持有者。
 
-用法一瞥::
-
-    scheduler = TaskManager()          # 或直接用下面的进程级单例 scheduler
-    await scheduler.start()
-    scheduler.add("*/5 * * * *", my_check, task_id="check", name="巡检", description="每5分钟")
-    scheduler.set_enabled("check", False)
-    scheduler.set_func("check", other_func)
-    scheduler.remove("check")
-    await scheduler.stop()
-
 next_run 统一由 :class:`~nacho.core.scheduler.core.Scheduler` 排：登记 / 改动只把
 它清空并唤醒循环重算，所以循环没启动时看到的一直是 None，start 后才落定。
+完整用法见 ``docs/scheduler/scheduler.md``。
 """
 from __future__ import annotations
 

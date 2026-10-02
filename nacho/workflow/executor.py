@@ -1,26 +1,13 @@
 """工作流运行器：把一张已校验通过的图按拓扑顺序跑起来，值沿边流。
 
-**节点执行函数不在这里**：一类节点一个文件，都在 :mod:`nacho.workflow.nodes`（写自己的
-节点看那个包）。本模块只管「怎么按顺序跑、值怎么沿边流」：
-
-* 只跑 **start 沿出边可达的主流程节点**：孤儿节点（没接进主流程的散点）允许存在于图里、
-  允许保存，但永不执行、也不会因为没有执行器而拖垮主流程；
-* 按拓扑顺序逐个跑节点。跑之前按**入边**把上游产出投递到本节点的入口（``ctx.inputs``，
-  键 = 目标端口名），跑完把返回值按**输出端口名**记下来，供下游取；
-* **分支剪枝**（``condition`` 这类分流节点）：执行后只让「选中出口」的边活着，没走的
-  分支整段跳过（``[skip]`` 记在 ``ctx.log``）并级联到它的下游；与另一条分支汇合
-  （还有活入边）的节点照常执行；
-* 同步执行（不并发），因为单条图的节点之间有数据依赖；并行执行留给将来；
-* 触发是**开始节点**自己的事（``start`` 的 ``config.trigger``）：``time`` 时它把整张流程图
-  登记到 :class:`~nacho.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；
-  ``message``（缺省）被动等消息接入，发布 / 试跑时只写一条开始日志。
-
-图的公共算法（出边索引 / 可达集合 / 入口节点 / 边端口）在 :mod:`nacho.workflow.graph`，
-与校验器共用同一份口径。
+**节点执行函数不在这里**：一类节点一个文件，都在 :mod:`nacho.workflow.nodes`。本模块只管
+「怎么按顺序跑、值怎么沿边流」：只跑 **start 可达的主流程节点**（孤儿永不执行），按入边把
+上游产出投递到入口、按输出端口名记下产出，**分流节点按选中出口剪枝**并级联下游，同步执行
+（不并发）。触发是**开始节点**自己的事（``trigger=time`` 登记到调度器）。图算法在
+:mod:`nacho.workflow.graph`。运行语义的完整清单见 ``docs/workflow/workflow.md`` 第 7.3 节。
 
 这里只再导出 ``SimpleWorkflowRunner`` / ``NodeExecutionContext`` / ``get_executor`` 三个：
-老代码 ``from nacho.workflow.executor import ...`` 的写法还能用，新代码直接从
-:mod:`nacho.workflow` 取。
+老代码 ``from nacho.workflow.executor import ...`` 还能用，新代码直接从 :mod:`nacho.workflow` 取。
 """
 from __future__ import annotations
 

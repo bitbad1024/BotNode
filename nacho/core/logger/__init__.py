@@ -7,7 +7,7 @@
     configure(level="INFO")
     default_core().child("api.robot").info("收到请求")
 
-设计要点、child / bind / 过滤器 / 内省与检索的完整说明见 ``docs/logger.md``。
+设计要点、child / bind / 过滤器 / 内省与检索的完整说明见 ``docs/logger/logger.md``。
 """
 from __future__ import annotations
 

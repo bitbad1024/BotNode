@@ -48,7 +48,7 @@
 不再维护任何框架侧白名单。
 
 完整指南（契约、上下文、命名、失败语义、孤儿节点、可选依赖、测试写法）见
-:file:`nacho/workflow/MODULES.md` 第 5 节。
+``docs/workflow/workflow.md`` 第 5 节。
 """
 
 from __future__ import annotations

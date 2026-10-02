@@ -1,17 +1,11 @@
 """Redis 后端：异步 IO 执行命令，键统一加命名空间前缀。
 
 驱动是 redis-py 的异步客户端（可选依赖，``pip install "nacho[redis]"``）：一条命令
-一个协程，不阻塞事件循环，连接池由驱动自己管。上面两件事在适配器里做完：
-
-* **前缀**：所有键都拼上 ``<namespace>:``，多个应用共用一个 Redis 实例时互不干扰；
-  上层看到 / 传进来的键始终是**不含前缀**的那一份（:meth:`RedisCache.keys` 会把前缀
-  去掉再还回去）；
-* **异常**：驱动层的 ``RedisError`` 一律翻成 :class:`~nacho.core.cache.models.CacheError`，
-  上层不必 import redis 才能接住缓存层的错。
-
-与内存后端的语义对齐写在 :mod:`nacho.core.cache.interfaces`；这里额外注意两点：
-``decode_responses=True`` 让读回来的是 ``str`` 而不是 ``bytes``（上层不用解码）；
-``keys()`` 用 ``SCAN`` 游标遍历而不是 ``KEYS``（后者在大库上会阻塞整个 Redis）。
+一个协程，不阻塞事件循环。适配器多做两件事：所有键拼上 ``<namespace>:`` 前缀（上层
+看到的键始终不含前缀）；驱动的 ``RedisError`` 一律翻成
+:class:`~nacho.core.cache.models.CacheError`。另外 ``decode_responses=True`` 让读回来
+的是 ``str`` 而非 ``bytes``，``keys()`` 走 ``SCAN`` 而不是 ``KEYS``。详见
+``docs/cache/cache.md``。
 """
 from __future__ import annotations
 

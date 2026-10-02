@@ -1,17 +1,12 @@
 """工作流运行时：把已发布版本的图加载出来，让开始节点的触发配置生效。
 
-**发布 ≠ 运行**：发布接口只挪发布指针；要不要真的跑由定义上的**运行开关**（``enabled``）
-决定，默认关着。服务启动时调一次 :func:`load_published_workflows` —— 只挑**开关开着**的
-已发布工作流，把 ``trigger=time`` 的开始节点按 cron 登记到调度器，整张图**不执行**；
-运行期间拨开关由 :class:`WorkflowTriggers` 即时启停（接口层的开关接口调它）。
-
-（登记只调开始节点自己，见 :func:`register_published_workflow` —— 以前这里靠「跑一遍图、
-顺带登记」，代价是每次启动都真的把整条流程执行一遍。停用是对称的，见
-:func:`stop_published_workflow`，同样不跑图。）
-
-调度器到点后走 :func:`make_trigger`：重新加载该版本的图并**跑整条流程**。这一趟**不碰调度器**
-（``ctx.register_triggers=False``）—— 任务在调度器里排着，而它在派发前就重排好了下一次；
-加 / 摘任务只发生在「登记那一趟」，见 :func:`register_published_workflow`。
+**发布 ≠ 运行**：发布接口只挪发布指针，要不要真的跑由定义上的**运行开关**（``enabled``）
+决定，默认关着。启动时 :func:`load_published_workflows` 只挑开关开着的已发布流，把
+``trigger=time`` 的开始节点按 cron 登记到调度器，整张图**不执行**；运行期间拨开关由
+:class:`WorkflowTriggers` 即时启停。登记 / 停用只调开始节点自己（不跑图，见
+:func:`register_published_workflow` / :func:`stop_published_workflow`）；调度器到点走
+:func:`make_trigger` 重载版本图**跑整条流程**，这一趟**不碰调度器**
+（``ctx.register_triggers=False``）。详见 ``docs/workflow/workflow.md`` 第 7.4 节。
 """
 from __future__ import annotations
 

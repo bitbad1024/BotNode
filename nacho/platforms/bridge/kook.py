@@ -1,23 +1,12 @@
 """Kook 适配器：把 :class:`~nacho.platforms.kook.KookClient` 包成第二个 ``BotAdapter``（**多客户端**）。
 
-这是 bridge 里**第二个**允许 import 平台包的地方（第一个是 :mod:`nacho.platforms.bridge.onebot`），
-用来验证 P2 定的 ``BotAdapter`` 协议是不是「真通用」——OneBot 是反向 WS（框架当服务端），
-Kook 是正向 WS（框架当客户端），方向相反，但两边都要能塞进同一个 :class:`Gateway`。
-
-与 OneBot 适配器的关键差异：
-
-* **归属语义**：OneBot 一个端口接很多客户端、靠令牌分归属；Kook 一个 Bot Token 就是一个
-  机器人，没有「多归属」概念。一个适配器管**多个**机器人（``dict[bot_id, KookClient]``，
-  一个 Bot Token 一个客户端）——这样 Gateway 里 Kook 仍只占一个 platform 槽位，运行时
-  通过 API 增删 Kook 机器人也不会撞上「同平台重复注册」的限制；
-* **事件翻译**：Kook 的 ``channel_type``（GROUP=频道 / PERSON=私聊）归一成 ``PlatformEvent``
-  的 ``chat``，``target_id`` -> ``chat_id``，``author_id`` -> ``user_id``，``content`` ->
-  ``text``，身份全是字符串（与 OneBot 的整数不同，但规范化后字符串口径正好统一）；
-* **能力转述**：``clients()`` 列出各在线机器人（一行一个），``send`` 走 REST
-  （:meth:`KookClient.call`），回执翻译成 :class:`~nacho.platforms.bridge.models.ActionResult`。
-
-不 import ``nacho.platforms.onebot`` / ``nacho.api`` / ``nacho.workflow`` —— 只依赖
-``nacho.core``（logger）与 ``nacho.platforms.kook`` 平台包。
+OneBot 是反向 WS（框架当服务端），Kook 是正向 WS（框架当客户端），方向相反却要塞进同一个
+:class:`Gateway` —— 用来验证 ``BotAdapter`` 协议是不是真通用。三处与 OneBot 不同：**归属
+语义**（一个 Bot Token 就是一个机器人，一个适配器管多个客户端 ``dict[bot_id, KookClient]``，
+Gateway 里仍只占一个 platform 槽位）、**事件翻译**（``channel_type`` -> ``chat``、
+``target_id`` -> ``chat_id``、``author_id`` -> ``user_id``、``content`` -> ``text``）、
+**能力转述**（``send`` 走 REST ``KookClient.call``）。只依赖 ``nacho.core``（logger）
+与 ``nacho.platforms.kook``。详见 ``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 

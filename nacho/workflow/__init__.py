@@ -7,8 +7,8 @@
 * :mod:`nacho.workflow.store`     双表落库（定义 + 不可变版本），归属隔离
 * :mod:`nacho.workflow.nodes`     节点执行器：**一类节点一个文件** + 注册表（写自己的节点看这里）
 * :mod:`nacho.workflow.executor`  运行器：按拓扑顺序把图跑起来（老路径再导出节点那套）
-* :mod:`nacho.workflow.runtime`   运行时：启动只给**开着运行开关**的已发布工作流登记定时触发，
-                                  到点后加载该版本跑整条流程；开关的即时启停也在那儿（WorkflowTriggers）
+* :mod:`nacho.workflow.runtime`   运行时：只给**开着运行开关**的已发布工作流登记定时触发，
+                                  到点后加载该版本跑整条流程；开关的即时启停也在那儿
 
 写自己的节点：新建一个模块，里面用 ``@register_node("类型")`` 标一下，启动时
 ``load_node_modules("你的模块")`` 装进来即可，不用改框架里的任何文件::
@@ -20,7 +20,7 @@
         ...
 
 完整指南（注册规格、必填 / 默认值、孤儿节点、可选依赖与测试写法）见
-:file:`nacho/workflow/MODULES.md` 第 5 节。
+``docs/workflow/workflow.md`` 第 5 节；各模块的设计要点在同文件第 7 节。
 """
 from __future__ import annotations
 

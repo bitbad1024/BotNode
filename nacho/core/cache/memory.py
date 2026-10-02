@@ -1,13 +1,9 @@
 """本地内存缓存：不启用 Redis 时的落点，也是 Redis 连不上时的降级兜底。
 
-数据只活在当前进程里：换进程就没了，也不跨机器共享；换来的是零依赖、零网络。
-语义与 Redis 后端完全对齐（见 :mod:`nacho.core.cache.interfaces`），所以上层换了后端
-不用改代码 —— 唯一真正不同的是「没有别人能看到你写的东西」。
-
-支持字符串、列表、哈希三种结构（对应 Redis 的 string / list / hash）：每条记录都带一个
-类型标签，拿另一种结构去访问同一个键就抛 :class:`~nacho.core.cache.models.CacheError`
-（对应 Redis 的 ``WRONGTYPE``）。空列表 / 空哈希不占键，字段被删空的键就没了 —— 这一点
-也照 Redis 来。
+数据只活在当前进程里：换进程就没了，也不跨机器共享；换来的是零依赖、零网络。语义与
+Redis 后端完全对齐（见 :mod:`nacho.core.cache.interfaces`）—— 唯一真正不同的是「没有
+别人能看到你写的东西」。过期键由后台任务按 ``sweep_interval`` 扫掉。详见
+``docs/cache/cache.md``。
 """
 from __future__ import annotations
 

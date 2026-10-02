@@ -1,23 +1,13 @@
 """机器人管理服务（``BotManager``）：把凭证落库 + 平台适配器生命周期统一成一套操作。
 
-接口层（``nacho.api``）只认 :mod:`nacho.api.api.bots.protocols` 里的 ``BotsService`` 协议，
-由本模块的实现**结构化满足**：这样「Kook 的启停要 start / stop 正向 WS 客户端」这类平台
-细节被封在这里，接口层不用 import 任何平台包。
+接口层只认 :mod:`nacho.api.api.bots.protocols` 里的 ``BotsService`` 协议，由本模块
+**结构化满足**：「Kook 的启停要 start / stop 正向 WS 客户端」这类细节封在这里，接口层
+不用 import 平台包。坐落在装配层注入的 ``store``（凭证 CRUD）、``onebot`` / ``kook``
+两个适配器与 ``secret_key``（Kook Bot Token 加解密）之上。
 
-本模块坐在几点之上（装配层注入）：
-
-* ``store`` —— :class:`nacho.bots.SqlBotStore`：凭证的落库 CRUD（多实例、跨平台）；
-* ``onebot`` —— :class:`nacho.platforms.bridge.onebot.OneBotAdapter`：OneBot 的在线列表与启停 /
-  吊销（复用服务端「断开连接」那一套）；
-* ``kook`` —— :class:`nacho.platforms.bridge.kook.KookAdapter`：Kook 的客户端生命周期（多客户端）；
-* ``secret_key`` —— Kook Bot Token 落库加密的密钥（签发时加密、连接时解密）。
-
-平台分歧怎么收敛：**每个平台一个生命周期对象**（:class:`BotLifecycle`，见下）——OneBot
-的「增」= 签发随机令牌（反向 WS 握手按它认归属，就一个 ``store.issue``），「停用 / 删」
-要走 ``OneBotAdapter.set_token_enabled`` / ``revoke_by_id`` 以便断开正连着的客户端；Kook
-的「增」= 存 Bot Token（可逆加密）+ 起正向 WS 客户端，「停用 / 删」= 停 / 删那个客户端。
-``BotManager`` 按 ``platform`` 查表派发给对应 lifecycle，接口层看到的是同一套
-「增 / 启停 / 删」；加第三个平台 = 写一个 lifecycle + 注册一行，本类四个方法一个不改。
+平台分歧靠**每个平台一个** :class:`BotLifecycle` 收敛（OneBot 签发 / 吊销令牌、Kook 起停
+客户端），``BotManager`` 按 ``platform`` 查表派发 —— 加第三个平台 = 写一个 lifecycle +
+注册一行，本类四个方法一个不改。详见 ``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 

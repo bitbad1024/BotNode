@@ -2,12 +2,9 @@
 
 接的是 ``nacho.core.logger`` 那套进程门面，用名字 ``cache``（相对核心 ``nacho`` ->
 ``nacho.cache``）。**业务模块一律不直接 ``default_core()``** —— 要日志实例就调
-:func:`cache_logger`；装配层建完核心后，也可把实例通过 ``Cache(..., logger=)`` 传入，
-由模块自己的 ``_log()`` 方法取用。
-
-核心由装配层经 :func:`set_core` 存进本模块的槽位（组合根 ``nacho.bootstrap`` 或
-:func:`nacho.wiring.wire_loggers` 负责）。``import`` 本模块**零副作用** —— 没装配就调用
-:func:`cache_logger` 会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+:func:`cache_logger`，装配层也可经 ``Cache(..., logger=)`` 传入。核心由装配层
+:func:`set_core` 存进本模块槽位；``import`` 零副作用，没装配就调用会当场抛错（fail
+fast），不会默默按默认参数建一份把配置定死的核心。详见 ``docs/cache/cache.md``。
 """
 from __future__ import annotations
 
