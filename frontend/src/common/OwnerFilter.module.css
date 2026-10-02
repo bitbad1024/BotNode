@@ -1,0 +1,29 @@
+/* 归属筛选（公共组件：工作流列表 / 机器人列表共用） */
+
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+/* 与 TokensPage 的 .input 同一套观感：控件填充用 --surface，描边用 --border-strong */
+.select {
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-1);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}

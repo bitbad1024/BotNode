@@ -199,3 +199,12 @@ class SqlUserStore:
                 select(UserTable).where(col(UserTable.id).in_(wanted))
             )
             return {row.id: _to_record(row) for row in result}
+
+    async def list_all(self) -> list[UserRecord]:
+        """列出全部用户（管理端的「归属」清单照它出）。
+
+        按 ``account`` 排序：下拉选项的顺序要稳定，不能随插入顺序抖。
+        """
+        async with self._sessions() as session:
+            result = await session.exec(select(UserTable).order_by(UserTable.account))
+            return [_to_record(row) for row in result]

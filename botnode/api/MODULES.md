@@ -45,6 +45,9 @@ botnode/api/
 │   │   ├── dependencies.py   get_bots / CurrentUserDep
 │   │   ├── requests.py       AddBotRequest / SetBotEnabledRequest
 │   │   └── responses.py      BotData / IssuedBotData（明文只在签发那一次出现）
+│   ├── owners/       归属清单（GET /owners：按归属筛选时的下拉选项）
+│   │   ├── router.py         管理员拿全部用户，普通用户只有自己
+│   │   └── responses.py      OwnerData（owner_id / account / nickname）
 │   ├── workflow/     工作流管理（实现在 botnode.workflow，按协议取用，不 import 实现）
 │   │   ├── router.py         定义增删查改 / 暂存 / 版本 / 发布 / 入库前校验
 │   │   ├── protocols.py      WorkflowStoreLike（结构化协议）
@@ -115,11 +118,12 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/__init__.py` | 入口层总览，导出 `auth_router`、`profile_router`、`onebot_router`、`bots_router`、`workflow_router`、`log_router`。 |
+| `api/__init__.py` | 入口层总览，导出 `auth_router`、`profile_router`、`onebot_router`、`bots_router`、`owners_router`、`workflow_router`、`log_router`。 |
 | `api/auth/__init__.py` | 鉴权入口汇总（注册 / 登录 / 当前用户 / 登录设备）。 |
 | `api/profile/__init__.py` | 个人设置入口汇总（`ProfileData` / `profile_router`）。 |
 | `api/onebot/__init__.py` | OneBot 管理入口汇总（在线客户端列表 / 踢人 / 令牌签发与吊销；P5 起是兼容面）。 |
 | `api/bots/__init__.py` | 机器人管理入口汇总（跨平台增 / 启停 / 删，列表 / 添加 / 启用停用 / 删除）。 |
+| `api/owners/__init__.py` | 归属清单入口汇总（`OwnerData` / `owners_router`）：管理员的「按归属筛选」选项。 |
 | `api/workflow/__init__.py` | 工作流管理入口汇总（`WorkflowStoreLike` / `workflow_router`）。 |
 | `api/log/__init__.py` | 运行日志入口汇总（`LogData` / `log_router`）。 |
 
@@ -184,7 +188,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 |---|---|
 | `api/onebot/router.py` | **HTTP 入口**：`GET <prefix>/onebot/clients`（在线列表，可 `?account=` 过滤）、`DELETE <prefix>/onebot/clients/{id}`（踢下线，`?revoke=true` 连令牌一起吊销）、`GET/POST <prefix>/onebot/tokens`（列表 / 签发）、`PATCH <prefix>/onebot/tokens/{id}`（启用 / 停用，停用会断开客户端）、`DELETE <prefix>/onebot/tokens/{id}`（吊销并断开）。全部要求登录，并由 `ensure_can_touch()` / `may_touch()` 按身份收范围。 |
 | `api/onebot/protocols.py` | 结构化协议：`OneBotLike` / `TokenRegistry` / `ClientLike` / `TokenLike`（数据成员写成**只读属性**，对面是冻结数据类）。靠它做到两边互不 import。 |
-| `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）；以及授权：`ADMIN_ROLE` / `is_admin` / `may_touch` / `ensure_can_touch`。 |
+| `api/onebot/dependencies.py` | 路由注入件：`get_onebot`（从 `app.state` 取服务，没接入回 503）、`CurrentUserDep`（要求登录，401）；以及授权：`ADMIN_ROLE` / `is_admin` / `may_touch` / `ensure_can_touch` / `owner_filter_of`（列表按归属筛：普通用户永远只看自己）。 |
 | `api/onebot/requests.py` | 请求体 `IssueTokenRequest`（给哪个账号签、备注）。 |
 | `api/onebot/responses.py` | 响应体：`ClientData` / `TokenData` / `IssuedTokenData`（明文令牌只在这一次出现）/ `KickData` / `RevokeData`。 |
 
@@ -203,13 +207,24 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/bots/router.py` | **HTTP 入口**：`GET <prefix>/bots`（列表 + 归属昵称 + 在线状态）、`POST <prefix>/bots`（添加，`platform` 选 onebot / kook）、`PATCH <prefix>/bots/{id}`（启用 / 停用）、`DELETE <prefix>/bots/{id}`（删除）。全部要求登录并按身份收范围。 |
+| `api/bots/router.py` | **HTTP 入口**：`GET <prefix>/bots`（列表 + 归属昵称 + 在线状态；管理员可 `?owner_id=` 缩到某个归属）、`POST <prefix>/bots`（添加，`platform` 选 onebot / kook）、`PATCH <prefix>/bots/{id}`（启用 / 停用）、`DELETE <prefix>/bots/{id}`（删除）。全部要求登录并按身份收范围。 |
 | `api/bots/protocols.py` | 结构化协议 `BotsService`（增 / 启停 / 删 + 在线聚合）+ `OnlineBot`（在线那一格）。记录形状复用 onebot 的 `TokenLike` / `IssuedLike`（一条凭证不含明文是跨平台的）。 |
 | `api/bots/dependencies.py` | 路由注入件：`get_bots`（从 `app.state` 取服务，没接入回 503）、`BotsDep`。 |
 | `api/bots/requests.py` | 请求体 `AddBotRequest`（`platform` 缺省 onebot；kook 必填 `token`）、`SetBotEnabledRequest`。 |
 | `api/bots/responses.py` | 响应体 `BotData`（一条记录，**不含明文**）/ `IssuedBotData`（明文只在签发那一次出现）。 |
 
-### 3.6 api/workflow/ —— 工作流管理入口
+### 3.6 api/owners/ —— 归属清单
+
+> 管理员能看到所有人的工作流 / 机器人，列表要按归属筛（`?owner_id=`）—— 筛之前得先知道
+> 「有哪些归属」，就是这一组。**普通用户问「有哪些归属」，答案只有他自己**：口径与列表接口
+> 一致（`owner_filter_of`），多一个接口不会因此多看得见别人的东西。
+
+| 文件 | 作用 |
+|---|---|
+| `api/owners/router.py` | **HTTP 入口**：`GET <prefix>/owners`（管理员 = 全部用户，按账号排序；普通用户 = 只有自己）。要求登录（未登录 401）。 |
+| `api/owners/responses.py` | 响应体 `OwnerData`（`owner_id` / `account` / `nickname`）：前端下拉与列表里显示归属都用它。 |
+
+### 3.7 api/workflow/ —— 工作流管理入口
 
 > 工作流是**另一块业务**：图形 / 校验 / 落库的实现都在 `botnode.workflow`，接口层只认一份能力
 > 协议 `WorkflowStoreLike`（见 `protocols.py`），装配时由主程序挂到 `app.state.workflow_store`。
@@ -219,13 +234,13 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 
 | 文件 | 作用 |
 |---|---|
-| `api/workflow/router.py` | **HTTP 入口**：`GET <prefix>/workflows/node-types`（节点类型目录：面板 / 端口 / 配置表单都照它渲染，只读内存注册表、不碰库）、`POST <prefix>/workflows/validate`（只校验不入库，画布里随时试）、定义增删查改、`PUT/GET /{id}/draft`（暂存区）、`POST/GET /{id}/versions`（提交一个版本 / 版本历史）、`POST /{id}/publish`（发布）、`GET /{id}/published`（已发布的那一份：开关 + 版本 + 图）、`PUT /{id}/enabled`（拨运行开关：**发布 ≠ 运行**，默认不跑）、`PUT /{id}/settings`（改设置：单实例 / 多实例；开着开关的即时按新设置重新登记）。校验不过是**业务结果**：HTTP 200 + `{valid:false, stage, errors}`（前端按节点画红点），请求格式错才走全局 422；`valid=false` 时**不写任何数据**。 |
+| `api/workflow/router.py` | **HTTP 入口**：`GET <prefix>/workflows/node-types`（节点类型目录：面板 / 端口 / 配置表单都照它渲染，只读内存注册表、不碰库）、`POST <prefix>/workflows/validate`（只校验不入库，画布里随时试）、定义增删查改（列表每条带归属昵称 `owner_name`，管理员可 `?owner_id=` 缩到某个归属）、`PUT/GET /{id}/draft`（暂存区）、`POST/GET /{id}/versions`（提交一个版本 / 版本历史）、`POST /{id}/publish`（发布）、`GET /{id}/published`（已发布的那一份：开关 + 版本 + 图）、`PUT /{id}/enabled`（拨运行开关：**发布 ≠ 运行**，默认不跑）、`PUT /{id}/settings`（改设置：单实例 / 多实例；开着开关的即时按新设置重新登记）。校验不过是**业务结果**：HTTP 200 + `{valid:false, stage, errors}`（前端按节点画红点），请求格式错才走全局 422；`valid=false` 时**不写任何数据**。 |
 | `api/workflow/protocols.py` | `WorkflowStoreLike`：接口层用到的那部分存储能力（定义增删查改 + 暂存 / 版本 / 发布 / 拨开关 / 改设置 + 启动兜底建表）。默认实现 `botnode.workflow.SqlWorkflowStore` 结构化满足它。另有 `WorkflowTriggerLike`（运行时的 `start` / `stop`，**可空**：注入了拨开关才即时启停）。 |
-| `api/workflow/dependencies.py` | 路由注入件：`get_workflow_store`（从 `app.state` 取）、`get_in_scope`（按 id 取 + 归属把关，**越界与不存在同为 404**，不拿 id 试探别人的东西）、`is_admin` / `owner_filter_of`（普通用户只看自己，管理员可跨归属）。 |
+| `api/workflow/dependencies.py` | 路由注入件：`get_workflow_store`（从 `app.state` 取）、`get_in_scope`（按 id 取 + 归属把关，**越界与不存在同为 404**，不拿 id 试探别人的东西）、`is_admin` / `owner_filter_of`（普通用户只看自己，管理员可跨归属；与 OneBot 那份同口径，改一处要同步另一处）。 |
 | `api/workflow/requests.py` | 请求体：新建 / 改名 / 暂存 / 提交版本 / 发布 / 拨开关 / 改设置。 |
-| `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData` / `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`，以及节点目录的 `NodeCatalogData` / `NodeTypeData` / `NodeFieldData` / `NodePortData`（从注册表的 `NodeSpec` 映射，`MISSING_DEFAULT` 在这里翻成 `has_default=false`）。 |
+| `api/workflow/responses.py` | 响应体：`ValidationIssueData` / `WorkflowData`（含归属昵称 `owner_name`）/ `WorkflowDraftData` / `WorkflowVersionData` / `SaveVersionResultData`，以及节点目录的 `NodeCatalogData` / `NodeTypeData` / `NodeFieldData` / `NodePortData`（从注册表的 `NodeSpec` 映射，`MISSING_DEFAULT` 在这里翻成 `has_default=false`）。 |
 
-### 3.7 api/log/ —— 运行日志检索
+### 3.8 api/log/ —— 运行日志检索
 
 > 把「查历史日志」做成一个 HTTP 接口。**查询本身不在这里实现**：条件原样递给日志系统的
 > `BaseLogger.search()`，它再扇出到各出口 —— 落库那份就是一条 SQL（`WHERE` / `ORDER BY` /
@@ -280,9 +295,9 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 |---|---|
 | `services/user/models.py` | `UserRecord`（内部形状，**带 `password_hash`**）/ `UserProfile`（对外资料，**无密码字段**）/ `profile_of`（两者转换，显式决定露不露字段）。 |
 | `services/user/validation.py` | 账号 / 密码 / 昵称规则：`Account` / `Password` / `Nickname`（pydantic `AfterValidator`，`SecretStr` 包密码）。登录、注册共用一份，「改资料」将来也用它。 |
-| `services/user/protocols.py` | 能力协议（只声明不实现）：`UserStore`（按账号 / 按 id 查人，外加注册那一笔 `add`，异步）、`PasswordHasher`（hash / verify）。 |
+| `services/user/protocols.py` | 能力协议（只声明不实现）：`UserStore`（按账号 / 按 id 查人、批量 `get_by_ids`、管理端出归属清单的 `list_all`，外加注册那一笔 `add`，异步）、`PasswordHasher`（hash / verify）。 |
 | `services/user/security.py` | 默认实现 `Pbkdf2PasswordHasher`：PBKDF2-SHA256，串自带算法 / 迭代 / 盐 / 摘要，定长比对。 |
-| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`add` 新增一个账号（注册用，撞 `account` 唯一约束时翻成 `AccountAlreadyExistsError`，不把数据库异常漏出去）、`seed_demo` 空表种演示账号（只有一个 `admin`；要别的账号走注册接口）。 |
+| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`list_all` 列全部用户（归属清单用）、`add` 新增一个账号（注册用，撞 `account` 唯一约束时翻成 `AccountAlreadyExistsError`，不把数据库异常漏出去）、`seed_demo` 空表种演示账号（只有一个 `admin`；要别的账号走注册接口）。 |
 | `services/user/demo.py` | 演示账号 `DEMO_USERS` 的单一来源（`seed_demo` 用），改账号只改一处。 |
 
 ### 4.3 services/profile/ —— 个人设置域

@@ -41,6 +41,14 @@ class UserStore(Protocol):
         """
         ...
 
+    async def list_all(self) -> list[UserRecord]:
+        """列出**全部**用户（管理视角出「归属」清单用：哪些人手里有内容）。
+
+        管理员的工作流 / 机器人列表要按归属筛选，选项就照它渲染；普通用户问「有哪些归属」
+        的答案只有他自己，接口层照这个口径给。按账号排序，顺序稳定（不该随插入顺序抖）。
+        """
+        ...
+
     async def add(
         self, *, account: str, password_hash: str, nickname: str = ""
     ) -> UserRecord:

@@ -103,6 +103,16 @@ def may_touch(user: CurrentUser, owner_id: str) -> bool:
     return is_admin(user) or owner_id == user.user.id
 
 
+def owner_filter_of(user: CurrentUser, owner_id: str | None) -> str | None:
+    """**列表**的归属过滤：普通用户永远只看自己（忽略入参）；管理员默认全部。
+
+    传进来的 ``owner_id`` 只有管理员有意义（就是那个下拉 / ``?owner_id=``）；普通用户传了
+    也不生效 —— 隔离的口径只此一处，不靠调用方自觉。工作流列表用的是同口径的另一份
+    （:func:`botnode.api.api.workflow.dependencies.owner_filter_of`）。
+    """
+    return owner_id if is_admin(user) else user.user.id
+
+
 def ensure_can_touch(user: CurrentUser, owner_id: str) -> None:
     """碰不得就 **403**；用在「归属是调用方自己写出来的」那处（``?id=``）。
 
@@ -126,4 +136,5 @@ __all__ = [
     "get_user_store",
     "is_admin",
     "may_touch",
+    "owner_filter_of",
 ]

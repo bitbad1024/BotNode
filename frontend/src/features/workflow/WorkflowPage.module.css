@@ -65,6 +65,20 @@
   border-bottom: none;
 }
 
+/* 面板头右侧：归属筛选 + 「新建」并排（筛选只有管理员看得到，普通用户它就整体不渲染） */
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ownerCell {
+  /* 归属 id 可能是 u-<一串十六进制>：单行省略，悬停看全 —— 管理员靠它认出「这是谁的流」 */
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
 .nameCell {
   font-weight: 600;
 }

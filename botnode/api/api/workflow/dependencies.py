@@ -82,7 +82,11 @@ async def get_in_scope(
 
 
 def owner_filter_of(user: CurrentUser, owner_id: str | None) -> str | None:
-    """列表的归属过滤：普通用户永远只看自己（忽略 query）；管理员默认全部。"""
+    """列表的归属过滤：普通用户永远只看自己（忽略 query）；管理员默认全部。
+
+    与 OneBot / 机器人那份（:func:`botnode.api.api.onebot.dependencies.owner_filter_of`）
+    是同一个口径，改一处就得同步另一处。
+    """
     if is_admin(user):
         return owner_id
     return user.user.id
