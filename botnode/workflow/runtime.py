@@ -120,7 +120,16 @@ async def run_published_workflow(
         await runner.run(graph, ctx)
         log.info("工作流执行完成", version=version, node_count=len(graph.nodes))
     except Exception as exc:  # noqa: BLE001 — 执行引擎异常不能让发布接口挂掉
-        log.error("工作流执行失败", version=version, error=str(exc))
+        # 排错要三样：**堆栈**（exception 带）、异常**类型**、以及**哪个节点** ——
+        # 只记 str(exc) 会得到空串（httpx 的超时 / 连接异常就是这种），等于什么都没记
+        log.exception(
+            "工作流执行失败",
+            version=version,
+            node_id=getattr(exc, "node_id", ""),
+            node_type=getattr(exc, "node_type", ""),
+            error_type=type(exc).__name__,
+            error=str(exc) or repr(exc),
+        )
 
 
 def _message_start_ids(graph: WorkflowGraph) -> set[str]:
@@ -343,7 +352,10 @@ class MessageRouter:
                     workflow_id=workflow_id,
                     owner_id=owner_id,
                     version=version,
-                    error=str(exc),
+                    node_id=getattr(exc, "node_id", ""),
+                    node_type=getattr(exc, "node_type", ""),
+                    error_type=type(exc).__name__,
+                    error=str(exc) or repr(exc),
                 )
         return ran
 
@@ -471,12 +483,15 @@ async def load_published_workflows(
                 )
                 registered += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
-                log.error(
+                log.exception(
                     "启动载入已发布工作流失败",
                     workflow_id=definition.id,
                     owner_id=definition.owner_id,  # 谁的流没载进来，当场认得出
                     version=definition.published_version,
-                    error=str(exc),
+                    node_id=getattr(exc, "node_id", ""),
+                    node_type=getattr(exc, "node_type", ""),
+                    error_type=type(exc).__name__,
+                    error=str(exc) or repr(exc),
                 )
         offset += len(definitions)
         if len(definitions) < page_size:

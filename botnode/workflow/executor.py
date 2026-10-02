@@ -32,9 +32,28 @@ from .nodes.base import NodeFailure
 __all__ = [
     # 老 import 路径留的门（新代码从 botnode.workflow 取）
     "NodeExecutionContext",
+    "NodeExecutionError",
     "SimpleWorkflowRunner",
     "get_executor",
 ]
+
+
+class NodeExecutionError(RuntimeError):
+    """节点执行时抛出的**环境问题**：包上「哪个节点」再往外抛。
+
+    与 :class:`~botnode.workflow.nodes.base.NodeFailure`（业务失败，只停下游）分开：
+    本类说明「这份配置 / 这台机器有问题」，整条流程中断并保留原异常链（``__cause__``），
+    日志里据此能直接定位到节点。
+
+    消息里**带上异常类型与 repr**：``str(exc)`` 常常是空串（httpx 的超时 / 连接异常就是
+    这种），光记它等于什么都没记。
+    """
+
+    def __init__(self, node_id: str, node_type: str, cause: BaseException) -> None:
+        detail = str(cause) or repr(cause)
+        super().__init__(f"节点 {node_type}:{node_id} 执行失败：{type(cause).__name__}: {detail}")
+        self.node_id: str = node_id
+        self.node_type: str = node_type
 
 
 class SimpleWorkflowRunner:
@@ -129,6 +148,8 @@ class SimpleWorkflowRunner:
                     reason=f"上游 {node.type}:{current_id} 失败",
                 )
                 continue
+            except Exception as exc:  # noqa: BLE001 — 环境问题：包上节点信息再抛（堆栈照留）
+                raise NodeExecutionError(current_id, node.type, exc) from exc
             produced[current_id] = output
             ran.add(current_id)
             spec = get_spec(node.type)

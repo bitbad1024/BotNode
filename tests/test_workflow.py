@@ -956,6 +956,53 @@ async def test_executor_stops_downstream_on_node_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_executor_wraps_environment_error_with_node_context() -> None:
+    """节点抛环境异常（不是 NodeFailure）：包上节点信息再抛，原异常链保留（堆栈里看得到）。"""
+    from botnode.workflow.executor import NodeExecutionError
+
+    @register_node("boom-env")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise ValueError("配置写错了")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("b", "boom-env"), node("e", "end")],
+            "edges": [edge("s", "b"), edge("b", "e")],
+        }
+    )
+    with pytest.raises(NodeExecutionError) as caught:
+        await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
+
+    assert caught.value.node_id == "b"
+    assert caught.value.node_type == "boom-env"
+    assert "ValueError" in str(caught.value) and "配置写错了" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ValueError)  # 堆栈里连着原始异常
+
+
+@pytest.mark.asyncio
+async def test_executor_wrapped_error_survives_empty_message() -> None:
+    """原异常消息为空（httpx 那种）：包装后的消息仍然非空（用 repr 兜底）。"""
+
+    @register_node("boom-empty-msg")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise ValueError("")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("b", "boom-empty-msg"), node("e", "end")],
+            "edges": [edge("s", "b"), edge("b", "e")],
+        }
+    )
+    from botnode.workflow.executor import NodeExecutionError
+
+    with pytest.raises(NodeExecutionError) as caught:
+        await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
+
+    assert str(caught.value)  # 非空
+    assert "ValueError" in str(caught.value)
+
+
+@pytest.mark.asyncio
 async def test_executor_failed_node_produces_nothing_downstream() -> None:
     """失败节点**不产出**：下游如有其它活入边照常执行，但从失败那条线拿不到值（回落手填）。"""
     from botnode.workflow.nodes import NodeFailure
@@ -1172,12 +1219,29 @@ async def test_http_error_status_skips_downstream_in_graph(
 
 @pytest.mark.asyncio
 async def test_http_node_raises_on_connection_failure(fake_http: type[FakeAsyncClient]) -> None:
-    """连不上 / 超时是环境问题：直接抛出去，别伪装成「成功但没内容」。"""
+    """连不上 / 超时是环境问题：直接抛，但消息里要带方法 / 地址 / 超时与异常类型。"""
     import httpx
 
     fake_http.error = httpx.ConnectError("连不上")
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(ConnectionError) as caught:
+        await exec_http(http_node(), NodeExecutionContext())
+
+    message = str(caught.value)
+    assert "GET" in message and "https://api.example.com/items" in message
+    assert "ConnectError" in message and "timeout=" in message
+    assert isinstance(caught.value.__cause__, httpx.ConnectError)  # 原异常链保留
+
+
+async def test_http_node_connection_failure_names_the_exception_when_str_is_empty(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """``str(exc)`` 为空（httpx 常见）时消息也不能空着 —— 用 repr 兜底。"""
+    import httpx
+
+    fake_http.error = httpx.ReadTimeout("")
+
+    with pytest.raises(ConnectionError, match="ReadTimeout"):
         await exec_http(http_node(), NodeExecutionContext())
 
 
@@ -1401,9 +1465,15 @@ async def test_executor_delay_rejects_bad_wired_seconds() -> None:
             }
         )
 
-    with pytest.raises(ValueError, match="不是数字"):
+    from botnode.workflow.executor import NodeExecutionError
+
+    with pytest.raises(NodeExecutionError, match="不是数字") as caught:
         await SimpleWorkflowRunner().run(graph_with("一会儿"), NodeExecutionContext())
-    with pytest.raises(ValueError, match="超过上限"):
+    assert caught.value.node_id == "d"  # 包装后能一眼看出是哪个节点炸的
+    assert caught.value.node_type == "delay"
+    assert isinstance(caught.value.__cause__, ValueError)
+
+    with pytest.raises(NodeExecutionError, match="超过上限"):
         await SimpleWorkflowRunner().run(graph_with("99999"), NodeExecutionContext())
 
 
@@ -3535,6 +3605,44 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
         assert await load_published_workflows(store, scheduler) == 1
         assert scheduler.get(f"wf-{definition.id}-s") is not None  # 定时开始节点登记上了
         assert ran == []  # 而下游（probe）一次都没跑
+    finally:
+        await engine.dispose()
+
+
+async def test_workflow_failure_log_has_stack_type_and_node() -> None:
+    """执行失败时日志带**堆栈 / 异常类型 / 哪个节点**：只记 ``str(exc)`` 会是空串，排不了错。"""
+    from botnode.core.scheduler import TaskManager
+    from botnode.workflow.runtime import run_published_workflow
+
+    @register_node("boom-env-log")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise ValueError("")  # 消息为空：正是「排不了错」的那种
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+    graph = {
+        "nodes": [node("s", "start"), node("b", "boom-env-log"), node("e", "end")],
+        "edges": [edge("s", "b"), edge("b", "e")],
+    }
+    definition = await store.create("u-admin", "会炸的流")
+    await store.add_version(
+        definition, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+
+    try:
+        async with runtime_logs() as records:
+            await run_published_workflow(definition.id, 1, store, TaskManager())
+            await wait_for_records(records, count=1)
+
+        failures = [r for r in records if r.message == "工作流执行失败"]
+        assert failures, [r.message for r in records]
+        record = failures[0]
+        assert record.extra["error_type"] == "NodeExecutionError"
+        assert record.extra["node_id"] == "b"
+        assert record.extra["node_type"] == "boom-env-log"
+        assert record.extra["error"]  # 消息非空（str(exc) 空时用 repr 兜底）
+        assert record.exc_text and "ValueError" in record.exc_text  # 堆栈也在
     finally:
         await engine.dispose()
 

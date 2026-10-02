@@ -140,8 +140,17 @@ async def exec_http(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
 
     httpx = _import_httpx()
     ctx.logger.info("HTTP 请求", node_id=node.id, method=method, url=url)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.request(method, url, headers=headers, content=body or None)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(method, url, headers=headers, content=body or None)
+    except httpx.HTTPError as exc:
+        # 连不上 / 超时 / DNS / 协议错：环境问题，直接抛 —— 但把方法、地址、超时与异常
+        # **类型 + repr** 写进消息（httpx 的 str(exc) 常常是空串，光靠它排不了错）
+        detail = str(exc) or repr(exc)
+        raise ConnectionError(
+            f"[http:{node.id}] {method} {url} 请求失败：{type(exc).__name__}: {detail}"
+            f"（timeout={timeout}）"
+        ) from exc
 
     text: str = response.text
     report = ctx.logger.warning if response.status_code >= 400 else ctx.logger.info

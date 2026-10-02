@@ -57,7 +57,7 @@ from .validator import (
     apply_config_defaults,
     validate_graph,
 )
-from .executor import SimpleWorkflowRunner
+from .executor import NodeExecutionError, SimpleWorkflowRunner
 from .nodes import (
     MISSING_DEFAULT,
     NO_USER_ID,
