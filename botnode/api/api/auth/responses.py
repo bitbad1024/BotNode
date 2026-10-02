@@ -73,3 +73,12 @@ class RevokeAllData(BaseModel):
 
     #: 一共下线了几条（**包含当前这条**）
     count: int
+
+
+class ChangedPasswordData(BaseModel):
+    """改密码的结果。"""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    #: 顺手下线了几条**其他**登录（当前这条保留：发起修改的设备不该被自己踢掉）
+    revoked_sessions: int = Field(default=0, description="被下线的其他登录条数")

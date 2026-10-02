@@ -19,7 +19,9 @@ from ...common.errors import (
     AccountAlreadyExistsError,
     AccountDisabledError,
     InvalidCredentialsError,
+    PasswordMismatchError,
     UnauthorizedError,
+    ValidationError,
 )
 from ...logging import API_LOGGER_NAME, api_logger
 from ..session.models import ClientInfo, IssuedSession, SessionRecord
@@ -127,6 +129,65 @@ class AuthService:
             session=issued.session,
             reused=reused,
         )
+
+    # ------------------------------------------------------------------ 改密码
+    async def change_password(
+        self,
+        user_id: str,
+        *,
+        current_password: str,
+        new_password: str,
+        keep_token_hash: str = "",
+        trace_id: str = "-",
+    ) -> int:
+        """改密码：验旧密码 -> 写新哈希 -> **把这个用户的其他登录踢下线**，返回踢掉几条。
+
+        三条规则只写在这一处（换个入口照样管用）：
+
+        * 旧密码不对 -> 403（:class:`PasswordMismatchError`）：已登录 ≠ 能改密码，
+          否则令牌一旦泄露就等于账号被接管；
+        * 新密码与当前密码相同 -> 422（:class:`ValidationError`）：拿「改密码」当空操作没意义；
+        * 成功 -> 吊销**其他**会话（``keep_token_hash`` 那条留着，就是发起这次修改的设备）：
+          密码都变了，别处手里那个令牌不该还能用。
+
+        新密码的长度由请求层的 ``Password`` 保证（422），这里不重复判。
+        """
+        user = await self._store.get_by_id(user_id)
+        if user is None:
+            # 会话指向的用户没了（被删）：按「登录失效」处理，不在这里泄露「这个 id 存不存在」
+            raise UnauthorizedError("登录状态已失效，请重新登录")
+        if not self._hasher.verify(current_password, user.password_hash):
+            self._log().warning(
+                "改密码失败", owner_id=user_id, reason="当前密码不对", trace_id=trace_id
+            )
+            raise PasswordMismatchError()
+        if self._hasher.verify(new_password, user.password_hash):
+            raise ValidationError("新密码不能与当前密码相同")
+        await self._store.set_password(user_id, self._hasher.hash(new_password))
+        revoked: int = await self._revoke_others(user_id, keep_token_hash)
+        self._log().info(
+            "密码已修改",
+            owner_id=user_id,  # 审计事件归属本人：普通用户在 /logs 里也查得到自己这条
+            revoked_sessions=revoked,
+            trace_id=trace_id,
+        )
+        return revoked
+
+    async def _revoke_others(self, user_id: str, keep_token_hash: str) -> int:
+        """吊销这个用户除 ``keep_token_hash`` 之外的全部会话，返回踢掉几条。
+
+        认不出「当前那条」（理论上不会：认令牌时总会带上摘要）就**一条都不踢** —— 宁可少踢，
+        也不能把发起这次修改的人自己踢下线。
+        """
+        if not keep_token_hash:
+            return 0
+        revoked: int = 0
+        for session in await self._sessions.list_for_user(user_id):
+            if session.token_hash == keep_token_hash:
+                continue
+            if await self._sessions.revoke(session.token_hash, user_id=user_id):
+                revoked += 1
+        return revoked
 
     # ------------------------------------------------------------------ 注册
     async def register(

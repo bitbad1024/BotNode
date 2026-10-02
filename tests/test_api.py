@@ -627,6 +627,102 @@ class TestToken:
         assert response.json()["error"]["code"] == ErrorCode.UNAUTHORIZED
 
 
+# ----------------------------------------------------------------------- 改密码
+class TestChangePassword:
+    """``PUT /api/auth/password``：验当前密码 -> 换新密码 -> **其他登录下线**。
+
+    这组用例守两件事：一是这条路走得通、旧密码当场作废；二是改完只有**别的**会话被踢，
+    发起修改的那条留着（否则用户改完密码得自己重登一次）。
+    """
+
+    CHANGE_PATH: ClassVar[str] = "/api/auth/password"
+    NEW_PASSWORD: ClassVar[str] = "botnode-changed"
+
+    async def test_requires_login(self) -> None:
+        async with client_for(app_with()) as client:
+            response = await client.put(
+                self.CHANGE_PATH,
+                json={"current_password": "botnode-admin", "new_password": self.NEW_PASSWORD},
+            )
+        assert response.status_code == 401
+
+    async def test_changes_password_and_old_one_stops_working(self) -> None:
+        async with client_for(app_with()) as client:
+            token: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            changed = await client.put(
+                self.CHANGE_PATH,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"current_password": ADMIN["password"], "new_password": self.NEW_PASSWORD},
+            )
+            assert changed.status_code == 200, changed.text
+            assert changed.json()["data"]["revoked_sessions"] == 0  # 只有这一条登录
+
+            client.cookies.clear()  # 否则下一次登录会复用 Cookie 里的旧令牌，测不出新密码
+            old = await client.post(LOGIN_PATH, json=ADMIN)
+            new = await client.post(LOGIN_PATH, json={**ADMIN, "password": self.NEW_PASSWORD})
+        assert old.status_code == 401  # 旧密码当场作废
+        assert new.status_code == 200
+
+    async def test_wrong_current_password_is_403(self) -> None:
+        async with client_for(app_with()) as client:
+            token: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            response = await client.put(
+                self.CHANGE_PATH,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"current_password": "not-the-password", "new_password": self.NEW_PASSWORD},
+            )
+        # 403 而不是 401：身份是清楚的（已登录），只是这一次的旧密码写错了
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == ErrorCode.PASSWORD_MISMATCH
+
+    async def test_rejects_same_password(self) -> None:
+        async with client_for(app_with()) as client:
+            token: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            response = await client.put(
+                self.CHANGE_PATH,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"current_password": ADMIN["password"], "new_password": ADMIN["password"]},
+            )
+        assert response.status_code == 422
+
+    async def test_rejects_short_new_password(self) -> None:
+        async with client_for(app_with()) as client:
+            token: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            response = await client.put(
+                self.CHANGE_PATH,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"current_password": ADMIN["password"], "new_password": "short"},
+            )
+        assert response.status_code == 422
+
+    async def test_revokes_other_sessions_but_keeps_current(self) -> None:
+        """改完密码：别的登录下线，发起这次修改的那条照旧可用。"""
+        async with client_for(app_with()) as client:
+            first: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            client.cookies.clear()  # 断掉"复用旧令牌"那条路，拿到两条独立会话
+            second: str = (await client.post(LOGIN_PATH, json=ADMIN)).json()["data"]["token"]
+            assert first != second
+
+            changed = await client.put(
+                self.CHANGE_PATH,
+                headers={"Authorization": f"Bearer {second}"},
+                json={"current_password": ADMIN["password"], "new_password": self.NEW_PASSWORD},
+            )
+            assert changed.status_code == 200, changed.text
+            assert changed.json()["data"]["revoked_sessions"] == 1
+
+            # 清掉 Cookie：浏览器会自动带上「最近一次登录」那份，而这里要的是各用各的 Bearer
+            client.cookies.clear()
+            kept = await client.get(
+                "/api/auth/me", headers={"Authorization": f"Bearer {second}"}
+            )
+            kicked = await client.get(
+                "/api/auth/me", headers={"Authorization": f"Bearer {first}"}
+            )
+        assert kept.status_code == 200  # 发起修改的这台：不用重登
+        assert kicked.status_code == 401  # 另一台：令牌作废
+
+
 # ----------------------------------------------------------------------- 选项装配
 class TestOptions:
     """选项与配置怎么接进来：路由前缀、令牌有效期、多余键忽略。"""

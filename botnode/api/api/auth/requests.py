@@ -62,3 +62,22 @@ class RegisterRequest(BaseModel):
         },
         frozen=True,
     )
+
+
+class ChangePasswordRequest(BaseModel):
+    """改密码请求：当前密码 + 新密码（两个都是 ``SecretStr``，打印 / 日志里都是 ``**********``）。
+
+    **当前密码必须给**：只凭「已登录」就允许改密码，等于令牌一泄露账号就被接管。
+    新密码沿用同一套 :data:`~botnode.api.services.user.validation.Password`（8-128 位）；
+    与当前密码相同会被服务层挡下（422）。
+    """
+
+    current_password: Password = Field(description="当前密码（8-128 位，用来确认是本人）")
+    new_password: Password = Field(description="新密码（8-128 位，不能与当前密码相同）")
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra={
+            "example": {"current_password": "botnode-admin", "new_password": "botnode-5678"}
+        },
+        frozen=True,
+    )

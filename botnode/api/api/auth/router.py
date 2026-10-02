@@ -3,6 +3,7 @@
     POST   <prefix>/auth/register       注册新账号（账号 + 密码 + 昵称），不签发令牌
     POST   <prefix>/auth/login          账号 + 密码换令牌（可勾「记住设备」、可复用旧令牌）
     GET    <prefix>/auth/me             拿令牌换当前用户
+    PUT    <prefix>/auth/password       改密码（改完把其他登录踢下线）
     GET    <prefix>/auth/sessions              我开着的登录（登录设备列表）
     DELETE <prefix>/auth/sessions/{token_hash} 吊销其中一条
     DELETE <prefix>/auth/sessions       全部下线（含当前这条）
@@ -45,8 +46,9 @@ from .dependencies import (
     CurrentUserDep,
     ProfileServiceDep,
 )
-from .requests import LoginRequest, RegisterRequest
+from .requests import ChangePasswordRequest, LoginRequest, RegisterRequest
 from .responses import (
+    ChangedPasswordData,
     LoginData,
     RevokeAllData,
     RevokeSessionData,
@@ -189,6 +191,50 @@ async def login(
         response, token=result.token, remember=payload.remember, options=options
     )
     return ApiResponse[LoginData](data=_login_data(result), trace_id=trace_id)
+
+
+@router.put(
+    "/password",
+    response_model=ApiResponse[ChangedPasswordData],
+    summary="改密码",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "没登录 / 令牌无效或过期",
+        },
+        status.HTTP_403_FORBIDDEN: {"model": ErrorResponse, "description": "当前密码不对"},
+        HttpStatus.UNPROCESSABLE_ENTITY: {
+            "model": ErrorResponse,
+            "description": "新密码不合法（长度、或与当前密码相同）",
+        },
+    },
+)
+async def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    user: CurrentUserDep,
+    service: AuthServiceDep,
+) -> ApiResponse[ChangedPasswordData]:
+    """改自己的密码：先验当前密码，再写新密码，**顺手把其他登录踢下线**。
+
+    密码变了，别处手里那个令牌就不该还能用 —— 所以除发起这次修改的这条会话外，其余一律
+    吊销（响应里的 ``revoked_sessions`` 就是踢掉几条，前端可提示「其他 N 台设备已下线」）。
+
+    当前密码不对回 403 ``PASSWORD_MISMATCH``（与登录那个 401 分开：这里身份是清楚的，
+    只是这一次的旧密码写错了）；新密码与当前密码相同回 422。两个密码都是 ``SecretStr``，
+    不进日志、也不进访问日志的请求体摘要。
+    """
+    trace_id: str = trace_id_of(request)
+    revoked: int = await service.change_password(
+        user.user.id,
+        current_password=payload.current_password.get_secret_value(),
+        new_password=payload.new_password.get_secret_value(),
+        keep_token_hash=user.token_hash,
+        trace_id=trace_id,
+    )
+    return ApiResponse[ChangedPasswordData](
+        data=ChangedPasswordData(revoked_sessions=revoked), trace_id=trace_id
+    )
 
 
 @router.get(
