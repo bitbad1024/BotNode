@@ -2,12 +2,9 @@
 
 接的是 ``nacho.core.logger`` 那套进程门面，用名字 ``scheduler``（相对核心 ``nacho`` ->
 ``nacho.scheduler``）。**业务模块一律不直接 ``default_core()``** —— 要日志实例就调
-:func:`scheduler_logger`；装配层建完核心后，也可把实例通过 ``Scheduler(..., logger=)``
-传入，由模块自己的 ``_log()`` 方法取用。
-
-核心由装配层经 :func:`set_core` 存进本模块的槽位（组合根 ``nacho.bootstrap`` 或
-:func:`nacho.wiring.wire_loggers` 负责）。``import`` 本模块**零副作用** —— 没装配就调用
-:func:`scheduler_logger` 会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+:func:`scheduler_logger`，装配层也可经 ``logger=`` 传入。核心由装配层 :func:`set_core`
+存进本模块槽位；``import`` 零副作用，没装配就调用会当场抛错（fail fast），不会默默按
+默认参数建一份把配置定死的核心。日志接入的完整说明见 ``docs/scheduler/scheduler.md``。
 """
 from __future__ import annotations
 
