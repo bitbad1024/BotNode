@@ -1,10 +1,14 @@
 # =============================================================================
 # BotNode 应用配置模板
 # =============================================================================
-# 用法：复制成 config.toml 再按自己环境改（config.toml 已写进 .gitignore，不入库；
+# 用法：复制成 data/config.toml 再按自己环境改（那份已写进 .gitignore —— 整个 data/ 都不入库；
 # 这个文件才是入库的模板，改它也改不了实际生效的配置）。
-#     Windows:  copy config.toml.example config.toml
-#     Linux:    cp   config.toml.example config.toml
+#     Windows:  copy config.toml.example data\config.toml
+#     Linux:    cp   config.toml.example data/config.toml
+#
+# 为什么住 data/：配置是运行时数据，跟 sqlite（data/botnode.db）、Kook 密钥、上传的头像同处一个
+# 目录 —— 备份 / 搬迁 / 容器挂载都只搬 data/ 一个目录，不会漏掉某一项；容器里 data/ 是按目录挂的，
+# 容器才写得进去，「首次启动照这份模板自动生成配置」才有可能（Docker 镜像里用的就是本文件）。
 #
 # 怎么读这个文件：
 #   1. 全文件按「区域」划分，一个区域 = 一节 = 一类设置，用横线隔开，跳着看即可：

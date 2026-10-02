@@ -18,7 +18,7 @@
 
 ```
 main()  →  _main()
-  1. 解析命令行、读 config.toml（Settings.load）      配置错 → [配置错误] + 退出码 2
+  1. 解析命令行、读 data/config.toml（Settings.load）  配置错 → [配置错误] + 退出码 2
   2. setup_logging(settings)                          建日志核心 + 建库引擎 + 探一次库
   3. from botnode.bootstrap import run, ...           ← 到这里才 import 业务模块
      await run(engine=..., api=..., onebot=..., kook=...)
@@ -73,7 +73,7 @@ WS），只听回环的话容器 / 局域网里就够不着 —— 只在本机�
 ### 1.5 怎么运行、依赖什么
 
 ```bash
-python app.py                     # 读 ./config.toml，不存在则按默认值启动
+python app.py                     # 读 data/config.toml，不存在则按默认值启动
 python app.py -c path/to.toml     # 指定配置文件
 ```
 
@@ -84,8 +84,13 @@ python app.py -c path/to.toml     # 指定配置文件
 
 ## 2. `config.py` —— 配置怎么读、怎么报错
 
-配置文件是 TOML（`#` 写注释），模板 `config.toml.example`，**复制成 `config.toml` 才生效**；
-后者已进 `.gitignore`，不入库。
+配置文件是 TOML（`#` 写注释），模板 `config.toml.example`，**复制成 `data/config.toml` 才生效**；
+那份已进 `.gitignore`（整个 `data/` 都不入库）。
+
+**为什么住 `data/` 而不是仓库根**：配置是运行时数据，跟 sqlite（`data/botnode.db`）、Kook 密钥
+（`data/secret_key`）、上传的头像同处一地 —— 备份 / 搬迁 / 容器挂载都只搬 `data/` 一个目录，不会
+漏掉某一项；容器里 `data/` 是**按目录挂**的，容器才写得进去，「首次启动照模板生成一份配置」才有
+可能。
 
 ### 2.1 区域 ↔ 模型（一节一块）
 
@@ -146,7 +151,7 @@ kook.token 已不再使用：把这一项删掉即可，Bot Token 改在接口�
 from config import ConfigError, Settings
 
 try:
-    settings = Settings.load("config.toml")
+    settings = Settings.load()  # 默认读 data/config.toml
 except ConfigError as exc:
     ...  # 报给用户，别拿默认值糊过去
 ```

@@ -19,8 +19,8 @@ BotNode 是一个可以自己部署的机器人框架。它在三件事上做了
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate     # Windows
-copy config.toml.example config.toml               # 改成自己的配置
-python app.py                                      # 后端 http://127.0.0.1:18080
+copy config.toml.example data\config.toml          # 改成自己的配置（Linux: cp config.toml.example data/config.toml）
+python app.py                                      # 后端 http://127.0.0.1:18080（读 data/config.toml，没有就按默认值跑）
 cd frontend && npm install && npm run dev          # 控制台 http://127.0.0.1:15173
 ```
 
@@ -37,9 +37,11 @@ Windows 也可以直接双击 `scripts\start-all.bat`（后端 / 前端单独起
 同容器内的后端 —— 前端不需要跨域配置。
 
 ```bash
-copy config.toml.example config.toml      # Linux: cp
 docker compose up -d --build              # 控制台 http://127.0.0.1:8080
 ```
+
+配置不用提前准备：它跟数据一起住在 `data/` 下，容器第一次启动会照模板生成 `data/config.toml`，
+在宿主上改完 `docker compose restart` 即生效（想自己写就先 `cp config.toml.example data/config.toml`）。
 
 一键打包（前端产物 + 后端源码包 + 单镜像）：
 
