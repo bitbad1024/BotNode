@@ -1103,7 +1103,8 @@ async def test_http_status_reaches_downstream_message_input(
     fake_http: type[FakeAsyncClient],
 ) -> None:
     """http 的 ``http_status`` 出口接到 log 的 ``message`` 入口：值真的沿边走完整条链路。"""
-    fake_http.status = 503
+    fake_http.status = 201  # 成功响应才往下传（4xx / 5xx 现在算业务失败，下游会被带停）
+    fake_http.text = "201"
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
@@ -1122,18 +1123,51 @@ async def test_http_status_reaches_downstream_message_input(
     )
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert any("[WARNING] l: 503" in line for line in ctx.log)
+    assert any("[WARNING] l: 201" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
-async def test_http_node_keeps_error_status_as_a_result(fake_http: type[FakeAsyncClient]) -> None:
-    """4xx / 5xx 是「对方的回答」：不抛异常，状态码与正文照常交给下游。"""
+async def test_http_error_status_is_a_node_failure(fake_http: type[FakeAsyncClient]) -> None:
+    """4xx / 5xx 是「对方的回答」= **业务失败**：抛 NodeFailure（停止向下传播），不再当正常结果。"""
+    from nacho.workflow.nodes import NodeFailure
+
     fake_http.status = 500
     fake_http.text = "boom"
+    ctx_ = NodeExecutionContext()
 
-    outputs = await exec_http(http_node(), NodeExecutionContext())
+    with pytest.raises(NodeFailure, match="HTTP 500"):
+        await exec_http(http_node(), ctx_)
 
-    assert outputs == {"http_status": 500, "http_body": "boom"}
+    assert any("-> 500" in line for line in ctx_.log)  # 状态码与字节数照旧进日志
+
+
+@pytest.mark.asyncio
+async def test_http_error_status_skips_downstream_in_graph(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """图里跑：http 回了 5xx 时下游整段跳过（不再把错误状态码送下去）。"""
+    fake_http.status = 503
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("h", "http", url="https://api.example.com", method="GET"),
+                node("l", "log", message="手填兜底"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "h"),
+                edge("s", "l"),
+                edge("h", "l", "http_status", "message"),
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不抛：业务失败只停自己这条线
+
+    assert any("[failed] h:" in line for line in ctx.log)
+    assert any("[INFO] l: 手填兜底" in line for line in ctx.log)  # 另一条活入边还在，照常执行
 
 
 @pytest.mark.asyncio

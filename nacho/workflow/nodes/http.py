@@ -14,8 +14,9 @@ config（``url`` / ``body`` 也能被连线覆盖：接到同名入口就用线�
 
 **两种失败是分开的**（故意的）：
 
-* HTTP **4xx / 5xx** 是「对方的回答」，不算异常：记一条 warning，状态码与正文照常送到下游
-  —— 把 ``http_status`` 接到 ``log.message`` 就能看见，将来接上分流节点还能按它走不同分支；
+* HTTP **4xx / 5xx** 是「对方的回答」= **业务失败**：抛
+  :class:`~nacho.workflow.nodes.base.NodeFailure` —— 引擎**停止它向下传播**（下游整段跳过），
+  不再把错误状态码当正常结果往下送（状态码与正文在日志里照样看得见）；
 * **连不上 / 超时 / DNS 失败**是环境问题：直接抛出去，整条流程失败并留下堆栈，不让它伪装成
   一次「成功但没内容」的执行。
 
@@ -27,7 +28,14 @@ from __future__ import annotations
 from typing import Any, cast
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
+from .base import (
+    TRIGGER_PORT,
+    ConfigField,
+    NodeExecutionContext,
+    NodeFailure,
+    PortSpec,
+    input_value,
+)
 from .registry import register_node
 
 #: 允许的请求方法（大写），**顺序即画布下拉顺序**
@@ -136,7 +144,6 @@ async def exec_http(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
         response = await client.request(method, url, headers=headers, content=body or None)
 
     text: str = response.text
-    # 4xx/5xx 只是「对方的回答」：记 warning 并照常交给下游（连不上那种才抛，见模块文档）
     report = ctx.logger.warning if response.status_code >= 400 else ctx.logger.info
     report(
         f"[http:{node.id}] {method} {url} -> {response.status_code}",
@@ -146,4 +153,7 @@ async def exec_http(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
     ctx.log.append(
         f"[http] {node.id}: {method} {url} -> {response.status_code}（{len(text)} 字节）"
     )
+    if response.status_code >= 400:
+        # 4xx / 5xx 是「对方的回答」= 业务失败：停止向下传播，别把错误状态码当正常结果往下送
+        raise NodeFailure(f"HTTP {response.status_code}（{method} {url}）")
     return {"http_status": response.status_code, "http_body": text}
