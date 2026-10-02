@@ -35,6 +35,28 @@ await logger.stop()                     # 停机自动冲刷余量
 
 「片」= 该前缀当天的分片文件（`<前缀>-<日期>[.<序号>].log`）。
 
+## 进程默认核心（分阶段启动 + 增量挂载）
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from nacho.core.logger import DatabaseLogProcessor, LogCore, LocalFileLogProcessor
+from nacho.db import SqlLogStore
+
+logger = LogCore()                          # 最小化启动：只有控制台
+await logger.start()
+
+db = create_async_engine("sqlite+aiosqlite:///logs/nacho.db")
+logger.mount(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
+logger.mount(LocalFileLogProcessor("logs", prefix="nacho"))   # 按天分片：nacho-<日期>.log
+
+logger.info("机器人已启动", robot_id="r-001")
+await logger.stop()                         # 自动冲刷余量
+```
+
+业务模块不该各自新建核心，而是 `default_core()` 取同一个进程默认核心再挂出口，
+这样全进程共用同一个队列与分发器（`set_default_core()` 可替换）。
+
 ## 具名路由（route）
 
 发布过一条具名路由之后，这条路上的日志只投它自己那一份：
