@@ -104,7 +104,7 @@ export default function RegisterPage() {
           <span className={styles.logo} aria-hidden="true">
             <IconLogo size={18} />
           </span>
-          <span className={styles.brandName}>nacho</span>
+          <span className={styles.brandName}>BotNode</span>
           <span className={styles.brandTag}>控制台</span>
         </div>
 

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from nacho.core.scheduler import TaskManager
+from botnode.core.scheduler import TaskManager
 
 
 async def wait_until(predicate: Callable[[], bool], timeout: float = 2.0) -> bool:

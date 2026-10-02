@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from nacho.core.scheduler import CronExpr
-from nacho.core.scheduler.models import Task
-from nacho.core.scheduler.timeline import Key, RBNode, RBTree, TaskTimeline
+from botnode.core.scheduler import CronExpr
+from botnode.core.scheduler.models import Task
+from botnode.core.scheduler.timeline import Key, RBNode, RBTree, TaskTimeline
 
 BASE = datetime(2026, 9, 15, 10, 0, 0)
 

@@ -33,6 +33,6 @@ export interface DemoAccount {
 }
 
 export const DEMO_ACCOUNTS: DemoAccount[] = [
-  { account: 'admin', password: 'nacho-admin' },
-  { account: 'robot', password: 'nacho-robot' },
+  { account: 'admin', password: 'botnode-admin' },
+  { account: 'robot', password: 'botnode-robot' },
 ]

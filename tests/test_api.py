@@ -1,10 +1,10 @@
-"""``nacho/api`` 的单元测试：登录流程、输入校验、错误出口、令牌与日志接入点。
+"""``botnode/api`` 的单元测试：登录流程、输入校验、错误出口、令牌与日志接入点。
 
 请求不走真实网络：用 ``httpx.AsyncClient`` 挂 ``ASGITransport`` 直接打进 ASGI 应用，
 于是请求与日志核心跑在**同一个事件循环**里（日志是同步入队的，换线程会丢），
 「访问日志有没有落进文件」这类断言才站得住。
 
-需要 ``fastapi`` / ``httpx``（``pip install "nacho[api]"`` + dev 依赖）；没装就整文件跳过。
+需要 ``fastapi`` / ``httpx``（``pip install "botnode[api]"`` + dev 依赖）；没装就整文件跳过。
 """
 from __future__ import annotations
 
@@ -19,15 +19,15 @@ from typing import ClassVar, override
 
 import pytest
 
-pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"nacho[api]\"")
-pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"nacho[dev]\"")
+pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"botnode[api]\"")
+pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"botnode[dev]\"")
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
 from config import ConfigError, Settings  # noqa: E402
-from nacho.api import (  # noqa: E402
+from botnode.api import (  # noqa: E402
     ACCESS_LOGGER_NAME,
     API_LOGGER_NAME,
     AccountAlreadyExistsError,
@@ -54,7 +54,7 @@ from nacho.api import (  # noqa: E402
     create_app,
     profile_of,
 )
-from nacho.core.logger import (  # noqa: E402
+from botnode.core.logger import (  # noqa: E402
     BaseLogProcessor,
     ConsoleLogProcessor,
     DatabaseLogProcessor,
@@ -65,13 +65,13 @@ from nacho.core.logger import (  # noqa: E402
     configure,
     manager,
 )
-from nacho.db import SqlLogStore  # noqa: E402
-from nacho.wiring import wire_loggers  # noqa: E402
+from botnode.db import SqlLogStore  # noqa: E402
+from botnode.wiring import wire_loggers  # noqa: E402
 
-#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
-ADMIN = {"account": "admin", "password": "nacho-admin"}
+#: 演示账号（见 botnode.api.services.user.demo.DEMO_USERS）
+ADMIN = {"account": "admin", "password": "botnode-admin"}
 #: 第二个账号：测「不是本人的令牌不复用」要用两个人
-ROBOT = {"account": "robot", "password": "nacho-robot"}
+ROBOT = {"account": "robot", "password": "botnode-robot"}
 LOGIN_PATH = "/api/auth/login"
 REGISTER_PATH = "/api/auth/register"
 
@@ -164,7 +164,7 @@ async def core(tmp_path: Path) -> AsyncIterator[LogCore]:
     分发间隔取小值：测试里刚挂上的文件出口要等分发器下一轮才被拉起来。
     """
     manager.reset()
-    started: LogCore = configure("nacho", level="DEBUG", console=False, dispatch_timeout=0.05)
+    started: LogCore = configure("botnode", level="DEBUG", console=False, dispatch_timeout=0.05)
     await started.start()
     wire_loggers(started)  # 槽位指到这份核心：api_logger() 由此落进测试核心
     try:
@@ -200,7 +200,7 @@ class TestLogin:
         """协议层兜底：请求里的密码（SecretStr）不会出现在任何响应里。"""
         async with client_for(app_with()) as client:
             body = (await client.post(LOGIN_PATH, json=ADMIN)).json()
-        assert "nacho-admin" not in json.dumps(body, ensure_ascii=False)
+        assert "botnode-admin" not in json.dumps(body, ensure_ascii=False)
         assert "password" not in json.dumps(body)
 
     async def test_wrong_password_is_401_invalid_credentials(self) -> None:
@@ -227,7 +227,7 @@ class TestLogin:
     async def test_disabled_account_is_403(self) -> None:
         async with client_for(app_with()) as client:
             response = await client.post(
-                LOGIN_PATH, json={"account": "guest", "password": "nacho-guest"}
+                LOGIN_PATH, json={"account": "guest", "password": "botnode-guest"}
             )
         assert response.status_code == 403
         assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED
@@ -240,7 +240,7 @@ class TestRegister:
     #: 一个没被占用的账号（每个用例各自起一个内存库，互不打扰）
     NEW: ClassVar[dict[str, str]] = {
         "account": "newbie",
-        "password": "nacho-newbie",
+        "password": "botnode-newbie",
         "nickname": "新来的",
     }
 
@@ -260,7 +260,7 @@ class TestRegister:
     async def test_success_response_never_carries_password(self) -> None:
         async with client_for(app_with()) as client:
             body = (await client.post(REGISTER_PATH, json=self.NEW)).json()
-        assert "nacho-newbie" not in json.dumps(body, ensure_ascii=False)
+        assert "botnode-newbie" not in json.dumps(body, ensure_ascii=False)
         assert "password" not in json.dumps(body)
 
     async def test_registered_account_can_login_right_away(self) -> None:
@@ -268,7 +268,7 @@ class TestRegister:
         async with client_for(app_with()) as client:
             created = await client.post(REGISTER_PATH, json=self.NEW)
             response = await client.post(
-                LOGIN_PATH, json={"account": "newbie", "password": "nacho-newbie"}
+                LOGIN_PATH, json={"account": "newbie", "password": "botnode-newbie"}
             )
         assert created.status_code == 201
         assert response.status_code == 200
@@ -290,7 +290,7 @@ class TestRegister:
                 REGISTER_PATH,
                 json={
                     "account": "admin",
-                    "password": "nacho-another",
+                    "password": "botnode-another",
                     "nickname": "冒牌管理员",
                 },
             )
@@ -317,7 +317,7 @@ class TestRegister:
         """昵称必填（请求契约如此；前端表单也会先拦一道）。"""
         async with client_for(app_with()) as client:
             response = await client.post(
-                REGISTER_PATH, json={"account": "newbie", "password": "nacho-newbie"}
+                REGISTER_PATH, json={"account": "newbie", "password": "botnode-newbie"}
             )
         assert response.status_code == 422
         assert [detail["field"] for detail in response.json()["error"]["details"]] == [
@@ -327,9 +327,9 @@ class TestRegister:
     def test_register_request_keeps_password_secret(self) -> None:
         """密码是 ``SecretStr``：从请求体（JSON）解析出来也打印不出明文。"""
         request = RegisterRequest.model_validate(
-            {"account": "newbie", "password": "nacho-newbie", "nickname": "新来的"}
+            {"account": "newbie", "password": "botnode-newbie", "nickname": "新来的"}
         )
-        assert "nacho-newbie" not in repr(request)
+        assert "botnode-newbie" not in repr(request)
         assert request.nickname == "新来的"
 
 
@@ -339,7 +339,7 @@ class TestInputValidation:
 
     async def test_short_account_is_rejected_with_field(self) -> None:
         async with client_for(app_with()) as client:
-            response = await client.post(LOGIN_PATH, json={"account": "ab", "password": "nacho-admin"})
+            response = await client.post(LOGIN_PATH, json={"account": "ab", "password": "botnode-admin"})
         assert response.status_code == 422
         error = response.json()["error"]
         assert error["code"] == ErrorCode.VALIDATION_ERROR
@@ -348,7 +348,7 @@ class TestInputValidation:
     async def test_illegal_account_characters_are_rejected(self) -> None:
         async with client_for(app_with()) as client:
             response = await client.post(
-                LOGIN_PATH, json={"account": "admin 中文", "password": "nacho-admin"}
+                LOGIN_PATH, json={"account": "admin 中文", "password": "botnode-admin"}
             )
         assert response.status_code == 422
         assert "账号只能包含" in response.json()["error"]["details"][0]["message"]
@@ -477,7 +477,7 @@ class TestToken:
             data = ApiResponse[LoginData].model_validate(
                 (
                     await client.post(
-                        LOGIN_PATH, json={**ADMIN, "previous_token": "nacho_乱编的"}
+                        LOGIN_PATH, json={**ADMIN, "previous_token": "botnode_乱编的"}
                     )
                 ).json()
             ).data
@@ -486,7 +486,7 @@ class TestToken:
             ).data
 
         assert data.reused is False
-        assert data.token.startswith("nacho_")
+        assert data.token.startswith("botnode_")
         assert len(listed) == 1  # 这条是这次新开的
 
     async def test_reuse_is_keyed_on_the_token_not_the_device(self) -> None:
@@ -533,7 +533,7 @@ class TestToken:
             second = ApiResponse[LoginData].model_validate(
                 (
                     await client.post(
-                        LOGIN_PATH, json={**ADMIN, "previous_token": "nacho_乱编的"}
+                        LOGIN_PATH, json={**ADMIN, "previous_token": "botnode_乱编的"}
                     )
                 ).json()
             ).data
@@ -579,13 +579,13 @@ class TestToken:
                     await client.post(
                         LOGIN_PATH,
                         json=ADMIN,
-                        headers={"Cookie": f"{SESSION_COOKIE}=nacho_forged"},
+                        headers={"Cookie": f"{SESSION_COOKIE}=botnode_forged"},
                     )
                 ).json()
             ).data
 
         assert data.reused is False
-        assert data.token.startswith("nacho_")
+        assert data.token.startswith("botnode_")
 
     async def test_revoked_session_token_is_401(self) -> None:
         """令牌**有状态**：会话一吊销，手里那个旧令牌立刻就不好使了。"""
@@ -627,7 +627,7 @@ class TestOptions:
 
         路径字段（``avatar_dir``）例外：配置侧写的是「相对项目根目录」、由配置系统解析成
         绝对路径，接口层侧的默认值是「相对当前工作目录」的裸路径 —— 两边本来就是两种口径，
-        真跑起来用的也是配置侧解析出来的那个（见 :func:`nacho.bootstrap.run`）。
+        真跑起来用的也是配置侧解析出来的那个（见 :func:`botnode.bootstrap.run`）。
         """
         from_config = ApiOptions.from_mapping(Settings().api.model_dump())
         from_code = ApiOptions()
@@ -657,10 +657,10 @@ class TestSecurity:
 
     def test_password_hash_roundtrip(self) -> None:
         hasher = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)
-        hashed = hasher.hash("nacho-admin")
-        assert "nacho-admin" not in hashed  # 明文不进哈希串
-        assert hasher.verify("nacho-admin", hashed)
-        assert not hasher.verify("nacho-other", hashed)
+        hashed = hasher.hash("botnode-admin")
+        assert "botnode-admin" not in hashed  # 明文不进哈希串
+        assert hasher.verify("botnode-admin", hashed)
+        assert not hasher.verify("botnode-other", hashed)
 
     def test_broken_hash_verifies_false_instead_of_raising(self) -> None:
         hasher = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)
@@ -694,18 +694,18 @@ class TestSecurity:
             sessions=SessionService(await memory_session_store()),
         )
         profile = await service.register(
-            account="newbie", password="nacho-newbie", nickname="新来的"
+            account="newbie", password="botnode-newbie", nickname="新来的"
         )
         assert profile.account == "newbie"
         with pytest.raises(AccountAlreadyExistsError):
             await service.register(
-                account="newbie", password="nacho-newbie", nickname="新来的"
+                account="newbie", password="botnode-newbie", nickname="新来的"
             )
 
 
 # --------------------------------------------------------------------- 日志接入点
 def attach_file_outlet(
-    core: LogCore, directory: Path, *, prefix: str = "nacho"
+    core: LogCore, directory: Path, *, prefix: str = "botnode"
 ) -> LocalFileLogProcessor:
     """挂一份文件出口（整进程一份、按天分片）；返回它，好去读落下来的片。"""
     outlet = LocalFileLogProcessor(
@@ -939,11 +939,11 @@ class TestLogSearch:
 
         回归：界面上的「本机文件」原来发的是写死的 ``processors=local``，而装配层给文件出口
         起名叫 ``file``；日志系统对不认识的出口名**直接忽略**，于是表现成「一条都没有」。
-        这里故意把出口起成别的名字（``nacho.file``），证明认的是**类型**、不是名字。
+        这里故意把出口起成别的名字（``botnode.file``），证明认的是**类型**、不是名字。
         """
         core.mount(await memory_log_processor())
         outlet = LocalFileLogProcessor(
-            tmp_path, prefix="nacho", name="nacho.file", buffer_size=1, flush_interval=0
+            tmp_path, prefix="botnode", name="botnode.file", buffer_size=1, flush_interval=0
         )
         core.mount(outlet)
         # 直接起它（不等分发器那一轮）：这样落点当场就定得下来，好往当前那片塞一条标记记录
@@ -1102,9 +1102,9 @@ class TestResponseModels:
         assert response.model_dump() == {"success": True, "data": "ok", "trace_id": "-"}
 
     def test_login_request_keeps_password_secret(self) -> None:
-        request = LoginRequest(account="admin", password="nacho-admin")
-        assert "nacho-admin" not in str(request)
-        assert request.password.get_secret_value() == "nacho-admin"
+        request = LoginRequest(account="admin", password="botnode-admin")
+        assert "botnode-admin" not in str(request)
+        assert request.password.get_secret_value() == "botnode-admin"
 
     def test_login_data_shape(self) -> None:
         data = LoginData(token="t", expires_in=60, user={"id": "u", "account": "a"})  # type: ignore[arg-type]

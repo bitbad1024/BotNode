@@ -1,4 +1,4 @@
-"""``nacho/core/logger/queue.py`` 单元测试。
+"""``botnode/core/logger/queue.py`` 单元测试。
 
 对应提交 ``4e333eb feat(logger): 新增进程内异步日志队列 AsyncLogQueue``。
 覆盖三种溢出策略、关闭语义与批量取用。
@@ -9,8 +9,8 @@ import asyncio
 
 import pytest
 
-from nacho.core.logger.models import LogRecord
-from nacho.core.logger.queue import AsyncLogQueue, OverflowPolicy
+from botnode.core.logger.models import LogRecord
+from botnode.core.logger.queue import AsyncLogQueue, OverflowPolicy
 
 
 def make(message: str) -> LogRecord:

@@ -4,7 +4,7 @@
 
     python examples/api_demo.py
 
-需要 ``fastapi`` + ``httpx``（``pip install "nacho[api]" "nacho[dev]"``）。请求不走真实
+需要 ``fastapi`` + ``httpx``（``pip install "botnode[api]" "botnode[dev]"``）。请求不走真实
 网络：用 ``httpx.AsyncClient`` 挂 ASGI 传输层直接打进应用，所以示例能一口气跑完。
 真要对外服务，用最后第 7 段给的 uvicorn 命令。
 
@@ -12,7 +12,7 @@
 
 0. **日志出口**：``configure`` 建核心时挂**一份**文件出口（按天分片，片名
    ``api-demo-<日期>.log``）—— 接口层的日志照进这一份，靠记录里的 ``logger_name``
-   （业务用 ``nacho.api``、访问用 ``nacho.api.access``）区分来源，不再各落一个文件；
+   （业务用 ``botnode.api``、访问用 ``botnode.api.access``）区分来源，不再各落一个文件；
 1. **装配**：``create_app(ApiOptions.from_mapping(settings.api.model_dump()))`` —— 接口层
    不读配置文件，选项由配置系统的 ``[api]`` 一节转成普通映射喂进来；不传用户存储就用
    内存演示账号（admin / robot / guest）；
@@ -26,8 +26,8 @@
 6. **看日志落了什么**：flush 之后读 ``logs/api-demo-<日期>.log``（每行一个 JSON）；
 7. **起真服务**：uvicorn 命令（这里不真的起，起了就阻塞住）。
 
-演示账号（见 ``nacho.api.services.user.demo.DEMO_USERS``）：
-``admin / nacho-admin``（管理员）、``robot / nacho-robot``、``guest / nacho-guest``（已停用）。
+演示账号（见 ``botnode.api.services.user.demo.DEMO_USERS``）：
+``admin / botnode-admin``（管理员）、``robot / botnode-robot``、``guest / botnode-guest``（已停用）。
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 
 from config import Settings  # noqa: E402
-from nacho.api import (  # noqa: E402
+from botnode.api import (  # noqa: E402
     API_LOGGER_NAME,
     ApiOptions,
     ApiResponse,
@@ -53,13 +53,13 @@ from nacho.api import (  # noqa: E402
     api_logger,
     create_app,
 )
-from nacho.core.logger import LocalFileLogProcessor, configure, manager  # noqa: E402
+from botnode.core.logger import LocalFileLogProcessor, configure, manager  # noqa: E402
 
 #: 日志片的目录与前缀（片名 = ``<前缀>-<日期>[.<序号>].log``）
 LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 LOG_PREFIX: str = "api-demo"
 #: 演示账号
-ADMIN: dict[str, str] = {"account": "admin", "password": "nacho-admin"}
+ADMIN: dict[str, str] = {"account": "admin", "password": "botnode-admin"}
 
 
 def demo_options() -> ApiOptions:
@@ -102,7 +102,7 @@ async def main() -> None:
     prefix: str = options.prefix
 
     # 0) 日志：建核心时挂**一份**文件出口（按天分片）—— 接口层的日志照进这一份，
-    #    靠记录里的 logger_name（nacho.api / nacho.api.access）区分来源，不再各落一个文件
+    #    靠记录里的 logger_name（botnode.api / botnode.api.access）区分来源，不再各落一个文件
     outlet = LocalFileLogProcessor(
         LOG_DIR, prefix=LOG_PREFIX, buffer_size=1, flush_interval=0.2
     )
@@ -110,7 +110,7 @@ async def main() -> None:
         settings.app.name, level="DEBUG", console=True, processors=[outlet]
     )
     await core.start()
-    # 接口层那份也进这一份：给它挂一个**子节点**（名字相对核心的 ``nacho.api``），
+    # 接口层那份也进这一份：给它挂一个**子节点**（名字相对核心的 ``botnode.api``），
     # 之后 ``api_logger(API_LOGGER_NAME)`` 命中子节点缓存，取到的就是带这份出口的视图
     core.child(API_LOGGER_NAME, targets=[outlet])
     print(f"[0] 日志接入：片落 {LOG_DIR}（{LOG_PREFIX}-<日期>.log）")
@@ -143,13 +143,13 @@ async def main() -> None:
         show(
             "停用账号",
             await client.post(
-                f"{prefix}/auth/login", json={"account": "guest", "password": "nacho-guest"}
+                f"{prefix}/auth/login", json={"account": "guest", "password": "botnode-guest"}
             ),
         )
         show(
             "账号字符集不对",
             await client.post(
-                f"{prefix}/auth/login", json={"account": "admin 中文", "password": "nacho-admin"}
+                f"{prefix}/auth/login", json={"account": "admin 中文", "password": "botnode-admin"}
             ),
         )
         show("路由不存在", await client.get(f"{prefix}/nope"))

@@ -110,13 +110,13 @@ export default function LoginPage() {
           <span className={styles.logo} aria-hidden="true">
             <IconLogo size={18} />
           </span>
-          <span className={styles.brandName}>nacho</span>
+          <span className={styles.brandName}>BotNode</span>
           <span className={styles.brandTag}>控制台</span>
         </div>
 
         <div className={styles.head}>
           <h1 className={styles.title}>欢迎回来</h1>
-          <p className={styles.subtitle}>登录以继续使用 nacho 机器人框架控制台</p>
+          <p className={styles.subtitle}>登录以继续使用 BotNode 机器人框架控制台</p>
         </div>
 
         <form className={styles.form} onSubmit={onSubmit} noValidate>

@@ -3,9 +3,9 @@ chcp 65001 >nul
 setlocal
 
 rem ============================================================
-rem  nacho 后端启动脚本
+rem  BotNode 后端启动脚本
 rem  启动 FastAPI 接口层（默认 http://127.0.0.1:18080）
-rem  依赖：python 3.12+，以及 nacho[api] / nacho[onebot] 等依赖
+rem  依赖：python 3.12+，以及 botnode[api] / botnode[onebot] 等依赖
 rem ============================================================
 
 cd /d "%~dp0"
@@ -17,7 +17,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo 正在启动 nacho 后端（http://127.0.0.1:18080）...
+echo 正在启动 BotNode 后端（http://127.0.0.1:18080）...
 echo 按 Ctrl+C 停止。
 echo.
 

@@ -2,7 +2,7 @@
 
 套路与 ``test_onebot.py`` 同源：127.0.0.1 空闲端口 + ``websockets`` 客户端；令牌注册表
 不配（匿名模式）——翻译与路由不依赖归属语义，留一条空归属的连接就够。需要
-``websockets``（``pip install "nacho[onebot]"``），没装就整文件跳过。
+``websockets``（``pip install "botnode[onebot]"``），没装就整文件跳过。
 """
 from __future__ import annotations
 
@@ -15,14 +15,14 @@ from typing import cast
 
 import pytest
 
-pytest.importorskip("websockets", reason="OneBot 接入层要装 websockets：pip install \"nacho[onebot]\"")
+pytest.importorskip("websockets", reason="OneBot 接入层要装 websockets：pip install \"botnode[onebot]\"")
 
 from websockets.asyncio.client import connect
 
-from nacho.platforms.bridge import Gateway
-from nacho.platforms.bridge.models import PlatformEvent
-from nacho.platforms.bridge.onebot import OneBotAdapter, OneBotTarget
-from nacho.platforms.onebot import OneBotOptions
+from botnode.platforms.bridge import Gateway
+from botnode.platforms.bridge.models import PlatformEvent
+from botnode.platforms.bridge.onebot import OneBotAdapter, OneBotTarget
+from botnode.platforms.onebot import OneBotOptions
 
 #: 一条私聊消息事件（同 test_onebot.py 的形状）
 PRIVATE_MESSAGE: dict[str, object] = {
@@ -371,7 +371,7 @@ class _StubConn:
 
 def test_translate_unknown_event_type_raises() -> None:
     """翻译穷举不了的事件类型：当场 TypeError，绝不静默归成 meta（-O 下 assert 会被剥）。"""
-    from nacho.platforms.bridge.onebot import _translate
+    from botnode.platforms.bridge.onebot import _translate
 
     with pytest.raises(TypeError, match="未认识"):
         _translate(_StubConn(), _UnknownEvent())  # type: ignore[arg-type]

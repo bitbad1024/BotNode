@@ -1,9 +1,9 @@
 """OneBot 反向 WS 的测试：令牌定归属（谁的）、在线列表、踢人与吊销，以及管理用的 HTTP 接口。
 
 跑在 127.0.0.1 的空闲端口上（每个用例自己挑一个），WS 客户端用 ``websockets``；
-机器人凭证统一走 :class:`~nacho.bots.SqlBotStore`，每个用例挂在一块内存 sqlite
+机器人凭证统一走 :class:`~botnode.bots.SqlBotStore`，每个用例挂在一块内存 sqlite
 上（见 :func:`memory_registry`），不再单养一份内存实现。需要 ``websockets``
-（``pip install "nacho[onebot]"``），没装就整文件跳过。
+（``pip install "botnode[onebot]"``），没装就整文件跳过。
 """
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ from typing import Callable, cast
 
 import pytest
 
-pytest.importorskip("websockets", reason="OneBot 接入层要装 websockets：pip install \"nacho[onebot]\"")
-pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"nacho[api]\"")
-pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"nacho[dev]\"")
+pytest.importorskip("websockets", reason="OneBot 接入层要装 websockets：pip install \"botnode[onebot]\"")
+pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"botnode[api]\"")
+pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"botnode[dev]\"")
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E40
 from websockets.asyncio.client import connect  # noqa: E402
 from websockets.exceptions import ConnectionClosed, InvalidStatus  # noqa: E402
 
-from nacho.api import (  # noqa: E402
+from botnode.api import (  # noqa: E402
     ApiOptions,
     ApiResponse,
     ClientData,
@@ -39,17 +39,17 @@ from nacho.api import (  # noqa: E402
     TokenData,
     create_app,
 )
-from nacho.bots import SqlBotStore  # noqa: E402
-from nacho.platforms.bridge.manager import BotManager  # noqa: E402
-from nacho.platforms.onebot import (  # noqa: E402
+from botnode.bots import SqlBotStore  # noqa: E402
+from botnode.platforms.bridge.manager import BotManager  # noqa: E402
+from botnode.platforms.onebot import (  # noqa: E402
     OneBotOptions,
     OneBotServer,
 )
 
-#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）：id 就是 ``u-admin`` / ``u-robot``
-ADMIN = {"account": "admin", "password": "nacho-admin"}
+#: 演示账号（见 botnode.api.services.user.demo.DEMO_USERS）：id 就是 ``u-admin`` / ``u-robot``
+ADMIN = {"account": "admin", "password": "botnode-admin"}
 #: 普通用户（roles 里只有 user）：用来验「只能管自己名下那部分」
-ROBOT = {"account": "robot", "password": "nacho-robot"}
+ROBOT = {"account": "robot", "password": "botnode-robot"}
 #: 测试用的哈希迭代次数：默认 20 万次是生产该有的值，登录断言与迭代次数无关
 TEST_ITERATIONS: int = 1_000
 _TEST_HASHER = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)

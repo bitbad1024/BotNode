@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from nacho.core.scheduler import CronError, CronExpr, Task, TaskManager
+from botnode.core.scheduler import CronError, CronExpr, Task, TaskManager
 
 
 def noop() -> None:

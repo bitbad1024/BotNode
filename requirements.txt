@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlmodel
+aiosqlite
+websockets
+cryptography
+httpx
+redis
+aiomysql

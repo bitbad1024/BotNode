@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from nacho.core.scheduler import CronError, CronExpr, CronField
+from botnode.core.scheduler import CronError, CronExpr, CronField
 
 DT = datetime  # 缩写，用例里对齐更清爽
 

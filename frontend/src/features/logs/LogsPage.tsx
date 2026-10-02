@@ -298,7 +298,7 @@ export default function LogsPage() {
               className={styles.control}
               type="text"
               value={draft.loggerName}
-              placeholder="如 nacho.api、nacho.bridge、nacho.onebot"
+              placeholder="如 botnode.api、botnode.bridge、botnode.onebot"
               onChange={(e) => patchDraft({ loggerName: e.target.value })}
             />
           </label>

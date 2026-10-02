@@ -1,6 +1,6 @@
-"""``nacho/core/logger/processors/base.py`` 单元测试。
+"""``botnode/core/logger/processors/base.py`` 单元测试。
 
-命名约定：``tests/test_log_<模块>.py`` 对应 ``nacho/core/logger/<模块>.py``；
+命名约定：``tests/test_log_<模块>.py`` 对应 ``botnode/core/logger/<模块>.py``；
 ``log_`` 前缀用于指明是「日志框架」的哪个模块，避免与框架里其它 ``base``
 模块的同名测试混淆。
 
@@ -15,12 +15,12 @@ from collections.abc import Callable
 
 import pytest
 
-from nacho.core.logger.models import LogLevel, LogRecord, LogSearchResult, TimestampLike
-from nacho.core.logger.processors.base import BaseLogProcessor
+from botnode.core.logger.models import LogLevel, LogRecord, LogSearchResult, TimestampLike
+from botnode.core.logger.processors.base import BaseLogProcessor
 #: ``_LogBuffer`` 是模块内部的辅助类，其容量保证与溢出取舍只能在此直接验证，
 #: 因此有意越过私有可见性检查。
-from nacho.core.logger.processors.base import _LogBuffer  # pyright: ignore[reportPrivateUsage]
-from nacho.core.logger.queue import OverflowPolicy
+from botnode.core.logger.processors.base import _LogBuffer  # pyright: ignore[reportPrivateUsage]
+from botnode.core.logger.queue import OverflowPolicy
 
 
 def record(message: str) -> LogRecord:
@@ -36,7 +36,7 @@ def flush_tasks() -> list[asyncio.Task[object]]:
     return [
         task
         for task in asyncio.all_tasks()
-        if task.get_name().startswith("nacho-log-flush-")
+        if task.get_name().startswith("botnode-log-flush-")
     ]
 
 
@@ -300,7 +300,7 @@ class TestFailureIsolation:
     ) -> None:
         processor = RecordingProcessor(buffer_size=1, max_failures=1)
         processor.fail_times = 99
-        with caplog.at_level(logging.ERROR, logger="nacho.core.logger.processor"):
+        with caplog.at_level(logging.ERROR, logger="botnode.core.logger.processor"):
             await processor.handle(record("a"))
         assert any(item.levelno == logging.ERROR for item in caplog.records)
 

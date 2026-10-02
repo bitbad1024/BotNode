@@ -1,7 +1,7 @@
 """Kook 适配器测试：事件翻译（KookEvent -> PlatformEvent）、clients / send 透传、投递口。
 
-不 import ``nacho.kook`` 的底层 WS（正向连接要真连网关，测试里用 FakeClient 走翻译 +
-透传），只验 :class:`nacho.platforms.bridge.kook.KookAdapter` 这层胶水。
+不 import ``botnode.kook`` 的底层 WS（正向连接要真连网关，测试里用 FakeClient 走翻译 +
+透传），只验 :class:`botnode.platforms.bridge.kook.KookAdapter` 这层胶水。
 """
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from nacho.platforms.bridge.kook import KookAdapter, KookTarget, _translate
-from nacho.platforms.bridge.models import PlatformEvent
-from nacho.platforms.kook import KookEvent, KookOptions
+from botnode.platforms.bridge.kook import KookAdapter, KookTarget, _translate
+from botnode.platforms.bridge.models import PlatformEvent
+from botnode.platforms.kook import KookEvent, KookOptions
 
 
 def test_translate_group_message() -> None:
@@ -125,7 +125,7 @@ class _FakeClient:
 
     async def call(self, action: str, /, **params: object) -> Any:
         self.calls.append((action, dict(params)))
-        from nacho.platforms.kook import KookActionResponse
+        from botnode.platforms.kook import KookActionResponse
 
         return KookActionResponse(code=0 if self._ok else 40001, message="success" if self._ok else "参数错误")
 
@@ -142,7 +142,7 @@ def _make_adapter(  # type: ignore[no-untyped-def]
     """把 FakeClient 塞进适配器（绕过构造时的真客户端与多客户端字典）。"""
     adapter = KookAdapter.__new__(KookAdapter)
     adapter._publish = publish  # noqa: SLF001
-    adapter._log = __import__("nacho.core.logger", fromlist=["default_core"]).default_core().child("bridge")
+    adapter._log = __import__("botnode.core.logger", fromlist=["default_core"]).default_core().child("bridge")
     adapter._clients = {bot_id: client}  # noqa: SLF001
     adapter._owners = {bot_id: owner_id}  # noqa: SLF001
     adapter._by_self = {}  # noqa: SLF001

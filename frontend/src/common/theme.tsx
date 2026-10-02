@@ -1,6 +1,6 @@
 /**
  * 明 / 暗主题。初始主题由 index.html 内联脚本在首帧写入 <html data-theme>，
- * 这里与之对齐（无闪烁）；切换后写入 localStorage('nacho.theme')。
+ * 这里与之对齐（无闪烁）；切换后写入 localStorage('botnode.theme')。
  */
 import {
   createContext,
@@ -14,7 +14,7 @@ import { IconSun, IconMoon } from './icons'
 
 export type Theme = 'light' | 'dark'
 
-const STORAGE_KEY = 'nacho.theme'
+const STORAGE_KEY = 'botnode.theme'
 
 interface ThemeContextValue {
   theme: Theme

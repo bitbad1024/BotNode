@@ -9,9 +9,9 @@ import dataclasses
 
 import pytest
 
-from nacho.platforms.bridge import Gateway
-from nacho.platforms.bridge.models import ActionResult, BotClient, ChatTarget, PlatformEvent
-from nacho.platforms.bridge.protocols import BotAdapter
+from botnode.platforms.bridge import Gateway
+from botnode.platforms.bridge.models import ActionResult, BotClient, ChatTarget, PlatformEvent
+from botnode.platforms.bridge.protocols import BotAdapter
 
 
 # --------------------------------------------------------------------- 模型口径

@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import BASE_DIR, Settings
-from nacho.api import (
+from botnode.api import (
     ApiOptions,
     ApiResponse,
     AvatarTooLargeError,
@@ -36,11 +36,11 @@ from nacho.api import (
     ValidationError,
     create_app,
 )
-from nacho.api.services.profile import ALLOWED_IMAGE_TYPES, sniff_image_type
+from botnode.api.services.profile import ALLOWED_IMAGE_TYPES, sniff_image_type
 
-#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）；id 就是 ``u-<账号>``
-ADMIN = {"account": "admin", "password": "nacho-admin"}
-ROBOT = {"account": "robot", "password": "nacho-robot"}
+#: 演示账号（见 botnode.api.services.user.demo.DEMO_USERS）；id 就是 ``u-<账号>``
+ADMIN = {"account": "admin", "password": "botnode-admin"}
+ROBOT = {"account": "robot", "password": "botnode-robot"}
 LOGIN_PATH = "/api/auth/login"
 PROFILE_PATH = "/api/profile"
 AVATAR_PATH = "/api/profile/avatar"
@@ -262,7 +262,7 @@ class TestProfileService:
         """
         import asyncio
 
-        from nacho.core.logger import (
+        from botnode.core.logger import (
             BaseLogProcessor,
             LogCore,
             LogRecord,

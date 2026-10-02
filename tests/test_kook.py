@@ -1,7 +1,7 @@
 """Kook 正向 WS 的测试：选项、事件解析、连网关收事件（用本地 WS 服务端模拟 Kook 网关）。
 
 跑在 127.0.0.1 的空闲端口上（每个用例自己挑一个），客户端用 ``websockets``。需要
-``websockets``（``pip install "nacho[kook]"``），没装就整文件跳过。
+``websockets``（``pip install "botnode[kook]"``），没装就整文件跳过。
 """
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from typing import cast
 
 import pytest
 
-pytest.importorskip("websockets", reason="Kook 接入层要装 websockets：pip install \"nacho[kook]\"")
+pytest.importorskip("websockets", reason="Kook 接入层要装 websockets：pip install \"botnode[kook]\"")
 
 from websockets.asyncio.server import serve  # noqa: E402
 
-from nacho.platforms.kook import (  # noqa: E402
+from botnode.platforms.kook import (  # noqa: E402
     EVENT_TEXT,
     KookActionResponse,
     KookClient,
@@ -27,7 +27,7 @@ from nacho.platforms.kook import (  # noqa: E402
     parse_action_response,
     parse_event,
 )
-from nacho.platforms.kook.client import _action_path, _reconnect_delay, _with_resume  # noqa: E402
+from botnode.platforms.kook.client import _action_path, _reconnect_delay, _with_resume  # noqa: E402
 
 
 def free_port() -> int:
@@ -316,7 +316,7 @@ async def test_stop_returns_serve_forever_quickly(monkeypatch: pytest.MonkeyPatc
 
 def test_reconnect_delay_grows_and_caps(monkeypatch: pytest.MonkeyPatch) -> None:
     """重连退避：连续失败指数增长、封顶上限；计数清零回到基准。"""
-    monkeypatch.setattr("nacho.platforms.kook.client._jitter", lambda: 1.0)  # 去掉抖动便于断言
+    monkeypatch.setattr("botnode.platforms.kook.client._jitter", lambda: 1.0)  # 去掉抖动便于断言
     options = KookOptions(reconnect_interval=3.0, reconnect_max_interval=30.0)
     assert _reconnect_delay(options, 0) == 3.0  # 重置 / 刚断开
     assert _reconnect_delay(options, 1) == 3.0
@@ -374,7 +374,7 @@ async def test_client_rest_rebuilds_connection_after_idle(monkeypatch: pytest.Mo
 async def test_client_rest_retries_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
     """429 瞬时失败按退避重试，最后成功；重试耗尽按环境问题抛。"""
     client = KookClient(KookOptions(token="abc", rest_max_retries=2, rest_min_interval=0.0))
-    monkeypatch.setattr("nacho.platforms.kook.client._rest_backoff", lambda attempt: 0.0)  # 别真等退避
+    monkeypatch.setattr("botnode.platforms.kook.client._rest_backoff", lambda attempt: 0.0)  # 别真等退避
     count: dict[str, int] = {"n": 0}
 
     def script(n: int):
@@ -536,7 +536,7 @@ class _FakeWs:
 
 def test_reconnect_delay_matches_official_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
     """默认退避就是官方序列：2、4（重连）-> 8、16（resume）-> 32 -> 60 封顶。"""
-    monkeypatch.setattr("nacho.platforms.kook.client._jitter", lambda: 1.0)  # 去掉抖动
+    monkeypatch.setattr("botnode.platforms.kook.client._jitter", lambda: 1.0)  # 去掉抖动
     options = KookOptions()  # reconnect_interval=2.0 / reconnect_max_interval=60.0
     assert _reconnect_delay(options, 1) == 2.0
     assert _reconnect_delay(options, 2) == 4.0
@@ -552,7 +552,7 @@ async def test_run_loop_rediscovers_gateway_after_resume_attempts(
 ) -> None:
     """四拍（2、4、8、16）都失败后回到第 1 步：清掉网关地址，下次重新 discover。"""
     monkeypatch.setattr(
-        "nacho.platforms.kook.client._reconnect_delay", lambda options, attempts: 0.0
+        "botnode.platforms.kook.client._reconnect_delay", lambda options, attempts: 0.0
     )
 
     async def always_fail(self: KookClient) -> bool:
@@ -664,7 +664,7 @@ async def test_resume_ack_updates_session_id() -> None:
 
 async def test_hello_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     """连上后 6 秒（测试里调短）没收到 hello：主动断开，不干等网关掐线。"""
-    monkeypatch.setattr("nacho.platforms.kook.client._HELLO_TIMEOUT", 0.05)
+    monkeypatch.setattr("botnode.platforms.kook.client._HELLO_TIMEOUT", 0.05)
     port = free_port()
     closed: list[int] = []
 
@@ -694,8 +694,8 @@ async def test_heartbeat_closes_connection_when_pong_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """心跳发出后没等到 pong（官方 6 秒，测试里调短）：探活也不回才主动断开。"""
-    monkeypatch.setattr("nacho.platforms.kook.client._PONG_TIMEOUT", 0.05)
-    monkeypatch.setattr("nacho.platforms.kook.client._PROBE_GAPS", (0.05, 0.05))
+    monkeypatch.setattr("botnode.platforms.kook.client._PONG_TIMEOUT", 0.05)
+    monkeypatch.setattr("botnode.platforms.kook.client._PROBE_GAPS", (0.05, 0.05))
     client = KookClient(KookOptions(token="abc", heartbeat_interval=0.01))
     ws = _FakeWs()
     client._ws = ws  # noqa: SLF001
@@ -713,8 +713,8 @@ async def test_heartbeat_probe_keeps_connection_when_pong_returns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """心跳超时先探活：补发的 ping 收到 pong 就算连接还在，不打断。"""
-    monkeypatch.setattr("nacho.platforms.kook.client._PONG_TIMEOUT", 0.05)
-    monkeypatch.setattr("nacho.platforms.kook.client._PROBE_GAPS", (0.3, 0.3))
+    monkeypatch.setattr("botnode.platforms.kook.client._PONG_TIMEOUT", 0.05)
+    monkeypatch.setattr("botnode.platforms.kook.client._PROBE_GAPS", (0.3, 0.3))
     client = KookClient(KookOptions(token="abc", heartbeat_interval=0.01))
     ws = _FakeWs()
     client._ws = ws  # noqa: SLF001
