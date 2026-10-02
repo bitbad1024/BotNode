@@ -24,6 +24,7 @@ import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
 import OwnerFilter from '../../common/OwnerFilter'
+import { useAuth } from '../auth/authStore'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
 import { CardGridSkeleton } from '../../common/Skeleton'
 import { Modal } from '../../common/Modal'
@@ -71,6 +72,9 @@ function describe(err: unknown): string {
 
 export default function TokensPage() {
   const { pushToast } = useToast()
+  const { state } = useAuth()
+  /** 自己的归属 id：签发的机器人永远归它（后端按登录用户签发） */
+  const myId = state.user?.id ?? ''
 
   const [tokens, setTokens] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
@@ -81,6 +85,9 @@ export default function TokensPage() {
   const [owners, setOwners] = useState<Owner[]>([])
   /** 筛选中的归属 id；空串 = 全部 */
   const [ownerFilter, setOwnerFilter] = useState('')
+
+  /** 能不能添加：只看「全部」或自己的归属 —— 切到别人的归属时加的也是自己的 */
+  const canCreate = ownerFilter === '' || ownerFilter === myId
 
   const [platform, setPlatform] = useState('onebot')
   const [account, setAccount] = useState('')
@@ -210,18 +217,20 @@ export default function TokensPage() {
           <CardGridSkeleton />
         ) : (
           <div className={styles.cardGrid}>
-            {/* 添加机器人：和机器人卡片同尺寸的入口，点开弹签发表单 */}
-            <button
-              type="button"
-              className={styles.addCard}
-              onClick={() => setIssueOpen(true)}
-            >
-              <span className={styles.addCardIcon}>
-                <IconPlus size={22} />
-              </span>
-              <span className={styles.addCardTitle}>添加机器人</span>
-              <span className={styles.addCardHint}>签发访问令牌 · 明文只显示一次</span>
-            </button>
+            {/* 添加机器人：与卡片同尺寸的入口（看别人的归属时不出现 —— 加了也是加到自己名下） */}
+            {canCreate && (
+              <button
+                type="button"
+                className={styles.addCard}
+                onClick={() => setIssueOpen(true)}
+              >
+                <span className={styles.addCardIcon}>
+                  <IconPlus size={22} />
+                </span>
+                <span className={styles.addCardTitle}>添加机器人</span>
+                <span className={styles.addCardHint}>签发访问令牌 · 明文只显示一次</span>
+              </button>
+            )}
             {tokens.map((t) => {
               return (
                 <div key={t.id} className={styles.card}>
@@ -301,10 +310,11 @@ export default function TokensPage() {
               <div className={styles.emptyGuide}>
                 <IconKey size={16} />
                 <div>
-                  <b>还没有机器人</b>
+                  <b>{canCreate ? '还没有机器人' : '这个归属下还没有机器人'}</b>
                   <p>
-                    点「添加机器人」签发访问令牌，明文只显示这一次。把明文配到 OneBot
-                    实现的反向 WS 地址上，它连进来就归到这个机器人下。
+                    {canCreate
+                      ? '点「添加机器人」签发访问令牌，明文只显示这一次。把明文配到 OneBot 实现的反向 WS 地址上，它连进来就归到这个机器人下。'
+                      : '切回「全部」或自己的归属才能添加；别人名下的机器人只能查看与启停。'}
                   </p>
                 </div>
               </div>
