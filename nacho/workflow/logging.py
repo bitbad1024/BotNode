@@ -1,18 +1,11 @@
 """workflow 的日志接入点。
 
 接的是 ``nacho.core.logger`` 那套进程门面，用名字 ``workflow``（相对核心 ``nacho`` ->
-``nacho.workflow``）:::
-
-    from nacho.workflow import workflow_logger
-
-    workflow_logger().info("工作流已登记", workflow_id=...)
-
-**业务模块一律不直接 ``default_core()``** —— 要日志实例就调 :func:`workflow_logger`；
-``runtime.py`` 里的模块级 ``_log()`` 与节点上下文的 ``logger`` 都走这一口。
-
-核心由装配层经 :func:`set_core` 存进本模块的槽位（组合根 ``nacho.bootstrap`` 或
-:func:`nacho.wiring.wire_loggers` 负责）。``import`` 本模块**零副作用** —— 没装配就调用
-:func:`workflow_logger` 会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+``nacho.workflow``）：``workflow_logger().info("工作流已登记", workflow_id=...)``。
+**业务模块一律不直接 ``default_core()``** —— ``runtime.py`` 的 ``_log()`` 与节点上下文的
+``logger`` 都走这一口。核心由装配层 :func:`set_core` 存进本模块槽位；``import`` 零副作用，
+没装配就调用会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+日志实例**用到才取**（模块级取会把默认核心定死）。详见 ``docs/workflow/workflow.md`` 第 7.6 节。
 """
 from __future__ import annotations
 

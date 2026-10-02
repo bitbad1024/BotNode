@@ -6,6 +6,7 @@
 节点类型（``type`` 枚举）与入库前校验的阶段约定见 :mod:`nacho.workflow.validator`；
 **数据值沿边流动**：边的 ``source_port`` / ``target_port`` 指向两端节点声明的端口
 （见 :class:`nacho.workflow.nodes.base.PortSpec`），节点不声明任何「变量名清单」。
+设计要点见 ``docs/workflow/workflow.md`` 第 7.1 节。
 """
 from __future__ import annotations
 

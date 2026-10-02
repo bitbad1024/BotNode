@@ -1,7 +1,7 @@
 # nacho.workflow 模块索引（MODULE MAP）
 
-> 本文件是 `nacho/workflow/` 下**逐文件 → 作用**的速查索引。详细的「为什么」写在每个 `.py` 的
-> 模块 docstring 里（`:mod:` 交叉引用），本文件只做「一眼定位」。
+> 本文件是 `nacho/workflow/` 下**逐文件 → 作用**的速查索引 + 各模块的「为什么」（第 7 节）；
+> 各 `.py` 的模块 docstring 只留一句话定位，并指回这里。
 >
 > **要写自己的节点，直接跳第 5 节**（完整指南：契约、注册即校验、可选依赖、测试写法）。
 >
@@ -105,6 +105,36 @@ store ──────────────► models
 > 触发**这一拍怎么跑**：上一次还没跑完、到点又到点时，跳过本次（单实例）还是开新实例叠加
 > （多实例）。登记那一趟由 `runtime.register_published_workflow` 读出来交给调度器的
 > `add(..., multi_instance=...)`；老库补列同样按 `0`（单实例）填，升级行为不变。
+
+表结构（类型 / 约束写在 Python 里，DDL 按方言生成，sqlite 与 mariadb 共用一份）：
+
+```
+workflow_definitions          一个工作流一行（元数据 + 版本指针 + 暂存区）
+    id                 VARCHAR(64)  PRIMARY KEY
+    owner_id           VARCHAR(64)  INDEX            归属用户（多用户隔离的过滤列）
+    name               VARCHAR(128)                  同归属下唯一
+    status             VARCHAR(16)  DEFAULT 'draft'  draft / published
+    current_version    INTEGER      DEFAULT 0        最近提交的版本号
+    published_version  INTEGER      DEFAULT 0        已发布版本号（0 = 没发布过）
+    enabled            BOOLEAN      DEFAULT 0        运行开关（发布 ≠ 运行，默认不跑）
+    multi_instance     BOOLEAN      DEFAULT 0        实例策略（单 / 多实例，见上）
+    draft_graph_json   TEXT         DEFAULT ''       暂存区图（编辑中，未提交）
+    draft_updated_at   FLOAT        DEFAULT 0        暂存区最近保存时间
+    current_ref        VARCHAR(16)  DEFAULT 'draft'  当前指针 draft / version
+    created_at / updated_at        FLOAT             Unix 秒
+    UNIQUE(owner_id, name)
+
+workflow_versions             每次保存一张不可变图快照
+    id            VARCHAR(64)  PRIMARY KEY
+    workflow_id   VARCHAR(64)  INDEX
+    owner_id      VARCHAR(64)  INDEX  冗余归属，列表 / 鉴权少一次 join
+    version       INTEGER             同一工作流内自增
+    graph_json    TEXT                规范 JSON 快照
+    checksum      VARCHAR(64)         graph_json 的 sha256（内容没变不新增版本）
+    note          VARCHAR(255)
+    created_at    FLOAT
+    UNIQUE(workflow_id, version)
+```
 
 引擎由外部注入（同用户 / 会话 / 令牌存储的惯例），本模块不建引擎、不读配置。
 
@@ -394,3 +424,80 @@ async def test_my_node_outputs(...) -> None:
 | 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流） |
 | 给 `ctx` 注入新能力（如平台总线 / OneBot 服务端） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` / `onebot.py` 模块文档） |
 | 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `nacho.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
+
+---
+
+## 7. 各模块的「为什么」
+
+### 7.1 models.py —— 领域模型不认识 FastAPI，也不认识数据库
+
+图就是前端画布设的那份 JSON（`{"nodes": [...], "edges": [...]}`），记录在各层之间流转用的是
+冻结模型。节点类型（`type`）不做字面量枚举：合法类型 = 节点注册表里已登记的类型，新增类型在
+自己的模块里注册即可。**数据值沿边流动**：边的 `source_port` / `target_port` 指向两端节点声明
+的端口，节点不声明任何「变量名清单」。
+
+### 7.2 validator.py —— 三个阶段怎么跑
+
+一句话：**结构对不对 → 走不走得通 → 跑不跑得动 →（试不试一遍）→ 入库**。三个阶段由
+`validate_graph` 同步跑完，阶段间**短路**（前一阶段没过，后面不跑）。错误收集口径：一个阶段
+内把错误**收齐**再返回（前端一次性把所有红点画出来），阶段内部的检查不互相打断。
+
+校验规则**全部从节点注册表推导**，新增节点类型不需要改本文件。语义阶段最主要的活是**检查连线**
+（`_port_wiring`）：端口名对不对、两端类型配不配、必填入口接上没接上。
+
+### 7.3 executor.py —— 怎么把图跑起来
+
+- **节点执行函数不在这里**：都在 `nodes/`（一类节点一个文件）。本模块只管「怎么按顺序跑、
+  值怎么沿边流」；
+- 只跑 **start 沿出边可达的主流程节点**：孤儿节点允许存在于图里、允许保存，但永不执行；
+- 按拓扑顺序逐个跑。跑之前按**入边**把上游产出投递到本节点的入口（`ctx.inputs`，键 = 目标
+  端口名），跑完把返回值按**输出端口名**记下来供下游取；
+- **分支剪枝**（`condition` 这类分流节点）：执行后只让「选中出口」的边活着，没走的分支整段
+  跳过（`[skip]` 记在 `ctx.log`）并级联到它的下游；与另一条分支汇合（还有活入边）的节点照常执行；
+- 同步执行（不并发），因为单条图的节点之间有数据依赖；并行执行留给将来；
+- 触发是**开始节点**自己的事（`start` 的 `config.trigger`）：`time` 时它把整张图登记到
+  `TaskManager`，由调度器按 cron 触发整条流程；`message`（缺省）被动等消息接入，发布 / 试跑时
+  只写一条开始日志；
+- 图的公共算法在 `graph.py`，与校验器共用同一份口径。本模块只再导出
+  `SimpleWorkflowRunner` / `NodeExecutionContext` / `get_executor` 三个 —— 老代码
+  `from nacho.workflow.executor import ...` 还能用，新代码直接从 `nacho.workflow` 取。
+
+### 7.4 runtime.py —— 发布 ≠ 运行
+
+发布接口只挪发布指针；要不要真的跑由定义上的**运行开关**（`enabled`）决定，默认关着。服务
+启动时调一次 `load_published_workflows` —— 只挑**开关开着**的已发布工作流，把 `trigger=time`
+的开始节点按 cron 登记到调度器，整张图**不执行**；运行期间拨开关由 `WorkflowTriggers` 即时
+启停。
+
+登记只调开始节点自己（`register_published_workflow`）：以前靠「跑一遍图、顺带登记」，代价是
+每次启动都真的把整条流程执行一遍；停用是对称的（`stop_published_workflow`），同样不跑图。
+
+调度器到点后走 `make_trigger`：重新加载该版本的图并**跑整条流程**。这一趟**不碰调度器**
+（`ctx.register_triggers=False`）—— 任务在调度器里排着，而它在派发前就重排好了下一次；加 / 摘
+任务只发生在「登记那一趟」。
+
+### 7.5 graph.py —— 口径只留一份
+
+出边索引 / 可达集合 / 入口节点 / 边端口，校验器与运行器**共用同一份**：校验器拿它决定该查谁、
+该跳谁（孤儿不查），运行器拿它决定该跑谁（孤儿不跑）。以前这两处各写了一份 BFS，改一处忘一处
+就会出现「校验说没问题、跑起来却不执行」的偏差。
+
+### 7.6 logging.py —— 日志接入
+
+接的是 `nacho.core.logger` 那套进程门面，用名字 `workflow`（相对核心 `nacho` ->
+`nacho.workflow`）：
+
+```python
+from nacho.workflow import workflow_logger
+
+workflow_logger().info("工作流已登记", workflow_id=...)
+```
+
+**业务模块一律不直接 `default_core()`** —— 要日志实例就调 `workflow_logger()`；`runtime.py`
+里的模块级 `_log()` 与节点上下文的 `logger` 都走这一口。核心由装配层（`nacho.bootstrap` 或
+`nacho.wiring.wire_loggers`）经 `set_core()` 存进本模块槽位；`import` 本模块**零副作用**，
+没装配就调用会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+
+日志实例**用到才取，不要在模块级取**：模块级 `_logger = workflow_logger()` 是导入即执行的 ——
+谁先 import 这个模块，谁就顺手把进程默认日志核心按默认参数建出来（那时配置还没读），
+`[logging]` 里的颜色 / 级别就此定死。
