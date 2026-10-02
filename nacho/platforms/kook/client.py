@@ -7,7 +7,8 @@
 收发规则（Kook 网关）::
 
     框架 -> 网关：signal 2（ping，带最近 sn）；或 REST API（发消息等动作）
-    网关 -> 框架：signal 1（hello）/ signal 0（事件）/ signal 3（pong）
+    网关 -> 框架：signal 1（hello）/ signal 0（事件）/ signal 3（pong）/
+                  signal 5（reconnect：这条连接已失效，要主动断开并重新获取网关）
 
 Kook 的正向 WS **只推事件，不能发消息**；发消息走 **REST API**（HTTP POST，带 Bot Token）。
 所以 :meth:`KookClient.call` 走 HTTP，而不是 WS —— 这是与 OneBot 的另一个关键差异。
@@ -211,6 +212,24 @@ class KookClient:
             with suppress(Exception):
                 self._rest_conn.close()
             self._rest_conn = None
+
+    async def _close_current(self) -> None:
+        """主动关掉当前连接：让收报文循环退出，由 :meth:`_run_loop` 重新连接。
+
+        网关要求重连（signal 5）/ 握手失败 / 心跳超时都走这里 —— 官方口径是「客户端主动
+        断开」，而不是等连接自己烂掉。
+        """
+        ws = self._ws
+        if ws is None:
+            return
+        with suppress(Exception):
+            await cast(object, ws).close()  # type: ignore[attr-defined]
+
+    def _drain_inbox(self) -> None:
+        """清空待处理事件队列：官方要求 reconnect 时连消息队列一起清掉，否则消息会错乱。"""
+        while not self._inbox.empty():
+            with suppress(asyncio.QueueEmpty):
+                self._inbox.get_nowait()
 
     # ------------------------------------------------------------------ 收发循环
     async def _run_loop(self) -> None:
@@ -427,6 +446,16 @@ class KookClient:
                 self._session_id = data["session_id"]
             self._greeted = True
             self._ping_now()
+            return
+        if signal == 5:  # reconnect：服务端宣布这条连接已失效，客户端应主动断开重连
+            code = data.get("code") if isinstance(data, dict) else None
+            self._log.warning("kook 网关要求重连（reconnect），主动断开", code=code)
+            # 官方口径：重新获取 gateway + 清空 sn + 清空消息队列，否则会消息错乱
+            self._session_id = ""
+            self._sn = 0
+            self._gateway_url = ""
+            self._drain_inbox()
+            await self._close_current()
             return
         if signal == 3:  # pong：心跳回应，不推进 sn
             return
