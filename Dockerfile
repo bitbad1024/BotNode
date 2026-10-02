@@ -9,10 +9,13 @@
 #   国内网络可换源：--build-arg NPM_REGISTRY=https://registry.npmmirror.com \
 #                   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 #
-# 运行（config.toml 不进镜像，要挂进去）：
+# 运行（配置不进镜像，挂 data/ 目录进去）：
 #   docker run -d --name botnode -p 8080:80 -p 16700:16700 \
-#     -v "$PWD/config.toml:/app/config.toml:ro" \
-#     -v botnode-logs:/app/logs -v botnode-data:/app/data botnode:latest
+#     -v "$PWD/data:/app/data" \
+#     -v botnode-logs:/app/logs botnode:latest
+#
+# 挂的是 data/ 这个**目录**：配置（首次启动照模板生成 data/config.toml）、sqlite、密钥、头像
+# 都在里面 —— 挂目录而不是挂单文件，容器才写得进去，配置也就不必先手工准备好。
 #
 # 一键打包（前端 + 后端产物 + 这个镜像）：scripts/build-all.bat / scripts/build-all.sh
 
@@ -66,7 +69,7 @@ RUN chmod +x /entrypoint.sh \
 # 前端产物：控制台就在 /usr/share/nginx/html
 COPY --from=web /web/dist /usr/share/nginx/html
 
-# logs/（日志 + sqlite）、data/（头像等）要落在卷上，容器换了数据还在
+# logs/（日志）、data/（配置 + sqlite + 密钥 + 头像）要落在卷上，容器换了数据还在
 VOLUME ["/app/logs", "/app/data"]
 EXPOSE 80 16700
 

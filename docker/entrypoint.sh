@@ -6,8 +6,14 @@
 # 让容器停下来时日志不丢尾巴。
 set -e
 
-if [ ! -f /app/config.toml ]; then
-    echo "[entrypoint] 没找到 /app/config.toml：按默认值启动（建议挂一份，见 docs/deploy.md）"
+# 配置跟数据一起住在 /app/data（宿主上是 ./data，见 docker-compose.yml）：第一次启动时那份还
+# 不存在，就照镜像里的模板抄一份过去 —— 「跑起来就有配置文件可改」，不必先手工 cp 再启动。
+# 目录挂成只读时抄不进去：降级成按代码默认值跑，不因此起不来。
+CONFIG=/app/data/config.toml
+if [ ! -f "$CONFIG" ]; then
+    cp /app/config.toml.example "$CONFIG" 2>/dev/null \
+        && echo "[entrypoint] 已按模板生成 $CONFIG（宿主上是 ./data/config.toml）：改完重启容器即生效" \
+        || echo "[entrypoint] 没有 $CONFIG 也生成不了（data 目录只读？）：按代码默认值启动"
 fi
 
 nginx -g 'daemon off;' &

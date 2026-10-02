@@ -78,7 +78,8 @@ if [ "$SKIP_DOCKER" != "1" ]; then
     echo
     echo "镜像怎么跑："
     echo "  docker run -d --name botnode -p 8080:80 -p 16700:16700 \\"
-    echo "    -v \"\$PWD/config.toml:/app/config.toml:ro\" \\"
-    echo "    -v botnode-logs:/app/logs -v botnode-data:/app/data botnode:$TAG"
+    echo "    -v \"\$PWD/data:/app/data\" \\"
+    echo "    -v botnode-logs:/app/logs botnode:$TAG"
+    echo "  配置不用先准备：第一次启动会照模板生成 data/config.toml，改完重启容器即生效"
     echo "  或者：docker compose up -d --build"
 fi
