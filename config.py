@@ -58,7 +58,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo
 
-from nacho.core.logger import LogLevel
+from botnode.core.logger import LogLevel
 
 #: 项目根目录：配置、日志、数据库文件的相对路径都相对它解析
 BASE_DIR: Path = Path(__file__).resolve().parent
@@ -212,7 +212,7 @@ class _Region(BaseModel):
 class AppSettings(_Region):
     """``[app]``：进程级设置，和日志、数据库无关。"""
 
-    name: str = "nacho"  # 进程名，同时是日志核心名（子实例都以它为前缀）
+    name: str = "botnode"  # 进程名，同时是日志核心名（子实例都以它为前缀）
     debug: bool = False  # 调试模式：True 时忽略 level 直接开到 DEBUG
 
 
@@ -226,26 +226,26 @@ class DatabaseSettings(_Region):
     """
 
     driver: Driver = "sqlite"  # sqlite / mariadb
-    path: ConfigPath = BASE_DIR / "logs" / "nacho.db"  # sqlite 用
+    path: ConfigPath = BASE_DIR / "logs" / "botnode.db"  # sqlite 用
     # mariadb 用：服务地址与账号
     host: str = "127.0.0.1"
     port: int = Field(default=3306, ge=1, le=65535, description="1-65535 的端口")
-    user: str = "nacho"
+    user: str = "botnode"
     password: str = ""  # config.toml 不入库，密码写这里不会进 git
-    database: str = "nacho"  # 库名（要事先建好）
+    database: str = "botnode"  # 库名（要事先建好）
 
 
 # ----------------------------------------------------------------------- 区域：[logging]
 class FileLogSettings(_Region):
     """``[logging.file]``：本地文件出口 —— **一个目录、按天分片**。
 
-    片名是 ``<前缀>-<YYYY-MM-DD>[.<序号>].log``（``nacho-2026-09-28.log``）：跨天换日期片，
+    片名是 ``<前缀>-<YYYY-MM-DD>[.<序号>].log``（``botnode-2026-09-28.log``）：跨天换日期片，
     同一天里写满 ``rotate_minutes``（或顶到 ``max_bytes``）就加序号再开一片。模块的区分靠
     记录里的 ``logger_name`` 字段，不靠文件 —— 所以整进程只有这一份文件出口。
 
     旧版的 ``path`` / ``backup_count`` 由 ``dir`` / ``keep_days`` 取代，写在配置里会**报错**
     （见 :func:`_load`、:attr:`legacy_keys`）：静默忽略的代价是「配了没生效」—— 老的
-    ``logs/nacho.log`` 不再被读、也不会被清理，页面上只会看到「本机文件」一片空白。
+    ``logs/botnode.log`` 不再被读、也不会被清理，页面上只会看到「本机文件」一片空白。
     """
 
     #: 旧键 -> 替代项：``path`` 那时是单个文件，现在是目录；``backup_count`` 是「留几份历史」，
@@ -361,7 +361,7 @@ class CacheSettings(_Region):
     """
 
     backend: CacheBackendName = "memory"  # memory（进程内存）/ redis
-    namespace: str = "nacho"  # Redis 上的键前缀（共用实例时隔离）
+    namespace: str = "botnode"  # Redis 上的键前缀（共用实例时隔离）
     default_ttl: float = Field(default=0.0, ge=0, description="不小于 0 的秒数")
     fallback_to_memory: bool = False  # Redis 连不上时默认当场报错；true = 退回内存（记 warning）
     sweep_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")

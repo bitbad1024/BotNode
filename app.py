@@ -1,13 +1,13 @@
-"""应用入口：读配置 -> 初始化日志核心 -> 交给 nacho 装配业务 -> 优雅停机。
+"""应用入口：读配置 -> 初始化日志核心 -> 交给 botnode 装配业务 -> 优雅停机。
 
 **本文件只做核心初始化**：解析命令行、读 ``config.toml``、按 ``[logging]`` 把日志核心建起来、
-建好共用的数据库引擎；之后把这两样交给 :mod:`nacho.bootstrap`，由它装配其余模块（接口层
+建好共用的数据库引擎；之后把这两样交给 :mod:`botnode.bootstrap`，由它装配其余模块（接口层
 HTTP、OneBot 反向 WS、调度器、工作流），并在停机时先收业务（含冲刷日志余量、关库连接）。
 
-之所以切这一刀：日志核心必须在**任何业务模块被 import 之前**按配置建好。nacho 里有模块级
+之所以切这一刀：日志核心必须在**任何业务模块被 import 之前**按配置建好。botnode 里有模块级
 ``default_core().child(...)``（导入即执行）——谁先被 import，谁就顺手把进程默认核心按默认
 参数建出来，配置里的颜色 / 级别就此定死、再也传不进去（``LogManager.configure`` 在「已存在
-核心」时只合并 processors）。所以本文件顶层**不 import 任何业务模块**，:mod:`nacho.bootstrap`
+核心」时只合并 processors）。所以本文件顶层**不 import 任何业务模块**，:mod:`botnode.bootstrap`
 也是建好核心之后才（在函数里）导入。
 
 配置不在这里：TOML 读取、取值校验、:class:`Settings` 都在同目录的 ``config.py``，本文件只管
@@ -18,7 +18,7 @@ HTTP、OneBot 反向 WS、调度器、工作流），并在停机时先收业务
 （用户视角就是"什么提示都没有"）。探测失败抛带 target 的异常，入口统一打成 ``[初始化错误]``
 干净退出；mariadb 连接带 ``connect_timeout=5``，连不上 5 秒内报错，不干等系统级超时。
 
-初始化沿用 ``nacho/core/logger/__init__.py`` 里「进程门面」的用法——这里只用这两个::
+初始化沿用 ``botnode/core/logger/__init__.py`` 里「进程门面」的用法——这里只用这两个::
 
     configure(...)        # 建（或复用）进程默认核心
     await core.start()    # 起来之后业务模块取的实例才带得上这些出口
@@ -26,17 +26,17 @@ HTTP、OneBot 反向 WS、调度器、工作流），并在停机时先收业务
 Ctrl+C 走优雅停机：主协程被取消 -> 业务侧收尾（停服务 / 等调度器 / 冲刷日志 / 关库）-> 关日志
 库连接，安静退出不吐 traceback（收尾期间再按一次 Ctrl+C 才是强杀）。
 
-接口层（``nacho.api``）随主程序由 uvicorn 起成 HTTP 服务，和 OneBot 同进程、同事件循环跑；
-监听地址在 ``[api]`` 的 ``host`` / ``port``。OneBot 反向 WS（``nacho.onebot``）同样随主程序起，
+接口层（``botnode.api``）随主程序由 uvicorn 起成 HTTP 服务，和 OneBot 同进程、同事件循环跑；
+监听地址在 ``[api]`` 的 ``host`` / ``port``。OneBot 反向 WS（``botnode.onebot``）同样随主程序起，
 监听 ``[onebot]`` 的 ``host`` / ``port``，日志单独落 ``logs/onebot.log``（同进程共用日志核心，
-只是换个文件）。装配与停机的细节都在 :mod:`nacho.bootstrap`。
+只是换个文件）。装配与停机的细节都在 :mod:`botnode.bootstrap`。
 
 运行::
 
     python app.py                     # 读 ./config.toml，不存在则按默认值启动
     python app.py -c path/to.toml     # 指定配置文件
 
-依赖：``app.py`` 需要 ``nacho[api]`` + ``nacho[onebot]``（``fastapi`` / ``uvicorn`` /
+依赖：``app.py`` 需要 ``botnode[api]`` + ``botnode[onebot]``（``fastapi`` / ``uvicorn`` /
 ``sqlmodel`` / ``aiosqlite`` / ``websockets``）。
 """
 from __future__ import annotations
@@ -59,8 +59,8 @@ from config import (
     DatabaseSettings,
     Settings,
 )
-from nacho import __version__
-from nacho.core.logger import (
+from botnode import __version__
+from botnode.core.logger import (
     BaseLogProcessor,
     DatabaseLogProcessor,
     LocalFileLogProcessor,
@@ -68,7 +68,7 @@ from nacho.core.logger import (
     LogLevel,
     configure,
 )
-from nacho.db import SqlLogStore
+from botnode.db import SqlLogStore
 
 # --------------------------------------------------------------------------- 初始化
 #: 日志出口单独连另一个库时自建的引擎（默认没有，用的就是业务那个）；停机时一并收
@@ -79,7 +79,7 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     """按 ``[logging]`` 建日志核心，并把共用的库引擎一并建好交回调用方。
 
     引擎（只是连接池，第一次真正用到才连库）在这里一起建：库出口得有引擎才能挂，建好一并
-    交给 :mod:`nacho.bootstrap` 给业务存储复用（两者**共用同一个**）——``[logging.database]``
+    交给 :mod:`botnode.bootstrap` 给业务存储复用（两者**共用同一个**）——``[logging.database]``
     单独配了连接项（要把日志放另一个库）时才另建一个。
 
     业务侧（建表、起服务、拉缓存）**不在这里**：那些模块一被 import 就可能写日志，必须等核心
@@ -97,7 +97,7 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     )
     await _probe_database(engine, db_target, settings.database.driver)
 
-    # 片名前缀：配置留空就跟进程名，于是片名与进程名对得上（nacho-2026-09-28.log）
+    # 片名前缀：配置留空就跟进程名，于是片名与进程名对得上（botnode-2026-09-28.log）
     file_prefix: str = file_log.prefix or app.name
     processors: list[BaseLogProcessor] = []
     if file_log.enabled:
@@ -204,7 +204,7 @@ async def _probe_database(engine: AsyncEngine, target: str, driver: str) -> None
 # --------------------------------------------------------------------------- 入口
 def _parse_args(argv: Sequence[str] | None) -> str:
     """解析命令行参数，返回配置文件路径。"""
-    parser = argparse.ArgumentParser(description="nacho 应用入口")
+    parser = argparse.ArgumentParser(description="BotNode 应用入口")
     _ = parser.add_argument(
         "-c",
         "--config",
@@ -215,7 +215,7 @@ def _parse_args(argv: Sequence[str] | None) -> str:
 
 
 async def _main(argv: Sequence[str] | None = None) -> None:
-    """入口：配置 -> 日志核心 -> 交给 nacho 装配 -> 等停机。
+    """入口：配置 -> 日志核心 -> 交给 botnode 装配 -> 等停机。
 
     真正的服务（接口层 HTTP、OneBot 反向 WS）都在后台任务里跑，本函数只把**顺序**摆正：
     初始化哪一步失败都当场退出（``SystemExit(2)``），不留半截状态。
@@ -235,7 +235,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(2) from exc
 
     # 3) 装配：核心建好之后才导入业务装配模块（顺序的意义见模块文档）
-    from nacho.bootstrap import run, serve_forever, shutdown
+    from botnode.bootstrap import run, serve_forever, shutdown
 
     try:
         core.info(
@@ -282,7 +282,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     """同步入口：``python app.py`` 走这里。"""
     # Windows 下 stderr 默认按本地代码页（GBK）写，而终端/捕获端按 UTF-8 读——中文全变乱码。
-    # 启动前把 stderr 统一成 UTF-8（nacho 自己的 console 出口就是 UTF-8），
+    # 启动前把 stderr 统一成 UTF-8（botnode 自己的 console 出口就是 UTF-8），
     # 这样启动失败时的「打印到 stderr」和日志核心的兜底（lastResort）都不再是乱码。
     try:
         if sys.stderr is not None:
