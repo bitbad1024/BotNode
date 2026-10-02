@@ -108,7 +108,7 @@ class SqlUserStore:
             await conn.run_sync(UserTable.metadata.create_all)
 
     async def seed_demo(self) -> int:
-        """表是空的时候种入演示账号（admin / robot / guest），返回**种了几条**。
+        """表是空的时候种入演示账号（只有一个 admin），返回**种了几条**。
 
         已有数据就一条都不动（返回 0）——幂等：谁调都不会把现有账号改成演示账号。
         """

@@ -70,9 +70,9 @@ from botnode.workflow.nodes import (  # noqa: E402
 )
 from botnode.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
-#: 演示账号（id 即 u-admin / u-robot）
+#: 演示账号只剩 admin（id 即 u-admin）；robot 由 :func:`login` 顺手注册（id 还是 u-robot）
 ADMIN = {"account": "admin", "password": "botnode-admin"}
-ROBOT = {"account": "robot", "password": "botnode-robot"}
+ROBOT = {"account": "robot", "password": "botnode-robot", "nickname": "巡检机器人"}
 _TEST_HASHER = Pbkdf2PasswordHasher(iterations=1_000)
 
 
@@ -3184,6 +3184,15 @@ async def api_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
 
 
 async def login(client: httpx.AsyncClient, who: dict[str, str]) -> str:
+    """登录拿令牌。
+
+    演示账号现在只剩 ``admin``（见 ``botnode.api.services.user.demo``）：非 admin 的账号
+    由这里顺手注册一个（注册要昵称，就用账号名顶上），用例不必各自准备。
+    """
+    if who["account"] != ADMIN["account"]:
+        await client.post(
+            "/api/auth/register", json={"nickname": who["account"], **who}
+        )
     response = await client.post("/api/auth/login", json=who)
     assert response.status_code == 200, response.text
     return str(response.json()["data"]["token"])

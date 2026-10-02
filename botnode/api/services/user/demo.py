@@ -5,13 +5,11 @@
 形状是 ``(账号, 明文密码, 昵称, 角色, 是否停用)``；密码在这里是明文，由哈希器现算成哈希
 再落存储，**明文不进存储层**。
 
-:meth:`~botnode.api.services.user.store_sql.SqlUserStore.seed_demo` 造三个固定账号：
-``admin / botnode-admin``（管理员）、``robot / botnode-robot``、``guest / botnode-guest``（已停用）。
+只种一个 ``admin / botnode-admin``（管理员）：够本地试用了，也少几份「默认口令」要人记得改。
+要别的账号走 ``/api/auth/register`` 注册（或管理入口建），演示数据里不再带了。
 """
 from __future__ import annotations
 
 DEMO_USERS: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = (
     ("admin", "botnode-admin", "管理员", ("admin", "user"), False),
-    ("robot", "botnode-robot", "巡检机器人", ("user",), False),
-    ("guest", "botnode-guest", "停用账号", ("user",), True),
 )

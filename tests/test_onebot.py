@@ -48,8 +48,9 @@ from botnode.platforms.onebot import (  # noqa: E402
 
 #: 演示账号（见 botnode.api.services.user.demo.DEMO_USERS）：id 就是 ``u-admin`` / ``u-robot``
 ADMIN = {"account": "admin", "password": "botnode-admin"}
-#: 普通用户（roles 里只有 user）：用来验「只能管自己名下那部分」
-ROBOT = {"account": "robot", "password": "botnode-robot"}
+#: 普通用户（roles 里只有 user）：用来验「只能管自己名下那部分」。
+#: 演示账号只剩 admin，这个账号由 login() 顺手注册 —— 昵称带上，用例会断言它。
+ROBOT = {"account": "robot", "password": "botnode-robot", "nickname": "巡检机器人"}
 #: 测试用的哈希迭代次数：默认 20 万次是生产该有的值，登录断言与迭代次数无关
 TEST_ITERATIONS: int = 1_000
 _TEST_HASHER = Pbkdf2PasswordHasher(iterations=TEST_ITERATIONS)
@@ -172,8 +173,15 @@ async def api_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
 
 
 async def login(client: httpx.AsyncClient, who: dict[str, str] | None = None) -> str:
-    """登录拿令牌（管理接口都要带它）；``who`` 不传就是 admin。"""
-    ok = await client.post("/api/auth/login", json=who or ADMIN)
+    """登录拿令牌（管理接口都要带它）；``who`` 不传就是 admin。
+
+    演示账号现在只剩 ``admin``（见 ``botnode.api.services.user.demo``）：非 admin 的账号
+    由这里顺手注册一个（注册要昵称，就用账号名顶上），用例不必各自准备。
+    """
+    account = who or ADMIN
+    if account["account"] != ADMIN["account"]:
+        await client.post("/api/auth/register", json={"nickname": account["account"], **account})
+    ok = await client.post("/api/auth/login", json=account)
     assert ok.status_code == 200, ok.text
     return ApiResponse[LoginData].model_validate(ok.json()).data.token
 

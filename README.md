@@ -44,13 +44,13 @@ cd frontend && npm install && npm run build
 
 ## 本地账号
 
-本地试用账号（由 `botnode/api/services/user/demo.py` 写入，**部署到公网前务必删除或改密码**）：
+本地试用账号只有一个（由 `botnode/api/services/user/demo.py` 写入，**部署到公网前务必改密码**）：
 
 | 账号 | 密码 | 角色 |
 |---|---|---|
 | `admin` | `botnode-admin` | 管理员 |
-| `robot` | `botnode-robot` | 普通用户 |
-| `guest` | `botnode-guest` | 只读 |
+
+要别的账号不必改代码：在登录页注册（`POST /api/auth/register`）即可，新账号是普通用户。
 
 ## 现在支持什么
 
