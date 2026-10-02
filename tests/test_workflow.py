@@ -1299,9 +1299,11 @@ async def test_http_node_raises_on_connection_failure(fake_http: type[FakeAsyncC
     """连不上 / 超时是环境问题：直接抛，但消息里要带方法 / 地址 / 超时与异常类型。"""
     import httpx
 
+    from botnode.workflow.nodes import EnvironmentFailure
+
     fake_http.error = httpx.ConnectError("连不上")
 
-    with pytest.raises(ConnectionError) as caught:
+    with pytest.raises(EnvironmentFailure) as caught:
         await exec_http(http_node(), NodeExecutionContext())
 
     message = str(caught.value)
@@ -1313,12 +1315,14 @@ async def test_http_node_raises_on_connection_failure(fake_http: type[FakeAsyncC
 async def test_http_node_connection_failure_names_the_exception_when_str_is_empty(
     fake_http: type[FakeAsyncClient],
 ) -> None:
-    """``str(exc)`` 为空（httpx 常见）时消息也不能空着 —— 用 repr 兜底。"""
+    """``str(exc)`` 为空（httpx 常见）时消息也不能空着 —— 用类型名兜底。"""
     import httpx
+
+    from botnode.workflow.nodes import EnvironmentFailure
 
     fake_http.error = httpx.ReadTimeout("")
 
-    with pytest.raises(ConnectionError, match="ReadTimeout"):
+    with pytest.raises(EnvironmentFailure, match="ReadTimeout"):
         await exec_http(http_node(), NodeExecutionContext())
 
 
@@ -3757,11 +3761,59 @@ async def test_workflow_failure_log_has_stack_type_and_node() -> None:
         failures = [r for r in records if r.message == "工作流执行失败"]
         assert failures, [r.message for r in records]
         record = failures[0]
-        assert record.extra["error_type"] == "NodeExecutionError"
+        assert record.extra["error_type"] == "ValueError"  # 取**最内层**原因，不是外层包装
         assert record.extra["node_id"] == "b"
         assert record.extra["node_type"] == "boom-env-log"
         assert record.extra["error"]  # 消息非空（str(exc) 空时用 repr 兜底）
-        assert record.exc_text and "ValueError" in record.exc_text  # 堆栈也在
+        assert record.exc_text and "ValueError" in record.exc_text  # 意外异常：堆栈照留
+    finally:
+        await engine.dispose()
+
+
+async def test_expected_environment_failure_logs_one_line(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """可预期的环境问题（超时 / 连不上）：日志**只记一行**、不铺 httpx 那几十行堆栈。
+
+    ``error_type`` / ``error`` 都取**最内层**原因（``ReadTimeout``），不是外层包装的名字 ——
+    排错要看的是「到底哪一步不通、为什么」。
+    """
+    import httpx
+
+    from botnode.core.scheduler import TaskManager
+    from botnode.workflow.runtime import run_published_workflow
+
+    fake_http.error = httpx.ReadTimeout("")
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("h", "http", url="https://v1.hitokoto.cn/", method="GET", timeout=20),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "h"), edge("h", "e")],
+    }
+    definition = await store.create("u-admin", "会超时的流")
+    await store.add_version(
+        definition, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+
+    try:
+        async with runtime_logs() as records:
+            await run_published_workflow(definition.id, 1, store, TaskManager())
+            await wait_for_records(records, count=1)
+
+        failures = [r for r in records if r.message == "工作流执行失败"]
+        assert failures, [r.message for r in records]
+        record = failures[0]
+        assert record.exc_text in (None, "")  # 不铺堆栈
+        assert record.extra["error_type"] == "ReadTimeout"
+        assert record.extra["node_id"] == "h" and record.extra["node_type"] == "http"
+        error = str(record.extra["error"])
+        assert "v1.hitokoto.cn" in error and "timeout=20.0s" in error  # 一行说清
     finally:
         await engine.dispose()
 

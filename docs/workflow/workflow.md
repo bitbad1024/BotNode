@@ -149,7 +149,7 @@ workflow_versions             每次保存一张不可变图快照
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | 回显（画布联调）：把入口的值原样从出口送下去，夹在中间看「线上流过了什么」 | `trigger` / `message` → `trigger` / `message` | `message`（缺省 `hello`） |
 | `constant.py` | **常量**：一个节点一个值，从 `value` 出口送下去 | `trigger` → `trigger` / `value` | **`value`**（必填，没有默认值） |
-| `http.py` | 发一次 HTTP 请求；**4xx / 5xx = 业务失败**（对方回了错）：抛 `NodeFailure`，停止向下传播；连不上 / 超时是环境问题，直接抛 | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
+| `http.py` | 发一次 HTTP 请求；**4xx / 5xx = 业务失败**（对方回了错）：抛 `NodeFailure`，停止向下传播；连不上 / 超时是**可预期的环境问题**：抛 `EnvironmentFailure`，中断整条流程但日志只记一行（不铺 httpx 堆栈） | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
 | `delay.py` | **等待**：异步等一会儿再往下走（`await asyncio.sleep`，**不阻塞事件循环**）；`0` = 不等（临时把等待关掉） | `trigger` / `seconds` → `trigger` | `seconds`（**入口**：接线覆盖手填，缺省 5；`0` 允许，上限 1 小时 —— 手填值由自注册校验器把，线上的值运行期判断） |
 | `json.py` | **JSON**：解析 JSON 文本 + 点路径取值（HTTP 的搭档）；空文本 / 解析失败 / 路径取不到 = **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `json` / `path` → `trigger` / `json_value` | `json`（**入口**必填：接线或手填）、`path`（缺省空 = 取整个文档；点分段，数字段是数组下标） |
 | `regex.py` | **正则**：提取第一个匹配（有组取组）/ 替换所有匹配（脱敏改写）；空文本 / 空正则 / 没匹配 / 正则语法错 = **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `text` / `pattern` / `replace` → `trigger` / `regex_value` | `text`、`pattern`（**入口**必填：接线或手填）、`action`（缺省 extract；枚举由自注册校验器把）、`replace`（替换文本，支持 \1 反向引用）、`flags`（i/m/s 组合，缺省无） |
@@ -289,7 +289,8 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 | 情况 | 怎么办 | 例子 |
 |---|---|---|
 | **业务失败**（这一趟没做成：算不出来、取不到、对方回了错） | 抛 `NodeFailure`：**停止向下传播** —— 本节点不产出值、出边全部置死，下游整段跳过（`ctx.log` 留 `[failed]` / `[skip]`），**别的分支与流程其余部分照常跑**，不留堆栈 | `operator` 算不出来；`json` / `regex` 取不到、抽不到；`http` 的 4xx / 5xx；`send` / `onebot` 的失败回执 |
-| **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`（普通异常）：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 入口没接线也没填；`send` 没接总线 / 没这个平台 / 归属下没在线连接；`cache` 的 `key` 入口没接线也没填、账号作用域却没有归属 |
+| **可预期的环境问题**（连不上、超时、对端拒绝、DNS 失败） | 抛 `EnvironmentFailure`（`ConnectionError` 子类）：整条流程照样中断，但日志**只记一行**（哪个节点 + 什么原因），**不铺底层堆栈** —— httpx / httpcore 那几十行帧没有信息增量 | `http` 节点连不上 / 超时 |
+| **其它环境问题**（配置写错、依赖没装、没接线、没接总线） | 直接 `raise`（普通异常）：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 的 `url` 入口没接线也没填；`send` 没接总线 / 没这个平台 / 归属下没在线连接；`cache` 的 `key` 入口没接线也没填、账号作用域却没有归属 |
 
 **为什么业务失败不再「送空串继续」**：空值会一路传到下游 —— 上一节的真实事故就是
 「operator 算不出来 → 空串 → send 把空消息发了出去 → 平台回个参数错误」。失败的值当结果
@@ -413,7 +414,7 @@ async def test_my_node_outputs(...) -> None:
 - [ ] 类型专属校验（可选）：注册时挂 `validator`，配置写错在保存时就报
 - [ ] 需要的拓扑约束：`role` / `min_outgoing` / `max_outgoing` / `expression_field`
 - [ ] 画布**不用改**：`label` / `order` / 端口 / `fields` 声明全了，节点就自动出现在面板上
-- [ ] 环境问题会抛、业务结果会返回（第 5.5 节）
+- [ ] 环境问题会抛（连不上 / 超时用 `EnvironmentFailure`，其余抛普通异常）、业务结果会返回（第 5.5 节）
 - [ ] 有单测，且外部依赖是打桩的
 
 ## 6. 要加的东西放哪
@@ -466,7 +467,8 @@ async def test_my_node_outputs(...) -> None:
   入边）的节点照常执行；
 - **业务失败停止向下传播**（`NodeFailure`）：节点自己判定「没做成」时抛它 —— 本节点**不产出
   值**（下游那条边取不到，回落到手填值）、出边全部置死，下游整段跳过并写明是被谁带停的；
-  **别的分支与流程其余部分照常跑**，不留堆栈。环境问题才抛普通异常中断整条；
+  **别的分支与流程其余部分照常跑**，不留堆栈。环境问题才中断整条：可预期的（连不上 / 超时）
+  抛 `EnvironmentFailure`，失败日志只记一行（堆栈没有信息增量）；别的抛普通异常并留堆栈；
 - 同步执行（不并发），因为单条图的节点之间有数据依赖；并行执行留给将来；
 - 触发是**开始节点**自己的事（`start` 的 `config.trigger`）：`time` 时它把整张图登记到
   `TaskManager`，由调度器按 cron 触发整条流程；`message`（缺省）被动等消息接入，发布 / 试跑时

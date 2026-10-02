@@ -59,6 +59,18 @@ class NodeFailure(RuntimeError):
       / :class:`RuntimeError` 一类：整条流程中断并留下堆栈，看得见是没配好。
     """
 
+
+class EnvironmentFailure(ConnectionError):
+    """**可预期的环境问题**：连不上、超时、对端拒绝、DNS 失败这类「外面不通」的错。
+
+    与普通异常一样会中断整条流程，区别只在日志：引擎知道这是可预期的，就只记**一行**
+    （哪个节点 + 什么原因），不铺几十行底层堆栈 —— 超时这种错，httpx / httpcore 那一串
+    帧没有任何信息增量。真正需要堆栈的是「代码 bug / 没配好」，那些照旧抛
+    :class:`ValueError` / :class:`RuntimeError`。
+
+    节点实现里：``raise EnvironmentFailure("...") from exc``，原异常链照留。
+    """
+
 #: 节点在图中的拓扑角色：start=唯一入口 / end=终点 / normal=普通节点
 NodeRole = Literal["start", "end", "normal"]
 

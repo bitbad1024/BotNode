@@ -29,7 +29,7 @@ from .graph import (
 )
 from .models import WorkflowEdge, WorkflowGraph
 from .nodes import NodeExecutionContext, get_executor, get_spec
-from .nodes.base import NodeFailure
+from .nodes.base import EnvironmentFailure, NodeFailure
 
 __all__ = [
     # 老 import 路径留的门（新代码从 botnode.workflow 取）
@@ -51,11 +51,20 @@ class NodeExecutionError(RuntimeError):
     这种），光记它等于什么都没记。
     """
 
-    def __init__(self, node_id: str, node_type: str, cause: BaseException) -> None:
+    def __init__(
+        self,
+        node_id: str,
+        node_type: str,
+        cause: BaseException,
+        *,
+        expected: bool = False,
+    ) -> None:
         detail = str(cause) or repr(cause)
         super().__init__(f"节点 {node_type}:{node_id} 执行失败：{type(cause).__name__}: {detail}")
         self.node_id: str = node_id
         self.node_type: str = node_type
+        #: 是不是**可预期的环境问题**（连不上 / 超时）：日志据此决定要不要铺堆栈
+        self.expected: bool = expected
 
 
 class SimpleWorkflowRunner:
@@ -169,8 +178,13 @@ class SimpleWorkflowRunner:
                     reason=f"上游 {node.type}:{current_id} 失败",
                 )
                 continue
-            except Exception as exc:  # noqa: BLE001 — 环境问题：包上节点信息再抛（堆栈照留）
-                raise NodeExecutionError(current_id, node.type, exc) from exc
+            except Exception as exc:  # noqa: BLE001 — 环境问题：包上节点信息再抛，原异常链照留
+                raise NodeExecutionError(
+                    current_id,
+                    node.type,
+                    exc,
+                    expected=isinstance(exc, EnvironmentFailure),
+                ) from exc
             produced[current_id] = output
             ran.add(current_id)
             spec = get_spec(node.type)
