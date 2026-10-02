@@ -103,7 +103,7 @@ class SessionService:
         try:
             await self._index.bind(token_hash=digest, user_id=user_id, ttl=ttl)
         except CacheError as exc:
-            self._log().error("会话缓存不可用，登录中止", token_hash=digest, error=str(exc))
+            self._log().error("会话缓存不可用，登录中止", token_hash=digest, error=str(exc) or repr(exc))
             raise InternalError("会话缓存不可用，请稍后重试") from exc
         self._log().info(
             "会话已开启",
@@ -140,7 +140,7 @@ class SessionService:
             found: tuple[str, float] | None = await self._index.resolve(digest)
         except CacheError as exc:
             # 缓存不可用：当"认不出来"处理，退回发新令牌（那条路照样会报缓存不可用）
-            self._log().warning("复用失败：会话缓存不可用", token_hash=digest, error=str(exc))
+            self._log().warning("复用失败：会话缓存不可用", token_hash=digest, error=str(exc) or repr(exc))
             return None
         if found is None or found[0] != user_id:
             return None
@@ -153,7 +153,7 @@ class SessionService:
         try:
             await self._index.bind(token_hash=digest, user_id=user_id, ttl=ttl)
         except CacheError as exc:
-            self._log().error("会话缓存不可用，复用中止", token_hash=digest, error=str(exc))
+            self._log().error("会话缓存不可用，复用中止", token_hash=digest, error=str(exc) or repr(exc))
             raise InternalError("会话缓存不可用，请稍后重试") from exc
         if session.remembered != remember:
             # 设备记录里那一栏也得跟着变，不然列表上显示的还是当初那次的选择
@@ -189,7 +189,7 @@ class SessionService:
             await self._index.slide(digest, ttl=ttl)
         except CacheError as exc:
             # 续期失败不致命：这次照样放行，只是它按原 TTL 到期（缓存抽风不该把人踢下线）
-            self._log().warning("会话续期失败", token_hash=digest, error=str(exc))
+            self._log().warning("会话续期失败", token_hash=digest, error=str(exc) or repr(exc))
         return Authenticated(
             user_id=user_id, token_hash=digest, expires_in=self._seconds(ttl)
         )
@@ -244,7 +244,7 @@ class SessionService:
         try:
             await self._index.drop(token_hash)
         except CacheError as exc:
-            self._log().error("吊销失败：缓存删不掉", token_hash=token_hash, error=str(exc))
+            self._log().error("吊销失败：缓存删不掉", token_hash=token_hash, error=str(exc) or repr(exc))
             raise InternalError("吊销失败：会话缓存不可用") from exc
 
     def _seconds(self, ttl: float) -> int:

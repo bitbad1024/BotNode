@@ -85,7 +85,7 @@ class Cache:
                         "若确实想退回本地缓存，可在 [cache] 里设 fallback_to_memory = true）"
                     ) from exc
                 self._degraded = True
-                self._log().warning("Redis 起不来，退回本地缓存", error=str(exc))
+                self._log().warning("Redis 起不来，退回本地缓存", error=str(exc) or repr(exc))
                 backend = MemoryCache(sweep_interval=options.sweep_interval, logger=self._log())
             else:
                 backend = redis_backend
