@@ -24,7 +24,8 @@ python app.py                                      # 后端 http://127.0.0.1:180
 cd frontend && npm install && npm run dev          # 控制台 http://127.0.0.1:15173
 ```
 
-Windows 也可以直接双击 `start-all.bat`。
+Windows 也可以直接双击 `scripts\start-all.bat`（后端 / 前端单独起分别是同目录下的
+`start-backend.bat` / `start-frontend.bat`）。
 
 数据库可选：sqlite、mariadb；
 
@@ -99,10 +100,10 @@ cd frontend && npm install && npm run build
 
 ## 参与
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)：环境准备、目录速览、代码约定、测试与提交规范
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)：社区行为准则
-- [SECURITY.md](SECURITY.md)：漏洞报告渠道与部署注意事项
-- [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)：第三方组件与许可
+- [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)：环境准备、目录速览、代码约定、测试与提交规范
+- [.github/CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md)：社区行为准则
+- [.github/SECURITY.md](.github/SECURITY.md)：漏洞报告渠道与部署注意事项
+- [docs/THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES)：第三方组件与许可
 
 ## 许可证
 

@@ -8,7 +8,8 @@ rem  启动 Vite 开发服务器（默认 http://127.0.0.1:15173）
 rem  依赖：node 18+ / npm；首次运行会自动安装依赖
 rem ============================================================
 
-cd /d "%~dp0"
+rem 脚本住在 scripts/ 下，项目根是它的上一级（下面 cd frontend 是相对根）
+cd /d "%~dp0.."
 
 where node >nul 2>nul
 if errorlevel 1 (

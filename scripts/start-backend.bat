@@ -8,7 +8,8 @@ rem  启动 FastAPI 接口层（默认 http://127.0.0.1:18080）
 rem  依赖：python 3.12+，以及 botnode[api] / botnode[onebot] 等依赖
 rem ============================================================
 
-cd /d "%~dp0"
+rem 脚本住在 scripts/ 下，项目根是它的上一级
+cd /d "%~dp0.."
 
 where python >nul 2>nul
 if errorlevel 1 (

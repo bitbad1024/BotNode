@@ -9,6 +9,9 @@ __pycache__/
 build/
 dist/
 
+# 打包产物（release/<名字>-<日期>/ 这种）
+release/
+
 #环境
 .venv/
 venv/

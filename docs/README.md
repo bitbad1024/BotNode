@@ -20,6 +20,16 @@
 
 包内还有一份接口层索引 `botnode/api/MODULES.md`（尚未搬进 `docs/`）。
 
+跟代码无关的项目文档在根与 `.github/` 下 —— GitHub 认这两个位置，放那儿不影响仓库页的展示：
+
+| 文档 | 位置 | 内容 |
+|---|---|---|
+| 贡献指南 | [`.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md) | 环境准备、目录速览、代码约定、测试、提交规范 |
+| 安全策略 | [`.github/SECURITY.md`](../.github/SECURITY.md) | 漏洞报告渠道、部署必关的门、已知设计取舍 |
+| 行为准则 | [`.github/CODE_OF_CONDUCT.md`](../.github/CODE_OF_CONDUCT.md) | 社区行为准则 |
+| 许可证 | [`LICENSE`](../LICENSE) · [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | MIT 与第三方组件许可 |
+
+
 ---
 
 ## 2. 框架总览
