@@ -1,7 +1,9 @@
-# nacho 文档总目录
+# BotNode 文档总目录
 
 > 这里是 `docs/` 的总入口：**按模块查文档见「文档索引」，想先看清整个框架见「框架总览」**。
 > 每个模块的「为什么」都收在对应文档里，代码里的模块 docstring 只留一句话定位并指回这里。
+>
+> 项目名 **BotNode**，Python 包名 `botnode`（文档里写路径 / import 时用小写包名）。
 
 ---
 
@@ -9,13 +11,13 @@
 
 | 文档 | 覆盖的模块 | 主要内容 |
 |---|---|---|
-| [logger/logger.md](logger/logger.md) | `nacho.core.logger` | 异步日志：root + child / bind / route、目标与过滤器、检索与刷新、进程门面 |
-| [cache/cache.md](cache/cache.md) | `nacho.core.cache` | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入 |
-| [scheduler/scheduler.md](scheduler/scheduler.md) | `nacho.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
-| [bridge/bridge.md](bridge/bridge.md) | `nacho.platforms.bridge` | 规范化事件 + 适配器协议 + Gateway 总线、OneBot / Kook 两个适配器、怎么写第三个平台 |
-| [workflow/workflow.md](workflow/workflow.md) | `nacho.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节） |
+| [logger/logger.md](logger/logger.md) | `botnode.core.logger` | 异步日志：root + child / bind / route、目标与过滤器、检索与刷新、进程门面 |
+| [cache/cache.md](cache/cache.md) | `botnode.core.cache` | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入 |
+| [scheduler/scheduler.md](scheduler/scheduler.md) | `botnode.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
+| [bridge/bridge.md](bridge/bridge.md) | `botnode.platforms.bridge` | 规范化事件 + 适配器协议 + Gateway 总线、OneBot / Kook 两个适配器、怎么写第三个平台 |
+| [workflow/workflow.md](workflow/workflow.md) | `botnode.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节） |
 
-包内还有一份接口层索引 `nacho/api/MODULES.md`（尚未搬进 `docs/`）。
+包内还有一份接口层索引 `botnode/api/MODULES.md`（尚未搬进 `docs/`）。
 
 ---
 
@@ -24,10 +26,10 @@
 ### 2.1 分层
 
 ```
-根目录  app.py / config.py        读 TOML、建引擎、起服务（不在 nacho 包内）
+根目录  app.py / config.py        读 TOML、建引擎、起服务（不在 botnode 包内）
           │  传映射（from_mapping）
           ▼
-nacho    bootstrap.py / wiring.py  组合根：装配各块 + 派发日志核心
+botnode    bootstrap.py / wiring.py  组合根：装配各块 + 派发日志核心
           │
           ├── api/        接口层：6 组路由 + 业务服务（唯一认识 FastAPI 的层）
           ├── workflow/   编排层：图校验 → 落库 → 节点执行器（不 import FastAPI）
@@ -57,14 +59,14 @@ api ──► core / workflow          （api 不 import platforms / db，靠协
 workflow ──► core（logger、scheduler）
 bridge ──► core（logger）+ bots  （只有适配器实现 import 平台包）
 core ──► 自身
-db ──► core.logger 的模型        bots ──► 无 nacho 依赖
+db ──► core.logger 的模型        bots ──► 无 botnode 依赖
 ```
 
 - **core 只依赖自身**（`redis` 是函数内惰性 import，不装也能用）；
 - **bridge 的协议 / 总线层不 import 平台包** —— 只有 `bridge/onebot.py` / `bridge/kook.py` 两个适配器 import；
 - **platforms 运行时不 import api**（`TokenRegistry` 只在 `TYPE_CHECKING` 下引用，否则会被迫带上 fastapi）；
 - **api 不 import platforms / db**：按 `OneBotLike` / `BotsService` / `WorkflowStoreLike` 协议收实现，缺了回 503；
-- **workflow 不 import FastAPI**；**bots 不 import 任何 nacho 包**。
+- **workflow 不 import FastAPI**；**bots 不 import 任何 botnode 包**。
 
 ### 2.3 装配链路（`bootstrap.run()`）
 
@@ -90,7 +92,7 @@ db ──► core.logger 的模型        bots ──► 无 nacho 依赖
 
 ### 2.4 配置
 
-- **读 TOML 的只有根目录 `config.py` 与 `app.py`**（不在 `nacho` 包内）；`nacho` 包内**没有任何模块读配置文件** —— 一律由上层用 `from_mapping(映射)` 注入（`ApiOptions` / `OneBotOptions` / `KookOptions` / `CacheOptions`）；
+- **读 TOML 的只有根目录 `config.py` 与 `app.py`**（不在 `botnode` 包内）；`botnode` 包内**没有任何模块读配置文件** —— 一律由上层用 `from_mapping(映射)` 注入（`ApiOptions` / `OneBotOptions` / `KookOptions` / `CacheOptions`）；
 - 配置区域（`config.toml.example`）：`[app]`、`[database]`、`[logging]`（含 `[logging.file]` / `[logging.database]` / `[logging.queue]`）、`[cache]`（含 `[cache.redis]`）、`[api]`、`[onebot]`、`[kook]`；没有 `[scheduler]` —— 调度由工作流的 `start` 节点按 cron 登记；
 - 容错口径：文件不存在 / 缺项按默认值补齐，只有**值写错**才抛 `ConfigError`；废弃键直接报错而不是静默忽略。
 
