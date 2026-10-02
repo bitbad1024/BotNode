@@ -92,6 +92,7 @@ cd frontend && npm install && npm run build
 ## 文档
 
 - [docs/README.md](docs/README.md)：框架总览与文档索引（分层、依赖方向、装配链路、配置、可选依赖）
+- [docs/app/app.md](docs/app/app.md)：启动顺序与停机收尾、配置怎么读 / 怎么报错（根目录 `app.py` / `config.py`）
 - [docs/workflow/workflow.md](docs/workflow/workflow.md)：工作流模块索引、写自己的节点（第 5 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节）
 - 其余模块文档：[logger](docs/logger/logger.md) · [scheduler](docs/scheduler/scheduler.md) · [cache](docs/cache/cache.md) · [bridge](docs/bridge/bridge.md)
 - [examples/](examples/)：可直接运行的最小示例

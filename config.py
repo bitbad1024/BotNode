@@ -1,36 +1,9 @@
 """配置：读 TOML、用 pydantic 校验取值，产出一份 :class:`Settings`。
 
-配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成
-``config.toml`` 才生效；后者已进 ``.gitignore`` 不入库。
-
-容错策略是「能跑就跑」：文件不存在、某一节某一项没写，都按各区域字段的默认值补齐；
-只有**值写错**才抛 :class:`ConfigError` —— 级别名拼错、该填整数填了字符串、driver 不在
-sqlite/mariadb 里、端口越界。这样配置拼错会在启动阶段就报出来，而不是静默用默认值。
-
-校验交给 pydantic：类型、取值范围（端口 1-65535、driver 只能 sqlite/mariadb）、路径解析
-都写在字段旁边 —— 不用再手写 ``isinstance`` 那一套；pydantic 的报错再由 :func:`_describe`
-翻成统一格式的中文提示（带完整出处，如 ``logging.database.port``）。
-
-代码按配置文件里的区域切块：一节一个模型，配置里写哪节就在代码里翻哪块::
-
-    [app]                -> Settings.app                进程名、调试开关
-    [database]           -> Settings.database           整项目共用的数据库连接
-    [logging]            -> Settings.logging            级别、控制台、队列
-    [logging.file]       -> ...logging.file             本地文件出口
-    [logging.database]   -> ...logging.database         数据库出口
-    [logging.queue]      -> ...logging.queue            异步队列与分发器
-    [cache]              -> Settings.cache              缓存总控：用哪个后端
-    [cache.redis]        -> ...cache.redis              Redis 连接（backend=redis 时才用）
-    [api]                -> Settings.api                接口层：监听地址、路由前缀、令牌有效期
-    [onebot]             -> Settings.onebot             反向 WS 接入：监听地址、路径、令牌
-    [kook]               -> Settings.kook               正向 WS 接入：连法调优 + 凭证加密密钥
-
-数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
-（driver / path / host / port / user / password / database），``[logging.database]`` 是
-日志出口的专用配置 —— 连接类项默认整项继承公共节，日志特有的 enabled / buffer_size /
-flush_interval 只在这一节；要给日志单独连另一个库，就在这一节里覆盖同名项，
-覆盖粒度是**逐项**的（没写的那几项继续继承）。两者合并的最终结果放在
-``Settings.logging.database.connection``。
+配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成 ``config.toml``
+才生效（后者已进 ``.gitignore`` 不入库）。容错口径是「能跑就跑」：文件 / 某节 / 某项没写都按
+字段默认值补齐，只有**值写错**才抛 :class:`ConfigError`（报错带完整出处，如
+``logging.database.port``）；已经废弃的键直接报错并指路，不静默忽略。
 
 用法::
 
@@ -40,6 +13,9 @@ flush_interval 只在这一节；要给日志单独连另一个库，就在这�
         settings = Settings.load("config.toml")
     except ConfigError as exc:
         ...  # 报给用户，别拿默认值糊过去
+
+区域与模型的对应、数据库的三层覆盖、报错口径、Kook 凭证密钥（``data/secret_key``）的派生
+规则见 ``docs/app/app.md``。
 """
 from __future__ import annotations
 
