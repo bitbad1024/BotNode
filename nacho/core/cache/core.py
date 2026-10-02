@@ -1,15 +1,10 @@
 """缓存门面：上层只认这一套 API，Redis 与本地内存的差异在这里被抹平。
 
-用哪个后端由 :class:`~nacho.core.cache.models.CacheOptions` 的 ``backend`` 决定：
-``"redis"`` 建 :class:`~nacho.core.cache.redis.RedisCache`，``"memory"``（默认）建
-:class:`~nacho.core.cache.memory.MemoryCache` —— 两者都符合
-:class:`~nacho.core.cache.interfaces.CacheBackend`，所以本类的方法就是无脑转发，
-唯一多做的一件事是把「``ttl=None`` 该用哪个 TTL」按配置定下来。
-
-于是上层拿到的服务与后端无关：同一个 ``get`` / ``set`` / ``ttl`` 语义，同一套
-:class:`~nacho.core.cache.models.CacheError` 异常；配了 Redis 而它连不上时默认**当场报错**
-并提示去配置里改（只有显式打开 ``fallback_to_memory`` 才退回内存，业务代码不必写第二个
-分支，也不必知道这件事）。
+用哪个后端由 :class:`~nacho.core.cache.models.CacheOptions` 的 ``backend`` 决定，两个
+后端都符合 :class:`~nacho.core.cache.interfaces.CacheBackend`，所以本类的方法就是无脑
+转发，唯一多做的一件事是把「``ttl=None`` 该用哪个 TTL」按配置定下来。配了 Redis 而它
+连不上时默认**当场报错**，只有显式打开 ``fallback_to_memory`` 才退回内存（要上报就问
+:attr:`Cache.degraded`）。后端差异与降级详见 ``docs/cache/cache.md``。
 """
 from __future__ import annotations
 

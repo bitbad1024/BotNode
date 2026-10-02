@@ -1,28 +1,9 @@
 """缓存后端协议：内存与 Redis 两个实现都符合它，上层只认这套方法。
 
-约定（两个后端必须一致 —— 差异在这里被抹平，上层换后端不用改代码）：
-
-* **键**是普通字符串，**不带前缀**。前缀是 Redis 后端自己的事（共享实例时的命名空间
-  隔离，见 :class:`~nacho.core.cache.redis.RedisCache`），上层看到的键名与后端无关；
-* **值**有三种结构，对应 Redis 的三种类型：字符串（:meth:`CacheBackend.get` /
-  :meth:`CacheBackend.set`）、列表（``list_*``）、哈希（``hash_*``）。元素与字段值都是
-  ``str`` —— Redis 后端开 ``decode_responses`` 直接拿回字符串，上层不必解码字节；
-  元素 / 字段值收到别的类型一律抛 :class:`~nacho.core.cache.models.CacheError`，
-  不会被悄悄塞进去（Redis 那边由驱动报 ``DataError``，翻过来是同一个异常）。
-  要存嵌套结构（哈希的哈希、对象、数组）就用
-  :meth:`~nacho.core.cache.core.Cache.set_json` 装成一段 JSON 文本：Redis 的哈希字段
-  同样只放字符串，嵌套得自己序列化，两边在这种事上帮不上忙；
-* **结构不能混用**：一个键按哪种结构写入，就只能按那种结构访问，换一种访问会抛
-  :class:`~nacho.core.cache.models.CacheError`（对应 Redis 的 ``WRONGTYPE``）——
-  唯一的例外是 :meth:`CacheBackend.get_many`，它遇到非字符串键当作没取到（照 ``MGET`` 来）；
-* **空结构不占键**：列表被弹空、哈希字段被删空之后，这个键就不存在了（与 Redis 一致）；
-* **TTL** 是秒（``float``）：``set(..., ttl=None)`` 表示永不过期，
-  :meth:`CacheBackend.ttl` 用 ``None`` 表示键不存在、``math.inf`` 表示永不过期；
-  ``list_*`` / ``hash_*`` 上的 ``ttl`` **只在新建键时生效**，往已有的键上追加不动它的
-  过期时间（照 Redis 来：``RPUSH`` / ``HSET`` 不刷新 TTL）；
-* **批量**方法要么全做要么不做（Redis 后端走 pipeline / 单条多键命令），不返回半截结果；
-* **生命周期**：:meth:`CacheBackend.start` / :meth:`CacheBackend.stop`，重复调用是空操作；
-  出错一律抛 :class:`~nacho.core.cache.models.CacheError`（驱动层异常不外泄）。
+两个后端必须一致 —— 差异在这里被抹平，上层换后端不用改代码：键是不带前缀的字符串、
+值分字符串 / 列表 / 哈希三种结构（结构不能混用、空结构不占键）、TTL 按秒、批量方法
+要么全做要么不做、出错一律抛
+:class:`~nacho.core.cache.models.CacheError`。完整约定见 ``docs/cache/cache.md``。
 """
 from __future__ import annotations
 
