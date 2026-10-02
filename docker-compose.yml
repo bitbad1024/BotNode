@@ -1,0 +1,41 @@
+# 单镜像一键起（控制台 + 后端在同一个容器里）：
+#
+#   cp config.toml.example config.toml      # Windows: copy config.toml.example config.toml
+#   docker compose up -d --build            # 想改标签：docker compose build --pull
+#
+# 起来之后：
+#   控制台 / 接口  http://127.0.0.1:8080
+#   OneBot 反向 WS  实现端连 ws://<主机>:16700/ （[onebot] 的 host/port 在 config.toml 里改）
+#
+# 数据库与缓存：默认 sqlite + 进程内缓存，无需额外服务；
+# 要用 MariaDB / Redis，就在 config.toml 里改 [database] / [cache]，并把它们加进下面的 services。
+
+services:
+  botnode:
+    build:
+      context: .
+      args:
+        # 留空 = 前端同源访问 /api（由镜像内的 nginx 反代给后端）
+        VITE_API_BASE_URL: ""
+        # 国内网络可换成镜像源，例如：
+        # NPM_REGISTRY: https://registry.npmmirror.com
+        # PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+    image: botnode:latest
+    container_name: botnode
+    restart: unless-stopped
+    ports:
+      - "8080:80"      # 控制台 + 接口（容器内 nginx）
+      - "16700:16700"  # OneBot 反向 WS：实现端要能连进来
+    volumes:
+      # 配置（含数据库密码、secret_key）由外面挂进去，绝不打进镜像
+      - ./config.toml:/app/config.toml:ro
+      # 日志分片（[logging.file].dir 默认 logs/）
+      - botnode-logs:/app/logs
+      # sqlite 数据库（[database].path 默认 data/botnode.db）、Kook 的 secret_key、头像上传
+      - botnode-data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+
+volumes:
+  botnode-logs:
+  botnode-data:

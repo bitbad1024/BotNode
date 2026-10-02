@@ -1,0 +1,29 @@
+# 换行符策略
+#
+# 仓库里一律存 LF（历史如此）；检出时按类型分：
+#   *.bat / *.cmd  -> CRLF（Windows 批处理对 LF 支持不稳，尤其 goto / label）
+#   其余文本       -> LF
+#
+# 为什么非要钉一下：Windows 上 core.autocrlf=true，不写规则的话 shell 脚本检出就是 CRLF，
+# 而 docker build 会把 docker/entrypoint.sh 直接拷进镜像由 /bin/sh 执行 —— CRLF 的脚本会报
+# `bad interpreter: /bin/sh^M`（Linux 上跑、Windows 上开发时最容易踩）。
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 容器 / Linux 上执行的东西：必须是 LF
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker/** text eol=lf
+
+# 二进制别做换行转换
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
