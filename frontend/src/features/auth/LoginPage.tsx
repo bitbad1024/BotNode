@@ -7,11 +7,7 @@ import { useAuth } from './authStore'
 import { useToast } from '../../common/Toast'
 import { ThemeToggle } from '../../common/theme'
 import { IconUser, IconLock, IconEye, IconEyeOff, IconAlert, IconCheck, IconLogo } from '../../common/icons'
-import {
-  SHOW_DEMO_ACCOUNTS,
-  DEMO_ACCOUNTS,
-  backendUrl,
-} from '../../config/env'
+import { SHOW_DEMO_ACCOUNTS, DEMO_ACCOUNTS } from '../../config/env'
 import { FIELD_LABELS, accountPattern } from './formRules'
 import styles from './LoginPage.module.css'
 
@@ -237,10 +233,6 @@ export default function LoginPage() {
         )}
 
         <div className={styles.footer}>
-          <a href={backendUrl('/docs')} target="_blank" rel="noopener">
-            API 文档
-          </a>
-          <span className={styles.dot}>·</span>
           <span>v0.1.0</span>
         </div>
       </div>

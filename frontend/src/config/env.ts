@@ -18,10 +18,7 @@ export const BACKEND_BASE_URL = trimSlash(rawBase)
 /** axios baseURL：留空时走同源 /api。 */
 export const API_BASE_URL = BACKEND_BASE_URL ? `${BACKEND_BASE_URL}/api` : '/api'
 
-/** 拼接后端文档等绝对/相对地址。 */
-export function backendUrl(path: string): string {
-  return `${BACKEND_BASE_URL}${path}`
-}
+
 
 /** 是否显示演示账号（仅开发环境）。 */
 export const SHOW_DEMO_ACCOUNTS =

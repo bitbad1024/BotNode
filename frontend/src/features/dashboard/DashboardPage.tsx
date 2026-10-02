@@ -17,10 +17,8 @@ import {
   IconTerminal,
   IconDevices,
   IconCopy,
-  IconExternal,
   IconChevronDown,
 } from '../../common/icons'
-import { backendUrl } from '../../config/env'
 import { Skeleton } from '../../common/Skeleton'
 import styles from './DashboardPage.module.css'
 
@@ -236,14 +234,6 @@ export default function DashboardPage() {
       <section className={styles.modules}>
         <div className={styles.sectionHead}>
           <h3 className={styles.sectionTitle}>功能模块</h3>
-          <a
-            className={styles.docLink}
-            href={backendUrl('/docs')}
-            target="_blank"
-            rel="noopener"
-          >
-            接口文档 <IconExternal size={13} />
-          </a>
         </div>
         <div className={styles.moduleGrid}>
           {modules.map((m) => {
