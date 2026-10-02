@@ -31,6 +31,30 @@ Windows 也可以直接双击 `scripts\start-all.bat`（后端 / 前端单独起
 
 缓存可选：redis、内存
 
+## 部署（Docker）
+
+一个镜像里同时装前端与后端：nginx 在 80 端口托管控制台，并把 `/api`、`/docs` 反代给
+同容器内的后端 —— 前端不需要跨域配置。
+
+```bash
+copy config.toml.example config.toml      # Linux: cp
+docker compose up -d --build              # 控制台 http://127.0.0.1:8080
+```
+
+一键打包（前端产物 + 后端源码包 + 单镜像）：
+
+```bat
+build-all.bat                 :: Windows：前端 + 后端 + botnode:latest
+build-all.bat --no-docker     :: 只打包产物，不碰 Docker
+```
+
+```bash
+./build-all.sh                # Linux / macOS，参数同上
+```
+
+端口、挂载卷、容器里要改的配置（比如 `[onebot] host` 要改成 `0.0.0.0`）、不用 Docker 的部署方式，
+见 [docs/deploy.md](docs/deploy.md)。
+
 ## 测试
 
 ```bash
@@ -94,6 +118,7 @@ cd frontend && npm install && npm run build
 
 - [docs/README.md](docs/README.md)：框架总览与文档索引（分层、依赖方向、装配链路、配置、可选依赖）
 - [docs/app/app.md](docs/app/app.md)：启动顺序与停机收尾、配置怎么读 / 怎么报错（根目录 `app.py` / `config.py`）
+- [docs/deploy.md](docs/deploy.md)：打包与部署（Docker 单镜像 / compose、一键打包脚本、不用 Docker 的跑法）
 - [docs/workflow/workflow.md](docs/workflow/workflow.md)：工作流模块索引、写自己的节点（第 5 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节）
 - 其余模块文档：[logger](docs/logger/logger.md) · [scheduler](docs/scheduler/scheduler.md) · [cache](docs/cache/cache.md) · [bridge](docs/bridge/bridge.md)
 - [examples/](examples/)：可直接运行的最小示例
