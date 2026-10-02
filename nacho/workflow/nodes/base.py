@@ -46,6 +46,19 @@ from ..models import ValidationIssue, WorkflowNode
 #: 节点执行函数：(节点, 上下文) -> 本节点产出（键 = 已声明的输出端口名）
 NodeExecutor = Callable[[WorkflowNode, "NodeExecutionContext"], Awaitable[dict[str, Any]]]
 
+
+class NodeFailure(RuntimeError):
+    """**业务失败**：节点自己判定「这一趟没做成」（算不出来、解析不出、对方回了错）。
+
+    两类失败分开处理（见 ``docs/workflow/workflow.md`` 第 5.5 节）：
+
+    * **业务失败** —— 抛本类：引擎**只停止它向下传播** —— 本节点不产出值、出边全部置死，
+      下游整段跳过（``ctx.log`` 留 ``[skip]``），**别的分支与流程其余部分照常跑**，
+      不留堆栈；
+    * **环境问题**（连不上、没接线、依赖没装、没接总线）—— 抛 :class:`ConnectionError`
+      / :class:`RuntimeError` 一类：整条流程中断并留下堆栈，看得见是没配好。
+    """
+
 #: 节点在图中的拓扑角色：start=唯一入口 / end=终点 / normal=普通节点
 NodeRole = Literal["start", "end", "normal"]
 

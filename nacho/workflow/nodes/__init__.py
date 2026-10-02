@@ -62,6 +62,7 @@ from .base import (
     NodeConfigValidator,
     NodeExecutionContext,
     NodeExecutor,
+    NodeFailure,
     NodeRole,
     NodeSpec,
     PortSpec,
@@ -103,6 +104,7 @@ __all__ = [
     # 契约（写节点用这些）
     "NodeExecutor",
     "NodeExecutionContext",
+    "NodeFailure",
     "NodeSpec",
     "NodeRole",
     "NodeCategory",

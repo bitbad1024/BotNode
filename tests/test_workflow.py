@@ -911,6 +911,83 @@ async def test_executor_unsupported_node_type_raises() -> None:
         await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
 
 
+@pytest.mark.asyncio
+async def test_executor_stops_downstream_on_node_failure() -> None:
+    """业务失败（NodeFailure）**停止向下传播**：下游整段跳过，别的分支照跑，流程不中断。"""
+    from nacho.workflow.nodes import NodeFailure
+
+    ran: list[str] = []
+
+    @register_node("boom")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        raise NodeFailure("算不出来：左值不是数字")
+
+    @register_node("failure-tail")
+    async def exec_tail(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("b", "boom"),
+                node("t", "failure-tail"),  # 失败节点的下游：不该跑
+                node("side", "log", message="别的分支"),  # 平行分支：照跑
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "b"),
+                edge("b", "t"),
+                edge("t", "e"),
+                edge("s", "side"),
+                edge("side", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不抛：业务失败不是事故
+
+    assert ran == ["b"]  # 失败节点跑了，它的下游一个都没跑
+    assert any("[failed] b:" in line for line in ctx.log)
+    assert any("[skip] t:" in line and "失败" in line for line in ctx.log)  # 写明是被谁带停的
+    assert any("[INFO] side: 别的分支" in line for line in ctx.log)  # 别的分支照常
+
+
+@pytest.mark.asyncio
+async def test_executor_failed_node_produces_nothing_downstream() -> None:
+    """失败节点**不产出**：下游如有其它活入边照常执行，但从失败那条线拿不到值（回落手填）。"""
+    from nacho.workflow.nodes import NodeFailure
+
+    @register_node("boom2")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise NodeFailure("这一步没做成")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("b", "boom2"),
+                node("l", "log", message="手填兜底"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "b"),
+                edge("s", "l"),
+                edge("b", "l", "value", "message"),  # 失败节点 -> log 的内容入口
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    # log 有另一条活入边（start 的触发边）所以照常执行，但内容入口没被失败节点顶掉
+    assert any("[INFO] l: 手填兜底" in line for line in ctx.log)
+    assert any("[failed] b:" in line for line in ctx.log)
+
+
 # ------------------------------------------------------------- ④-B http 节点（打桩，不走网络）
 class FakeResponse:
     """假的 httpx 响应：http 节点只用到 ``status_code`` / ``text`` 两样。"""
