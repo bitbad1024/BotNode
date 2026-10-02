@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>nacho · 控制台</title>
+    <title>BotNode · 控制台</title>
 
     <!-- 网站图标：文件放 public/ 下 —— favicon.ico -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -11,7 +11,7 @@
     <!-- 无闪烁主题：React 挂载前根据本地存储 / 系统偏好确定 data-theme -->
     <script>
       ;(function () {
-        var t = localStorage.getItem('nacho.theme')
+        var t = localStorage.getItem('botnode.theme')
         if (t !== 'light' && t !== 'dark') {
           t = window.matchMedia('(prefers-color-scheme: dark)').matches
             ? 'dark'

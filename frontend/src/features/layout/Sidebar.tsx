@@ -22,7 +22,7 @@ export default function Sidebar() {
         <span className={styles.logo} aria-hidden="true">
           <IconLogo size={17} />
         </span>
-        <span className={styles.brandName}>nacho</span>
+        <span className={styles.brandName}>BotNode</span>
       </div>
 
       {/* 导航 */}
@@ -53,7 +53,7 @@ export default function Sidebar() {
           这里不声称任何服务状态——原先写死的「服务运行中」与真实后端无关，会误导人；
           要真实在线指示需另接健康检查。 */}
       <div className={styles.footer}>
-        <span className={styles.footerText}>nacho 控制台</span>
+        <span className={styles.footerText}>BotNode 控制台</span>
       </div>
     </aside>
   )
