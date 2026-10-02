@@ -5,3 +5,5 @@
 # 版本留宽区间：本项目不追求可复现的锁定文件，CI 与本地都装最新兼容版
 pytest>=8.0
 pytest-asyncio>=0.24
+# 并行跑测试：pytest -n auto（不装也能跑，只是全量要慢两三倍）
+pytest-xdist>=3

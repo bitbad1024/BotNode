@@ -12,10 +12,11 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
 from typing import cast
 
-#: 默认监听地址（反向 WS：等 OneBot 实现连进来）
-DEFAULT_HOST: str = "127.0.0.1"
-#: 默认监听端口（go-cqhttp / NapCat 反向 WS 常用的 6700）
-DEFAULT_PORT: int = 6700
+#: 默认监听地址：框架当服务端等实现端连进来，所以默认听 0.0.0.0（别的机器 / 容器里才连得上）；
+#: 只让本机连就改回 "127.0.0.1"
+DEFAULT_HOST: str = "0.0.0.0"
+#: 默认监听端口：与配置模板 / README 里的 16700 保持一致（改一处记得改另一处）
+DEFAULT_PORT: int = 16700
 #: 默认 WS 路径：客户端连 ``ws://host:port<path>``
 DEFAULT_PATH: str = "/"
 #: 默认动作超时（秒）：发出去的 action 等这么久还没回应就算失败

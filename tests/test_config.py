@@ -6,7 +6,14 @@ from textwrap import dedent
 
 import pytest
 
-from config import BASE_DIR, TEMPLATE_PATH, ConfigError, DatabaseSettings, Settings
+from config import (
+    BASE_DIR,
+    TEMPLATE_PATH,
+    ConfigError,
+    DatabaseSettings,
+    Settings,
+    load_or_create_secret_key,
+)
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -252,13 +259,12 @@ class TestTemplate:
 
 
 class TestKookRegion:
-    """[kook]：正向 WS 接入；token 留空 = 不接入。"""
+    """[kook]：正向 WS 接入的连法调优 + 凭证加密密钥（网关 / Bot Token 不在配置里）。"""
 
     def test_defaults_without_section(self, tmp_path: Path) -> None:
         settings = Settings.load(write(tmp_path, ""))
         kook = settings.kook
-        assert kook.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
-        assert kook.token == ""  # 没配 = 不接入
+        assert kook.secret_key == ""  # 留空 = 入口自动生成/读取 data/secret_key
         assert kook.heartbeat_interval == 30.0
         assert kook.heartbeat_jitter == 5.0  # 官方 30 秒 + rand(-5, +5)
         assert kook.reconnect_interval == 2.0  # 官方退避序列的基准
@@ -267,14 +273,14 @@ class TestKookRegion:
         assert kook.rest_max_retries == 3
         assert kook.rest_idle_timeout == 30.0  # 持久连接空闲上限：超了主动重建
 
-    def test_kook_section_reads_token_and_intervals(self, tmp_path: Path) -> None:
+    def test_kook_section_reads_key_and_intervals(self, tmp_path: Path) -> None:
         settings = Settings.load(
             write(
                 tmp_path,
                 dedent(
                     """\
                     [kook]
-                    token = "bot-token-xxx"
+                    secret_key = "my-key"
                     heartbeat_interval = 15.0
                     reconnect_interval = 5.0
                     reconnect_max_interval = 20.0
@@ -285,10 +291,43 @@ class TestKookRegion:
             )
         )
         kook = settings.kook
-        assert kook.token == "bot-token-xxx"
+        assert kook.secret_key == "my-key"
         assert kook.heartbeat_interval == 15.0
         assert kook.reconnect_interval == 5.0
         assert kook.action_timeout == 30.0  # 没写的回默认
         assert kook.reconnect_max_interval == 20.0
         assert kook.rest_min_interval == 0.5
         assert kook.rest_max_retries == 5
+
+    @pytest.mark.parametrize("key", ["gateway", "token"])
+    def test_removed_keys_point_elsewhere(self, tmp_path: Path, key: str) -> None:
+        """网关地址 / Bot Token 不再从配置读：写了要报错并说清去哪配，别静默忽略。"""
+        with pytest.raises(ConfigError) as info:
+            Settings.load(write(tmp_path, f'[kook]\n{key} = "x"\n'))
+        message = str(info.value)
+        assert message.startswith(f"kook.{key}")
+        assert "把这一项删掉即可" in message
+
+
+class TestSecretKeyFile:
+    """``[kook].secret_key`` 留空时的派生值：读 / 生成 ``data/secret_key``。
+
+    必须**持久化**：它加密的是已落库的 Bot Token，每次随机生成会让旧密文全部解不开。
+    """
+
+    def test_configured_key_wins(self, tmp_path: Path) -> None:
+        """配置里填了就用它，不碰文件。"""
+        assert load_or_create_secret_key("explicit", tmp_path / "secret_key") == "explicit"
+
+    def test_creates_then_reuses(self, tmp_path: Path) -> None:
+        """第一次生成并落盘（含建目录），之后读到同一份 —— 不重新生成。"""
+        path = tmp_path / "nested" / "secret_key"
+        first = load_or_create_secret_key("", path)
+        assert first and path.is_file()
+        assert load_or_create_secret_key("", path) == first
+
+    def test_blank_file_regenerates(self, tmp_path: Path) -> None:
+        """文件在但是空的：当成没有，重新生成一份能用的。"""
+        path = tmp_path / "secret_key"
+        path.write_text("\n", encoding="utf-8")
+        assert load_or_create_secret_key("", path).strip()

@@ -24,9 +24,10 @@ pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip in
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine  # noqa: E402
 
 from config import ConfigError, Settings  # noqa: E402
+from botnode.api.services.user.store_sql import UserTable  # noqa: E402
 from botnode.api import (  # noqa: E402
     ACCESS_LOGGER_NAME,
     API_LOGGER_NAME,
@@ -70,8 +71,9 @@ from botnode.wiring import wire_loggers  # noqa: E402
 
 #: 演示账号（见 botnode.api.services.user.demo.DEMO_USERS）
 ADMIN = {"account": "admin", "password": "botnode-admin"}
-#: 第二个账号：测「不是本人的令牌不复用」要用两个人
-ROBOT = {"account": "robot", "password": "botnode-robot"}
+#: 第二个账号：测「不是本人的令牌不复用」要用两个人。
+#: 演示账号只剩 admin，这个账号由 token_of() 顺手注册（昵称就用账号名或这里写明的）
+ROBOT = {"account": "robot", "password": "botnode-robot", "nickname": "巡检机器人"}
 LOGIN_PATH = "/api/auth/login"
 REGISTER_PATH = "/api/auth/register"
 
@@ -225,9 +227,26 @@ class TestLogin:
         assert codes == [ErrorCode.INVALID_CREDENTIALS, ErrorCode.INVALID_CREDENTIALS]
 
     async def test_disabled_account_is_403(self) -> None:
-        async with client_for(app_with()) as client:
+        """停用账号登不进来。
+
+        演示账号里不再带停用账号（只剩 admin），用例自己造一个：建完用户把 ``disabled``
+        那一列直接改掉 —— 停用只走管理入口，没有「注册成停用」这条路。
+        """
+        engine = await _memory_engine()
+        store = SqlUserStore(engine, hasher=_TEST_HASHER)
+        await store.ensure_schema()
+        await store.add(account="frozen", password_hash=_TEST_HASHER.hash("frozen-pw"))
+        async with AsyncSession(engine) as session:
+            row = await session.get(UserTable, "u-frozen")
+            assert row is not None
+            row.disabled = True
+            session.add(row)
+            await session.commit()
+        async with client_for(
+            create_app(ApiOptions(prefix="/api"), db=engine, hasher=_TEST_HASHER)
+        ) as client:
             response = await client.post(
-                LOGIN_PATH, json={"account": "guest", "password": "botnode-guest"}
+                LOGIN_PATH, json={"account": "frozen", "password": "frozen-pw"}
             )
         assert response.status_code == 403
         assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED
@@ -548,6 +567,8 @@ class TestToken:
     async def test_cookie_of_another_user_is_not_reused(self) -> None:
         """Cookie 里是**别人**的令牌 → 不复用：不能因为"知道现在是谁在登录"就把别人的续了。"""
         async with client_for(app_with()) as client:
+            # 演示账号只剩 admin：非 admin 的账号由用例自己注册（注册要昵称，用账号名顶上）
+            await client.post(REGISTER_PATH, json={"nickname": ROBOT["account"], **ROBOT})
             robot = ApiResponse[LoginData].model_validate(
                 (await client.post(LOGIN_PATH, json=ROBOT)).json()
             ).data
@@ -831,7 +852,13 @@ async def search_log_page(
 
 
 async def token_of(client: httpx.AsyncClient, account: dict[str, str]) -> str:
-    """登录换一个令牌（这几条用例都要先登录）。"""
+    """登录换一个令牌（这几条用例都要先登录）。
+
+    演示账号现在只剩 ``admin``（见 ``botnode.api.services.user.demo``）：非 admin 的账号
+    由这里顺手注册一个（注册要昵称，就用账号名顶上），用例不必各自准备。
+    """
+    if account["account"] != ADMIN["account"]:
+        await client.post(REGISTER_PATH, json={"nickname": account["account"], **account})
     response = await client.post(LOGIN_PATH, json=account)
     return ApiResponse[LoginData].model_validate(response.json()).data.token
 

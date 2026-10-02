@@ -1,43 +1,17 @@
-"""应用入口：读配置 -> 初始化日志核心 -> 交给 botnode 装配业务 -> 优雅停机。
+"""应用入口：读配置 -> 建日志核心与库引擎 -> 交给 :mod:`botnode.bootstrap` 装配 -> 优雅停机。
 
-**本文件只做核心初始化**：解析命令行、读 ``config.toml``、按 ``[logging]`` 把日志核心建起来、
-建好共用的数据库引擎；之后把这两样交给 :mod:`botnode.bootstrap`，由它装配其余模块（接口层
-HTTP、OneBot 反向 WS、调度器、工作流），并在停机时先收业务（含冲刷日志余量、关库连接）。
-
-之所以切这一刀：日志核心必须在**任何业务模块被 import 之前**按配置建好。botnode 里有模块级
-``default_core().child(...)``（导入即执行）——谁先被 import，谁就顺手把进程默认核心按默认
-参数建出来，配置里的颜色 / 级别就此定死、再也传不进去（``LogManager.configure`` 在「已存在
-核心」时只合并 processors）。所以本文件顶层**不 import 任何业务模块**，:mod:`botnode.bootstrap`
-也是建好核心之后才（在函数里）导入。
-
-配置不在这里：TOML 读取、取值校验、:class:`Settings` 都在同目录的 ``config.py``，本文件只管
-流程——取一份设置，照它把日志核心拉起来，把业务交给包内装配，停机收尾。
-
-**连不上数据库会当场报错**：引擎建好后立即 ``SELECT 1`` 探测（``_probe_database``）——SQLAlchemy
-引擎是惰性的，不主动探一下，连库失败会推迟到日志出口建表时，被日志核心吞掉只剩一行乱码 traceback
-（用户视角就是"什么提示都没有"）。探测失败抛带 target 的异常，入口统一打成 ``[初始化错误]``
-干净退出；mariadb 连接带 ``connect_timeout=5``，连不上 5 秒内报错，不干等系统级超时。
-
-初始化沿用 ``botnode/core/logger/__init__.py`` 里「进程门面」的用法——这里只用这两个::
-
-    configure(...)        # 建（或复用）进程默认核心
-    await core.start()    # 起来之后业务模块取的实例才带得上这些出口
-
-Ctrl+C 走优雅停机：主协程被取消 -> 业务侧收尾（停服务 / 等调度器 / 冲刷日志 / 关库）-> 关日志
-库连接，安静退出不吐 traceback（收尾期间再按一次 Ctrl+C 才是强杀）。
-
-接口层（``botnode.api``）随主程序由 uvicorn 起成 HTTP 服务，和 OneBot 同进程、同事件循环跑；
-监听地址在 ``[api]`` 的 ``host`` / ``port``。OneBot 反向 WS（``botnode.onebot``）同样随主程序起，
-监听 ``[onebot]`` 的 ``host`` / ``port``，日志单独落 ``logs/onebot.log``（同进程共用日志核心，
-只是换个文件）。装配与停机的细节都在 :mod:`botnode.bootstrap`。
+**只做核心初始化**：解析命令行、读 ``config.toml``、按 ``[logging]`` 建日志核心、建共用的
+数据库引擎（建好立即探一次，连不上当场报错）。业务模块一律不在这里 import —— 日志核心必须
+先于任何业务模块按配置建好（它们有模块级的 ``default_core().child(...)``，导入即执行会把
+进程默认核心按默认参数定死），所以 :mod:`botnode.bootstrap` 也是核心就绪之后才在函数里导入。
+配置本身的读取与校验在 ``config.py``，本文件只管流程。
 
 运行::
 
     python app.py                     # 读 ./config.toml，不存在则按默认值启动
     python app.py -c path/to.toml     # 指定配置文件
 
-依赖：``app.py`` 需要 ``botnode[api]`` + ``botnode[onebot]``（``fastapi`` / ``uvicorn`` /
-``sqlmodel`` / ``aiosqlite`` / ``websockets``）。
+启动顺序、数据库探测、Ctrl+C 收尾、监听地址与依赖的完整说明见 ``docs/app/app.md``。
 """
 from __future__ import annotations
 
@@ -54,10 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import (
     CONFIG_PATH,
+    KEY_FILE,
     TEMPLATE_PATH,
     ConfigError,
     DatabaseSettings,
     Settings,
+    load_or_create_secret_key,
 )
 from botnode import __version__
 from botnode.core.logger import (
@@ -245,13 +221,19 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         )
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
+        # Kook 凭证的加密密钥：配置留空就自动生成/读取 data/secret_key —— 落盘而不是每次随机，
+        # 否则重启后已落库的 Bot Token 密文会全部解不开（见 config.load_or_create_secret_key）
+        kook_config: dict[str, object] = settings.kook.model_dump()
+        if not settings.kook.secret_key.strip():
+            kook_config["secret_key"] = load_or_create_secret_key()
+            core.info("Kook 密钥未配置，已自动生成/读取", path=str(KEY_FILE))
         await run(
             engine=db,
             api=settings.api.model_dump(),
             api_host=settings.api.host,
             api_port=settings.api.port,
             onebot=settings.onebot.model_dump(),
-            kook=settings.kook.model_dump(),
+            kook=kook_config,
             cache_config=settings.cache.model_dump(),
         )
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等

@@ -48,14 +48,19 @@ def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, objec
 
 @dataclass(frozen=True)
 class KookOptions:
-    """Kook 正向 WS 选项（对应 ``[kook]`` 一节）。"""
+    """Kook 正向 WS 选项（对应 ``[kook]`` 一节里的连法调优）。
 
-    #: 网关地址：留空（默认）连接前走 gateway/index 动态获取真实地址（推荐）；
-    #: 显式填一个则直连这个地址（测试 / 自建网关用）。
+    网关地址与 Bot Token **不来自配置文件**：前者连接前走 ``gateway/index`` 自动取，
+    后者由装配层从凭证行（``/api/bots`` 添加、密文落库）解出来传进来。这里的两个字段留给
+    测试与自建网关直接构造选项时用。
+    """
+
+    #: 网关地址：留空（默认）连接前走 gateway/index 动态获取真实地址；
+    #: 显式填一个则直连这个地址（测试 / 自建网关用）
     gateway: str = DEFAULT_GATEWAY
-    #: Bot Token（Kook 开放平台签发，连接时鉴权用；空串 = 没配）
+    #: Bot Token（连接时鉴权用；空串 = 没配）
     token: str = DEFAULT_TOKEN
-    #: Bot Token 落库加密的密钥（kook 凭证行加解密用；[kook].token 直连时用不到）
+    #: Bot Token 落库加密的密钥（凭证行解密用；token 由装配层解好传进来）
     secret_key: str = ""
     #: 心跳间隔（秒）
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL

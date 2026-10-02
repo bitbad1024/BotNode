@@ -11,6 +11,7 @@
 
 | 文档 | 覆盖的模块 | 主要内容 |
 |---|---|---|
+| [app/app.md](app/app.md) | 根目录 `app.py` / `config.py` | 启动顺序与停机收尾、数据库探测、配置区域与三层覆盖、报错口径、Kook 密钥的派生规则 |
 | [logger/logger.md](logger/logger.md) | `botnode.core.logger` | 异步日志：root + child / bind / route、目标与过滤器、检索与刷新、进程门面 |
 | [cache/cache.md](cache/cache.md) | `botnode.core.cache` | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入 |
 | [scheduler/scheduler.md](scheduler/scheduler.md) | `botnode.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
@@ -18,6 +19,16 @@
 | [workflow/workflow.md](workflow/workflow.md) | `botnode.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节，含画布截图） |
 
 包内还有一份接口层索引 `botnode/api/MODULES.md`（尚未搬进 `docs/`）。
+
+跟代码无关的项目文档在根与 `.github/` 下 —— GitHub 认这两个位置，放那儿不影响仓库页的展示：
+
+| 文档 | 位置 | 内容 |
+|---|---|---|
+| 贡献指南 | [`.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md) | 环境准备、目录速览、代码约定、测试、提交规范 |
+| 安全策略 | [`.github/SECURITY.md`](../.github/SECURITY.md) | 漏洞报告渠道、部署必关的门、已知设计取舍 |
+| 行为准则 | [`.github/CODE_OF_CONDUCT.md`](../.github/CODE_OF_CONDUCT.md) | 社区行为准则 |
+| 许可证 | [`LICENSE`](../LICENSE) · [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | MIT 与第三方组件许可 |
+
 
 ---
 
@@ -76,7 +87,8 @@ db ──► core.logger 的模型        bots ──► 无 botnode 依赖
 2. `cache.configure(CacheOptions.from_mapping(...))` + `await cache.start()`；
 3. 建库表与演示账号（`SqlBotStore` / `SqlUserStore` / `SqlSessionStore` / `SqlWorkflowStore`）；
 4. 建 `Gateway()`，建 `OneBotAdapter` 并 `register`；
-5. 配了 `[kook]` 才建 `KookAdapter`（凭证行的 token 解密后逐个 `add_bot`）；
+5. 有 `[kook].secret_key`（留空时入口自动生成 / 读取 `data/secret_key`）才建 `KookAdapter`
+   （凭证行的 Bot Token 解密后逐个 `add_bot`；网关地址由客户端连接前自己 discover）；
 6. 建 `BotManager`（跨平台增 / 启停 / 删）；
 7. 建 `MessageRouter` 并挂上 `gateway.subscribe(on_platform_event)`；
 8. `create_app(...)` 建 FastAPI 并起服务；
@@ -95,6 +107,7 @@ db ──► core.logger 的模型        bots ──► 无 botnode 依赖
 - **读 TOML 的只有根目录 `config.py` 与 `app.py`**（不在 `botnode` 包内）；`botnode` 包内**没有任何模块读配置文件** —— 一律由上层用 `from_mapping(映射)` 注入（`ApiOptions` / `OneBotOptions` / `KookOptions` / `CacheOptions`）；
 - 配置区域（`config.toml.example`）：`[app]`、`[database]`、`[logging]`（含 `[logging.file]` / `[logging.database]` / `[logging.queue]`）、`[cache]`（含 `[cache.redis]`）、`[api]`、`[onebot]`、`[kook]`；没有 `[scheduler]` —— 调度由工作流的 `start` 节点按 cron 登记；
 - 容错口径：文件不存在 / 缺项按默认值补齐，只有**值写错**才抛 `ConfigError`；废弃键直接报错而不是静默忽略。
+- `app.py` 的启动顺序（为什么先建日志核心、数据库探测、停机收尾）与配置的细节见 [app/app.md](app/app.md)。
 
 ### 2.5 可选依赖（extras）
 

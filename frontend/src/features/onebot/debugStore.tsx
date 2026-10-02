@@ -70,7 +70,7 @@ function pretty(value: unknown): string {
 }
 
 export function DebugProvider({ children }: { children: ReactNode }) {
-  const [url, setUrl] = useState('ws://127.0.0.1:6700/')
+  const [url, setUrl] = useState('ws://127.0.0.1:16700/')
   const [accessToken, setAccessToken] = useState('')
   const [status, setStatus] = useState<ConnStatus>('idle')
   const [draft, setDraft] = useState(() => WS_PRESETS[0].template)

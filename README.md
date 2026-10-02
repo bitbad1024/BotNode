@@ -24,7 +24,8 @@ python app.py                                      # 后端 http://127.0.0.1:180
 cd frontend && npm install && npm run dev          # 控制台 http://127.0.0.1:15173
 ```
 
-Windows 也可以直接双击 `start-all.bat`。
+Windows 也可以直接双击 `scripts\start-all.bat`（后端 / 前端单独起分别是同目录下的
+`start-backend.bat` / `start-frontend.bat`）。
 
 数据库可选：sqlite、mariadb；
 
@@ -44,13 +45,13 @@ cd frontend && npm install && npm run build
 
 ## 本地账号
 
-本地试用账号（由 `botnode/api/services/user/demo.py` 写入，**部署到公网前务必删除或改密码**）：
+本地试用账号只有一个（由 `botnode/api/services/user/demo.py` 写入，**部署到公网前务必改密码**）：
 
 | 账号 | 密码 | 角色 |
 |---|---|---|
 | `admin` | `botnode-admin` | 管理员 |
-| `robot` | `botnode-robot` | 普通用户 |
-| `guest` | `botnode-guest` | 只读 |
+
+要别的账号不必改代码：在登录页注册（`POST /api/auth/register`）即可，新账号是普通用户。
 
 ## 现在支持什么
 
@@ -92,16 +93,17 @@ cd frontend && npm install && npm run build
 ## 文档
 
 - [docs/README.md](docs/README.md)：框架总览与文档索引（分层、依赖方向、装配链路、配置、可选依赖）
+- [docs/app/app.md](docs/app/app.md)：启动顺序与停机收尾、配置怎么读 / 怎么报错（根目录 `app.py` / `config.py`）
 - [docs/workflow/workflow.md](docs/workflow/workflow.md)：工作流模块索引、写自己的节点（第 5 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节）
 - 其余模块文档：[logger](docs/logger/logger.md) · [scheduler](docs/scheduler/scheduler.md) · [cache](docs/cache/cache.md) · [bridge](docs/bridge/bridge.md)
 - [examples/](examples/)：可直接运行的最小示例
 
 ## 参与
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)：环境准备、目录速览、代码约定、测试与提交规范
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)：社区行为准则
-- [SECURITY.md](SECURITY.md)：漏洞报告渠道与部署注意事项
-- [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)：第三方组件与许可
+- [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)：环境准备、目录速览、代码约定、测试与提交规范
+- [.github/CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md)：社区行为准则
+- [.github/SECURITY.md](.github/SECURITY.md)：漏洞报告渠道与部署注意事项
+- [docs/THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES)：第三方组件与许可
 
 ## 许可证
 

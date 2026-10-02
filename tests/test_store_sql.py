@@ -68,7 +68,7 @@ async def test_ensure_schema_is_idempotent(tmp_path: Path) -> None:
         await store.ensure_schema()
         await store.ensure_schema()  # 再建一次不报错（CREATE TABLE IF NOT EXISTS 的效果）
         await store.seed_demo()
-        assert len(await rows_of(engine)) == 3
+        assert len(await rows_of(engine)) == 1  # 演示账号只剩 admin
 
 
 async def test_seed_demo_is_idempotent(tmp_path: Path) -> None:
@@ -76,7 +76,7 @@ async def test_seed_demo_is_idempotent(tmp_path: Path) -> None:
         await store.ensure_schema()
         await store.seed_demo()
         await store.seed_demo()  # 已有数据，第二次不该重复插
-        assert len(await rows_of(engine)) == 3
+        assert len(await rows_of(engine)) == 1  # 演示账号只剩 admin
 
 
 async def test_seed_demo_skips_non_empty_table(tmp_path: Path) -> None:
@@ -130,6 +130,12 @@ async def test_get_by_ids(tmp_path: Path) -> None:
     async with opened_store(tmp_path) as (store, _):
         await store.ensure_schema()
         await store.seed_demo()
+        # 演示账号只剩 admin：这里要「两个用户」验批量查询，第二个自己建
+        await store.add(
+            account="robot",
+            password_hash=_TEST_HASHER.hash("botnode-robot"),
+            nickname="巡检机器人",
+        )
 
         admin = await store.get_by_account("admin")
         robot = await store.get_by_account("robot")
@@ -144,12 +150,25 @@ async def test_get_by_ids(tmp_path: Path) -> None:
 
 
 async def test_disabled_account_and_missing(tmp_path: Path) -> None:
-    async with opened_store(tmp_path) as (store, _):
+    """停用账号查得到、标着 disabled；不存在的账号一律 None。"""
+    async with opened_store(tmp_path) as (store, engine):
         await store.ensure_schema()
         await store.seed_demo()
+        # 停用账号：演示数据里不再带（只剩 admin），用例自己造一个
+        async with AsyncSession(engine) as session:
+            session.add(
+                UserTable(
+                    id="u-frozen",
+                    account="frozen",
+                    password_hash=_TEST_HASHER.hash("frozen-pw"),
+                    nickname="停用账号",
+                    disabled=True,
+                )
+            )
+            await session.commit()
 
-        guest = await store.get_by_account("guest")
-        assert guest is not None and guest.disabled is True
+        frozen = await store.get_by_account("frozen")
+        assert frozen is not None and frozen.disabled is True
         assert await store.get_by_account("nobody") is None
         assert await store.get_by_id("u-nobody") is None
 
@@ -243,7 +262,7 @@ async def test_create_app_with_db_serves_login(tmp_path: Path) -> None:
     try:
         # starlette 的 lifespan 要在 ASGITransport 之外手动跑（httpx 不会自己触发 startup）
         async with app.router.lifespan_context(app):
-            assert len(await rows_of(engine)) == 3  # lifespan 已在库里种好演示账号
+            assert len(await rows_of(engine)) == 1  # lifespan 已在库里种好演示账号（只剩 admin）
 
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -259,8 +278,20 @@ async def test_create_app_with_db_serves_login(tmp_path: Path) -> None:
                 )
                 assert me.status_code == 200
 
+                # 停用账号：演示账号里不再带（只剩 admin），用例自己造一个停用用户
+                async with AsyncSession(engine) as session:
+                    session.add(
+                        UserTable(
+                            id="u-frozen",
+                            account="frozen",
+                            password_hash=_TEST_HASHER.hash("frozen-pw"),
+                            nickname="停用账号",
+                            disabled=True,
+                        )
+                    )
+                    await session.commit()
                 denied = await client.post(
-                    "/api/auth/login", json={"account": "guest", "password": "botnode-guest"}
+                    "/api/auth/login", json={"account": "frozen", "password": "frozen-pw"}
                 )
                 assert denied.status_code == 403  # 停用账号
     finally:

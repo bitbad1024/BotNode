@@ -1,35 +1,9 @@
 """配置：读 TOML、用 pydantic 校验取值，产出一份 :class:`Settings`。
 
-配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成
-``config.toml`` 才生效；后者已进 ``.gitignore`` 不入库。
-
-容错策略是「能跑就跑」：文件不存在、某一节某一项没写，都按各区域字段的默认值补齐；
-只有**值写错**才抛 :class:`ConfigError` —— 级别名拼错、该填整数填了字符串、driver 不在
-sqlite/mariadb 里、端口越界。这样配置拼错会在启动阶段就报出来，而不是静默用默认值。
-
-校验交给 pydantic：类型、取值范围（端口 1-65535、driver 只能 sqlite/mariadb）、路径解析
-都写在字段旁边 —— 不用再手写 ``isinstance`` 那一套；pydantic 的报错再由 :func:`_describe`
-翻成统一格式的中文提示（带完整出处，如 ``logging.database.port``）。
-
-代码按配置文件里的区域切块：一节一个模型，配置里写哪节就在代码里翻哪块::
-
-    [app]                -> Settings.app                进程名、调试开关
-    [database]           -> Settings.database           整项目共用的数据库连接
-    [logging]            -> Settings.logging            级别、控制台、队列
-    [logging.file]       -> ...logging.file             本地文件出口
-    [logging.database]   -> ...logging.database         数据库出口
-    [logging.queue]      -> ...logging.queue            异步队列与分发器
-    [cache]              -> Settings.cache              缓存总控：用哪个后端
-    [cache.redis]        -> ...cache.redis              Redis 连接（backend=redis 时才用）
-    [api]                -> Settings.api                接口层：监听地址、路由前缀、令牌有效期
-    [onebot]             -> Settings.onebot             反向 WS 接入：监听地址、路径、令牌
-
-数据库配置按「专用 > 公共 > 默认」三层逐项覆盖：``[database]`` 是整项目共用的数据库连接
-（driver / path / host / port / user / password / database），``[logging.database]`` 是
-日志出口的专用配置 —— 连接类项默认整项继承公共节，日志特有的 enabled / buffer_size /
-flush_interval 只在这一节；要给日志单独连另一个库，就在这一节里覆盖同名项，
-覆盖粒度是**逐项**的（没写的那几项继续继承）。两者合并的最终结果放在
-``Settings.logging.database.connection``。
+配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成 ``config.toml``
+才生效（后者已进 ``.gitignore`` 不入库）。容错口径是「能跑就跑」：文件 / 某节 / 某项没写都按
+字段默认值补齐，只有**值写错**才抛 :class:`ConfigError`（报错带完整出处，如
+``logging.database.port``）；已经废弃的键直接报错并指路，不静默忽略。
 
 用法::
 
@@ -39,11 +13,16 @@ flush_interval 只在这一节；要给日志单独连另一个库，就在这�
         settings = Settings.load("config.toml")
     except ConfigError as exc:
         ...  # 报给用户，别拿默认值糊过去
+
+区域与模型的对应、数据库的三层覆盖、报错口径、Kook 凭证密钥（``data/secret_key``）的派生
+规则见 ``docs/app/app.md``。
 """
 from __future__ import annotations
 
+import secrets
 import tomllib
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal, TypeAlias, TypeVar, cast, get_args
 
@@ -66,6 +45,8 @@ BASE_DIR: Path = Path(__file__).resolve().parent
 CONFIG_PATH: Path = BASE_DIR / "config.toml"
 #: 配置模板（入库）
 TEMPLATE_PATH: Path = BASE_DIR / "config.toml.example"
+#: Kook 凭证加密密钥的落盘位置：``[kook].secret_key`` 留空时自动生成/读取这里
+KEY_FILE: Path = BASE_DIR / "data" / "secret_key"
 
 #: 合法的日志级别名，报错提示用
 _LEVEL_NAMES: str = "/".join(level.name for level in LogLevel)
@@ -158,7 +139,7 @@ def _load(
     """
     for key, replacement in model.legacy_keys.items():
         if key in section:
-            raise ConfigError(f"{where(key)} 已不再使用：改用 {replacement}")
+            raise ConfigError(f"{where(key)} 已不再使用：{replacement}")
     try:
         return model.model_validate(section)
     except ValidationError as exc:
@@ -204,7 +185,8 @@ class _Region(BaseModel):
     """一块配置区域的公共底：冻结（配置读出来就不该被改），缺项按字段默认值补。"""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
-    #: 已废弃的键 -> 现在的替代项；写到配置里直接报错（见 :func:`_load`），不静默忽略
+    #: 已废弃的键 -> 报错时给人的处理办法（写成完整提示，如 ``"改用 dir"``）；写到配置里直接
+    #: 报错（见 :func:`_load`），不静默忽略
     legacy_keys: ClassVar[dict[str, str]] = {}
 
 
@@ -226,7 +208,7 @@ class DatabaseSettings(_Region):
     """
 
     driver: Driver = "sqlite"  # sqlite / mariadb
-    path: ConfigPath = BASE_DIR / "logs" / "botnode.db"  # sqlite 用
+    path: ConfigPath = BASE_DIR / "data" / "botnode.db"  # sqlite 用（数据与头像同住 data/）
     # mariadb 用：服务地址与账号
     host: str = "127.0.0.1"
     port: int = Field(default=3306, ge=1, le=65535, description="1-65535 的端口")
@@ -250,7 +232,10 @@ class FileLogSettings(_Region):
 
     #: 旧键 -> 替代项：``path`` 那时是单个文件，现在是目录；``backup_count`` 是「留几份历史」，
     #: 现在按天数留
-    legacy_keys: ClassVar[dict[str, str]] = {"path": "dir", "backup_count": "keep_days"}
+    legacy_keys: ClassVar[dict[str, str]] = {
+        "path": "改用 dir（那时是单个文件，现在按目录 + 前缀分片）",
+        "backup_count": "改用 keep_days（现在按天数保留）",
+    }
 
     enabled: bool = True  # false 就只有控制台
     dir: ConfigPath = BASE_DIR / "logs"  # 放片的目录
@@ -408,7 +393,8 @@ class ApiSettings(_Region):
     而不是"登录后最多能用多久"。
     """
 
-    host: str = "127.0.0.1"  # HTTP 服务监听地址
+    #: 监听地址默认 0.0.0.0：容器 / 局域网里别的机器要能连进来（只在本机用再改回 127.0.0.1）
+    host: str = "0.0.0.0"
     port: int = Field(default=18080, ge=1, le=65535, description="1-65535 的端口")
     prefix: str = "/api"  # 路由前缀（要 / 开头；结尾的 / 会被去掉）
     token_ttl: float = Field(
@@ -445,8 +431,9 @@ class OneBotSettings(_Region):
     ``?access_token=<token>``。``action_timeout`` 是发出一个动作后等回应的超时。
     """
 
-    host: str = "127.0.0.1"  # WS 服务监听地址
-    port: int = Field(default=6700, ge=1, le=65535, description="1-65535 的端口")
+    #: 监听地址默认 0.0.0.0：实现端可能在别的机器 / 容器里（只让本机连就改回 127.0.0.1）
+    host: str = "0.0.0.0"  # WS 服务监听地址
+    port: int = Field(default=16700, ge=1, le=65535, description="1-65535 的端口")
     path: str = "/"  # 只接受该路径的连接
     action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
 
@@ -461,15 +448,23 @@ class OneBotSettings(_Region):
 
 # ------------------------------------------------------------------------ 区域：[kook]
 class KookSettings(_Region):
-    """``[kook]``：Kook 正向 WS 接入 —— 框架当客户端，主动连 Kook 网关（用 Bot Token 鉴权）。
+    """``[kook]``：Kook 正向 WS 接入 —— 框架当客户端，主动连 Kook 网关。
 
-    与 OneBot 相反：这里配的是「连哪个网关 / 用什么凭证」，不是「监听哪个端口」。
-    ``token`` 留空 = 没配，不接入 Kook（装配层据此跳过建适配器）。
+    与 OneBot 相反：这里没有「监听哪个端口」，也**不配网关地址与 Bot Token** ——
+    凭证不在配置文件里：有几个机器人、各自的 Bot Token 是什么，都由接口层 ``/api/bots``
+    添加后落库（密文），装配时拿这一节的 ``secret_key`` 解密逐个连；网关地址在连接前自动走
+    ``gateway/index`` 取。所以这一节只剩「怎么连」的调优项（心跳、退避、限流）与加密密钥。
     """
 
-    gateway: str = ""  # 网关地址：留空 = 连接前走 gateway/index 动态获取（推荐）
-    token: str = ""  # Bot Token（Kook 开放平台签发；留空 = 不接入）
-    secret_key: str = ""  # Bot Token 落库加密的密钥（kook 凭证行加密用；留空则无法存 kook 凭证）
+    #: 这两个键以前从配置读，现在：网关自动获取、Bot Token 经接口层落库
+    legacy_keys: ClassVar[dict[str, str]] = {
+        "gateway": "把这一项删掉即可，连接前会自己走 gateway/index 动态获取",
+        "token": "把这一项删掉即可，Bot Token 改在接口层 /api/bots 添加（落库加密）",
+    }
+
+    #: 凭证加密密钥：留空则读 ``data/secret_key``（没有就生成一份，见
+    #: :func:`load_or_create_secret_key`）
+    secret_key: str = ""
     heartbeat_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     #: 心跳抖动（秒）：官方口径 30 秒 + rand(-5, +5)，别让所有机器人同一时刻打心跳
     heartbeat_jitter: float = Field(default=5.0, ge=0, description="不小于 0 的秒数")
@@ -532,3 +527,29 @@ class Settings(_Region):
             kook=_load(KookSettings, _section(data, "kook"), _where_in("kook")),
             config_path=config_path,
         )
+
+
+# --------------------------------------------------------------------------- 派生值
+def load_or_create_secret_key(configured: str = "", path: Path = KEY_FILE) -> str:
+    """Kook 凭证的加密密钥：配置里填了就用它，留空则读（没有就生成）``data/secret_key``。
+
+    为什么留空要**落盘**而不是每次随机生成：这个密钥加密的是**已经落库**的 Bot Token，
+    密钥一换库里那些密文就再也解不开（机器人得全部重新添加）。所以留空时只在第一次生成，
+    写进 ``data/secret_key``（尽量收成 0600），之后每次启动读同一份。
+
+    :param configured: ``[kook].secret_key`` 的值（空 = 走文件）；
+    :param path: 密钥文件位置，默认 :data:`KEY_FILE`。
+    """
+    key: str = configured.strip()
+    if key:
+        return key
+    if path.is_file():
+        stored: str = path.read_text(encoding="utf-8").strip()
+        if stored:
+            return stored
+    key = secrets.token_urlsafe(48)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(key + "\n", encoding="utf-8")
+    with suppress(OSError):  # Windows 上 chmod 基本无效，权限位不是这里的重点
+        path.chmod(0o600)
+    return key

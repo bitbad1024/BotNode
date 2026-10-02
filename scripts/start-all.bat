@@ -9,7 +9,8 @@ rem  前端 Vite    : http://127.0.0.1:15173
 rem  两个窗口各跑一边；关掉对应窗口即停止对应服务
 rem ============================================================
 
-cd /d "%~dp0"
+rem 脚本住在 scripts/ 下，项目根是它的上一级（下面的 frontend、app.py 都相对根）
+cd /d "%~dp0.."
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -43,8 +44,8 @@ echo 关闭对应窗口即可停止对应服务。
 echo.
 
 rem 分别起两个窗口：后端跑 app.py，前端跑 npm run dev
-start "BotNode 后端" cmd /k "cd /d ""%~dp0"" && python app.py"
-start "BotNode 前端" cmd /k "cd /d ""%~dp0frontend"" && npm run dev"
+start "BotNode 后端" cmd /k "cd /d ""%~dp0.."" && python app.py"
+start "BotNode 前端" cmd /k "cd /d ""%~dp0..\frontend"" && npm run dev"
 
 echo 前后端已在两个新窗口启动。
 exit /b 0

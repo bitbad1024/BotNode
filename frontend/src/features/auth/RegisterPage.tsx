@@ -14,7 +14,6 @@ import {
   IconEdit,
   IconLogo,
 } from '../../common/icons'
-import { backendUrl } from '../../config/env'
 import {
   FIELD_LABELS,
   NICKNAME_MAX_LENGTH,
@@ -219,10 +218,6 @@ export default function RegisterPage() {
         </div>
 
         <div className={styles.footer}>
-          <a href={backendUrl('/docs')} target="_blank" rel="noopener">
-            API 文档
-          </a>
-          <span className={styles.dot}>·</span>
           <span>v0.1.0</span>
         </div>
       </div>

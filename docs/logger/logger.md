@@ -46,7 +46,7 @@ from botnode.db import SqlLogStore
 logger = LogCore()                          # 最小化启动：只有控制台
 await logger.start()
 
-db = create_async_engine("sqlite+aiosqlite:///logs/botnode.db")
+db = create_async_engine("sqlite+aiosqlite:///data/botnode.db")
 logger.mount(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
 logger.mount(LocalFileLogProcessor("logs", prefix="botnode"))   # 按天分片：botnode-<日期>.log
 

@@ -425,13 +425,6 @@
   color: var(--lp-brand);
   font-weight: 600;
 }
-.footer a:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.dot {
-  font-size: 8px;
-}
 
 @media (max-width: 480px) {
   .card {

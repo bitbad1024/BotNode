@@ -282,7 +282,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `services/user/validation.py` | 账号 / 密码 / 昵称规则：`Account` / `Password` / `Nickname`（pydantic `AfterValidator`，`SecretStr` 包密码）。登录、注册共用一份，「改资料」将来也用它。 |
 | `services/user/protocols.py` | 能力协议（只声明不实现）：`UserStore`（按账号 / 按 id 查人，外加注册那一笔 `add`，异步）、`PasswordHasher`（hash / verify）。 |
 | `services/user/security.py` | 默认实现 `Pbkdf2PasswordHasher`：PBKDF2-SHA256，串自带算法 / 迭代 / 盐 / 摘要，定长比对。 |
-| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`add` 新增一个账号（注册用，撞 `account` 唯一约束时翻成 `AccountAlreadyExistsError`，不把数据库异常漏出去）、`seed_demo` 空表种演示账号（`admin` / `robot` / `guest` 已停用）。 |
+| `services/user/store_sql.py` | 落库实现 `SqlUserStore`：`UserTable`（SQLModel）声明表结构与约束，DDL 由 SQLAlchemy 按方言生成（sqlite / mariadb 同一份定义），查询走 `AsyncSession`，**不手写 SQL**；`ensure_schema` 建表、`add` 新增一个账号（注册用，撞 `account` 唯一约束时翻成 `AccountAlreadyExistsError`，不把数据库异常漏出去）、`seed_demo` 空表种演示账号（只有一个 `admin`；要别的账号走注册接口）。 |
 | `services/user/demo.py` | 演示账号 `DEMO_USERS` 的单一来源（`seed_demo` 用），改账号只改一处。 |
 
 ### 4.3 services/profile/ —— 个人设置域

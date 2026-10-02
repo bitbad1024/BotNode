@@ -15,7 +15,7 @@
    （业务用 ``botnode.api``、访问用 ``botnode.api.access``）区分来源，不再各落一个文件；
 1. **装配**：``create_app(ApiOptions.from_mapping(settings.api.model_dump()))`` —— 接口层
    不读配置文件，选项由配置系统的 ``[api]`` 一节转成普通映射喂进来；不传用户存储就用
-   内存演示账号（admin / robot / guest）；
+   内存演示账号（只有一个 admin）；
 2. **登录成功**：看响应协议 ``{success, data:{token, expires_in, user}, trace_id}``，
    密码不在响应里；
 3. **登录失败**：密码错与账号不存在是同一个 401 码（不泄露账号存不存在），停用账号是
@@ -26,8 +26,8 @@
 6. **看日志落了什么**：flush 之后读 ``logs/api-demo-<日期>.log``（每行一个 JSON）；
 7. **起真服务**：uvicorn 命令（这里不真的起，起了就阻塞住）。
 
-演示账号（见 ``botnode.api.services.user.demo.DEMO_USERS``）：
-``admin / botnode-admin``（管理员）、``robot / botnode-robot``、``guest / botnode-guest``（已停用）。
+演示账号（见 ``botnode.api.services.user.demo.DEMO_USERS``）只有一个：
+``admin / botnode-admin``（管理员）；要别的账号走注册接口建，演示数据里不再带。
 """
 from __future__ import annotations
 
@@ -138,12 +138,6 @@ async def main() -> None:
             "账号不存在",
             await client.post(
                 f"{prefix}/auth/login", json={"account": "nobody", "password": "wrong-password"}
-            ),
-        )
-        show(
-            "停用账号",
-            await client.post(
-                f"{prefix}/auth/login", json={"account": "guest", "password": "botnode-guest"}
             ),
         )
         show(
