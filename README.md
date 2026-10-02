@@ -44,12 +44,12 @@ docker compose up -d --build              # 控制台 http://127.0.0.1:8080
 一键打包（前端产物 + 后端源码包 + 单镜像）：
 
 ```bat
-build-all.bat                 :: Windows：前端 + 后端 + botnode:latest
-build-all.bat --no-docker     :: 只打包产物，不碰 Docker
+scripts\build-all.bat              :: Windows：前端 + 后端 + botnode:latest
+scripts\build-all.bat --no-docker  :: 只打包产物，不碰 Docker
 ```
 
 ```bash
-./build-all.sh                # Linux / macOS，参数同上
+./scripts/build-all.sh        # Linux / macOS，参数同上
 ```
 
 端口、挂载卷、容器里要改的配置（比如 `[api] host` 建议改回 `127.0.0.1`）、不用 Docker 的部署方式，

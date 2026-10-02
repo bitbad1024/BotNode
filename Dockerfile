@@ -14,7 +14,7 @@
 #     -v "$PWD/config.toml:/app/config.toml:ro" \
 #     -v botnode-logs:/app/logs -v botnode-data:/app/data botnode:latest
 #
-# 一键打包（前端 + 后端产物 + 这个镜像）：build-all.bat / build-all.sh
+# 一键打包（前端 + 后端产物 + 这个镜像）：scripts/build-all.bat / scripts/build-all.sh
 
 # ------------------------------------------------------------------ ① 前端构建
 FROM node:20-alpine AS web

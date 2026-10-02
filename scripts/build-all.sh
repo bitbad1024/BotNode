@@ -2,10 +2,10 @@
 # ============================================================================
 #  BotNode 一键打包（Linux / macOS，与 build-all.bat 同款）
 #
-#    ./build-all.sh               前端 + 后端产物 + 单镜像 botnode:latest
-#    ./build-all.sh v0.1.0        镜像标签换成 botnode:v0.1.0
-#    ./build-all.sh --no-docker   只打包前后端产物，不碰 Docker
-#    ./build-all.sh --clean       先清空 node_modules 再装（可复现，但更慢）
+#    ./scripts/build-all.sh               前端 + 后端产物 + 单镜像 botnode:latest
+#    ./scripts/build-all.sh v0.1.0        镜像标签换成 botnode:v0.1.0
+#    ./scripts/build-all.sh --no-docker   只打包前后端产物，不碰 Docker
+#    ./scripts/build-all.sh --clean       先清空 node_modules 再装（可复现，但更慢）
 #
 #  产物：
 #    frontend/dist      控制台静态产物
@@ -14,7 +14,8 @@
 # ============================================================================
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# 脚本住在 scripts/ 下、项目根是它的上一级：先切过去，从哪儿调用都跑得对
+cd "$(dirname "$0")/.."
 
 TAG=latest
 SKIP_DOCKER=0
