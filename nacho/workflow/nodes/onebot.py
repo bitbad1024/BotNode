@@ -18,6 +18,9 @@ target 化之前，``onebot`` 节点带 ``action`` / ``group_id`` / ``user_id`` 
 
 **内容为空也不发**（与 send 同一口径）：``message`` 是空串 / 纯空白时同样不发 ——
 ``onebot_retcode`` 记 1、``onebot_data`` 空串送下游。
+**回执不成功 = 业务失败**（与 send 同一口径）：记一条 warning 后抛
+:class:`~nacho.workflow.nodes.base.NodeFailure`，引擎停止它向下传播（下游整段跳过）。
+环境问题（没接总线 / 连不上）才抛普通异常中断整条流程。
 
 **breaking 提醒**：库里旧的 ``onebot`` 图（用 ``action`` / ``group_id`` 配置、上游接
 ``message`` / ``group_id`` 端口）已不能照跑，需迁移到 ``send`` + ``target`` 节点
@@ -28,7 +31,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
+from .base import (
+    TRIGGER_PORT,
+    ConfigField,
+    NodeExecutionContext,
+    NodeFailure,
+    PortSpec,
+    input_value,
+)
 from .registry import register_node
 from .send import _clip, _dump
 
@@ -105,4 +115,7 @@ async def exec_onebot(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str
         fields["message_preview"] = _clip(message)
     report(f"[onebot:{node.id}] reply -> retcode {retcode}", **fields)
     ctx.log.append(f"[onebot] {node.id}: reply -> retcode {retcode}")
+    if not ok:
+        # 回执不成功是「对方的回答」= 业务失败：停止向下传播（与 send 同一口径）
+        raise NodeFailure(f"发送失败：retcode {retcode}（{data}）")
     return {"onebot_retcode": retcode, "onebot_data": data}

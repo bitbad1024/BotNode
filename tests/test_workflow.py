@@ -1829,8 +1829,11 @@ async def test_onebot_without_target_skips_and_requires_gateway() -> None:
 
 
 @pytest.mark.asyncio
-async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
-    """对方收下了但回执不成功（status / retcode 非成功）：不抛，回执原样送下游自己判断。"""
+async def test_onebot_failed_receipt_is_a_node_failure() -> None:
+    """对方收下了但回执不成功（status / retcode 非成功）= **业务失败**：抛 NodeFailure（停止
+    向下传播），不再把「没发出去」当结果往下送。"""
+    from nacho.workflow.nodes import NodeFailure
+
     gateway = _FakeGateway(
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"})
     )
@@ -1840,10 +1843,10 @@ async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
         "target": gateway.make_target("onebot", chat="group", chat_id="1"),
         "message": "hi",
     }
-    result = await exec_onebot(node_, ctx_)  # 不抛
+    with pytest.raises(NodeFailure, match="发送失败"):
+        await exec_onebot(node_, ctx_)
 
-    assert result["onebot_retcode"] == 1200  # retcode 从回执 raw 下探出来
-    assert "账号被禁言" in result["onebot_data"]
+    # 痕迹照留：retcode 进日志（看得出对方回了什么）
     assert any("[onebot] ob1: reply -> retcode 1200" in line for line in ctx_.log)
 
 
@@ -2045,9 +2048,10 @@ async def test_onebot_empty_message_skips() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_failed_receipt_warns_but_flows_on() -> None:
-    """对方收下但回执不成功（ok=False）：不抛，send_ok=False + send_data 送下游自己判断。"""
-    from nacho.workflow.nodes import exec_send
+async def test_send_failed_receipt_is_a_node_failure() -> None:
+    """对方收下但回执不成功（ok=False）= **业务失败**：抛 NodeFailure（停止向下传播），
+    不再把「没发出去」当结果往下送。"""
+    from nacho.workflow.nodes import NodeFailure, exec_send
 
     gateway = _FakeGateway(
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "被禁言"})
@@ -2058,8 +2062,11 @@ async def test_send_failed_receipt_warns_but_flows_on() -> None:
         "target": gateway.make_target("onebot", chat="group", chat_id="1"),
         "message": "hi",
     }
-    result = await exec_send(node_, ctx_)  # 不抛
-    assert result == {"send_ok": False, "send_data": '{"msg":"被禁言"}'}
+
+    with pytest.raises(NodeFailure, match="发送失败"):
+        await exec_send(node_, ctx_)
+
+    assert any("[send] snd1: reply -> failed" in line for line in ctx_.log)  # 痕迹照留
 
 
 def test_send_requires_a_target_source() -> None:
