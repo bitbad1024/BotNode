@@ -1,6 +1,6 @@
 """应用入口：读配置 -> 建日志核心与库引擎 -> 交给 :mod:`botnode.bootstrap` 装配 -> 优雅停机。
 
-**只做核心初始化**：解析命令行、读 ``config.toml``、按 ``[logging]`` 建日志核心、建共用的
+**只做核心初始化**：解析命令行、读 ``data/config.toml``、按 ``[logging]`` 建日志核心、建共用的
 数据库引擎（建好立即探一次，连不上当场报错）。业务模块一律不在这里 import —— 日志核心必须
 先于任何业务模块按配置建好（它们有模块级的 ``default_core().child(...)``，导入即执行会把
 进程默认核心按默认参数定死），所以 :mod:`botnode.bootstrap` 也是核心就绪之后才在函数里导入。
@@ -8,7 +8,7 @@
 
 运行::
 
-    python app.py                     # 读 ./config.toml，不存在则按默认值启动
+    python app.py                     # 读 data/config.toml，不存在则按默认值启动
     python app.py -c path/to.toml     # 指定配置文件
 
 启动顺序、数据库探测、Ctrl+C 收尾、监听地址与依赖的完整说明见 ``docs/app/app.md``。
@@ -27,6 +27,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import (
+    BASE_DIR,
     CONFIG_PATH,
     KEY_FILE,
     TEMPLATE_PATH,
@@ -185,7 +186,7 @@ def _parse_args(argv: Sequence[str] | None) -> str:
         "-c",
         "--config",
         default=str(CONFIG_PATH),
-        help="配置文件路径（默认 ./config.toml，不存在则按默认值启动）",
+        help="配置文件路径（默认 data/config.toml，不存在则按默认值启动）",
     )
     return cast("str", parser.parse_args(argv).config)
 
@@ -196,7 +197,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
     真正的服务（接口层 HTTP、OneBot 反向 WS）都在后台任务里跑，本函数只把**顺序**摆正：
     初始化哪一步失败都当场退出（``SystemExit(2)``），不留半截状态。
     """
-    # 1) 配置：读不到就报错退出（-c 指定的文件，或默认的 ./config.toml）
+    # 1) 配置：读不到就报错退出（-c 指定的文件，或默认的 data/config.toml）
     try:
         settings = Settings.load(_parse_args(argv))
     except ConfigError as exc:
@@ -220,7 +221,10 @@ async def _main(argv: Sequence[str] | None = None) -> None:
             config=str(settings.config_path) if settings.config_path else "默认值",
         )
         if settings.config_path is None:
-            core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
+            core.warning(
+                f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}，"
+                f"复制成 {CONFIG_PATH.relative_to(BASE_DIR).as_posix()} 即生效"
+            )
         # Kook 凭证的加密密钥：配置留空就自动生成/读取 data/secret_key —— 落盘而不是每次随机，
         # 否则重启后已落库的 Bot Token 密文会全部解不开（见 config.load_or_create_secret_key）
         kook_config: dict[str, object] = settings.kook.model_dump()

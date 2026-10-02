@@ -1,7 +1,11 @@
 # 单镜像一键起（控制台 + 后端在同一个容器里）：
 #
-#   cp config.toml.example config.toml      # Windows: copy config.toml.example config.toml
 #   docker compose up -d --build            # 想改标签：docker compose build --pull
+#
+# 配置不用提前准备：第一次启动会照模板生成 data/config.toml（就在宿主这个目录里，直接编辑），
+# 改完 docker compose restart 即生效。想自己写就先复制一份再启动：
+#   cp config.toml.example data/config.toml     # Windows: copy config.toml.example data\config.toml
+# （容器以 root 跑，让它生成的话那份属主是 root —— Linux 上编辑要 sudo，所以先复制更省事。）
 #
 # 起来之后：
 #   控制台 / 接口  http://127.0.0.1:8080
@@ -27,15 +31,17 @@ services:
       - "8080:80"      # 控制台 + 接口（容器内 nginx）
       - "16700:16700"  # OneBot 反向 WS：实现端要能连进来
     volumes:
-      # 配置（含数据库密码、secret_key）由外面挂进去，绝不打进镜像
-      - ./config.toml:/app/config.toml:ro
-      # 日志分片（[logging.file].dir 默认 logs/）
+      # 运行时数据整目录挂出来：配置（data/config.toml）、sqlite（[database].path 默认
+      # data/botnode.db）、Kook 密钥（data/secret_key）、上传的头像。
+      #
+      # 挂**目录**而不是挂单个文件：宿主上文件不存在时，挂单文件会被 Docker 建成一个同名
+      # 目录，而且只读挂载下容器也写不进去（配置必须先手工准备好）。挂目录则怎么都不会错，
+      # 首次启动容器还能自己把配置照模板生成出来。
+      - ./data:/app/data
+      # 日志分片（[logging.file].dir 默认 logs/）：只在容器里翻，用卷存着就够
       - botnode-logs:/app/logs
-      # sqlite 数据库（[database].path 默认 data/botnode.db）、Kook 的 secret_key、头像上传
-      - botnode-data:/app/data
     environment:
       TZ: Asia/Shanghai
 
 volumes:
   botnode-logs:
-  botnode-data:

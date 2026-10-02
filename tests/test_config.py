@@ -8,6 +8,7 @@ import pytest
 
 from config import (
     BASE_DIR,
+    CONFIG_PATH,
     TEMPLATE_PATH,
     ConfigError,
     DatabaseSettings,
@@ -331,3 +332,11 @@ class TestSecretKeyFile:
         path = tmp_path / "secret_key"
         path.write_text("\n", encoding="utf-8")
         assert load_or_create_secret_key("", path).strip()
+
+
+class TestConfigLocation:
+    """配置住在 ``data/`` 下（跟 sqlite / 密钥 / 头像同一个目录）。"""
+
+    def test_default_path_is_under_data(self) -> None:
+        """默认读 data/config.toml：备份 / 挂载只管搬 data/ 一个目录，不会漏掉配置。"""
+        assert CONFIG_PATH == BASE_DIR / "data" / "config.toml"

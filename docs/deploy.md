@@ -51,11 +51,16 @@ docker build \
 
 ## 2. 跑起来
 
-先把配置准备好（**配置不进镜像**，要挂进去）：
+配置**不用提前准备**：它跟数据一起住在 `data/` 下（`data/config.toml`），容器第一次启动会照镜像里
+的模板生成一份。想自己写就先复制（这样文件属主是你，Linux 上不必 sudo 才能改）：
 
 ```bash
-cp config.toml.example config.toml        # Windows: copy config.toml.example config.toml
+mkdir -p data && cp config.toml.example data/config.toml   # Windows: mkdir data & copy config.toml.example data\config.toml
 ```
+
+**配置为什么住 `data/`**：它是运行时数据，跟 sqlite、Kook 密钥、头像同处一地 —— 备份 / 搬迁 / 挂载
+都只搬 `data/` 一个目录；而且挂的是**目录**，宿主上文件不存在时不会被 Docker 建成同名目录，容器还
+写得进去，配置才能由容器自己生成。配置**不进镜像**（`data/` 不在镜像里），有口令与密钥。
 
 ### 2.1 docker run
 
@@ -63,9 +68,8 @@ cp config.toml.example config.toml        # Windows: copy config.toml.example co
 docker run -d --name botnode \
   -p 8080:80 \
   -p 16700:16700 \
-  -v "$PWD/config.toml:/app/config.toml:ro" \
+  -v "$PWD/data:/app/data" \
   -v botnode-logs:/app/logs \
-  -v botnode-data:/app/data \
   --restart unless-stopped \
   botnode:latest
 ```
@@ -76,7 +80,8 @@ docker run -d --name botnode \
 docker compose up -d --build
 ```
 
-`docker-compose.yml` 里已经把端口、卷、时区写好了，改标签 / 换源都在那个文件里。
+`docker-compose.yml` 里已经把端口、卷、时区写好了，改标签 / 换源都在那个文件里；配置挂的是宿主
+`./data`，首次启动自动生成 `data/config.toml`，改完 `docker compose restart` 即生效。
 
 ### 2.3 端口分别是什么
 
@@ -88,15 +93,14 @@ docker compose up -d --build
 
 ### 2.4 挂载的卷
 
-| 容器路径 | 装什么 | 丢了会怎样 |
+| 挂到哪 | 装什么 | 丢了会怎样 |
 |---|---|---|
-| `/app/logs` | 日志分片（`[logging.file].dir` 默认 `logs/`） | 只是日志没了，数据无碍 |
-| `/app/data` | `sqlite` 数据库（`[database].path` 默认 `data/botnode.db`）、`secret_key`（Kook 凭证加密密钥）、头像上传 | **用户数据没了**；Bot Token 也得重填（密钥丢了解不开旧密文） |
-| `/app/config.toml` | 配置（只读挂载） | 没挂就按代码默认值启动（会打一行 warning） |
+| 宿主 `./data` → `/app/data` | `config.toml`（配置）、`sqlite` 数据库（`[database].path` 默认 `data/botnode.db`）、`secret_key`（Kook 凭证加密密钥）、头像上传 | **配置与用户数据都没了**；Bot Token 也得重填（密钥丢了解不开旧密文） |
+| 卷 `botnode-logs` → `/app/logs` | 日志分片（`[logging.file].dir` 默认 `logs/`） | 只是日志没了，数据无碍 |
 
 ## 3. 容器里要改的配置
 
-打开挂进去的 `config.toml`，下面两处**必须**确认：
+打开 `data/config.toml`（就在宿主上，直接编辑），下面两处**必须**确认：
 
 ```toml
 [onebot]
@@ -112,13 +116,13 @@ port = 18080
 
 其余按需：
 
-* `[database]`：默认 `sqlite`（文件落在 `/app/data/botnode.db`，随 `botnode-data` 卷持久化）；要用 MariaDB 就把 `driver` 改成
+* `[database]`：默认 `sqlite`（文件落在 `/app/data/botnode.db`，随宿主 `./data` 持久化）；要用 MariaDB 就把 `driver` 改成
   `mariadb` 并填连接项 —— 注意容器里的 `host` 不是 `127.0.0.1`，而是数据库服务的地址
   （compose 里加一个 `mariadb` 服务，host 就写服务名）。
 * `[cache]`：默认进程内内存缓存；要用 Redis 同理，`host` 写 Redis 服务名而不是本机。
 * `[logging]`：控制台出口在容器里就是 `docker logs botnode`，文件出口落在 `/app/logs`。
 * `[kook]`：Kook 是正向连接，出网即可，不需要额外映射端口；`secret_key` 留空会自动生成到
-  `/app/data/secret_key`（在 `botnode-data` 卷里 —— 卷丢了 Bot Token 要重填）。
+  `/app/data/secret_key`（就在宿主 `./data` 里 —— 丢了 Bot Token 要重填）。
 
 ## 4. 不用 Docker 的部署
 
@@ -138,10 +142,10 @@ port = 18080
 
    ```bash
    pip install -r requirements.txt
-   python app.py            # 默认读同目录 config.toml
+   python app.py            # 默认读 data/config.toml（没有就按代码默认值跑）
    ```
 
-   端口、OneBot 监听地址都在 `config.toml` 里；要常驻就用 systemd / supervisor / 计划任务。
+   端口、OneBot 监听地址都在 `data/config.toml` 里；要常驻就用 systemd / supervisor / 计划任务。
 
 3. 前端想**直连**另一个域名的后端（不走同源反代）：构建时传 `VITE_API_BASE_URL=https://api.example.com`
    （`npm run build` 前设这个环境变量，或 Docker 的 `--build-arg`），并在后端放行 CORS。
@@ -150,10 +154,11 @@ port = 18080
 
 * **改掉演示账号 `admin` 的默认密码**（`botnode-admin`，由开发用代码写入）—— 公网部署前务必改密；
   要别的账号不用改代码：在登录页注册即可（新账号是普通用户）；
-* **`config.toml` 别提交、别打进镜像**（里面有数据库口令与 `secret_key`），仓库已 `.gitignore`；
+* **`data/config.toml` 别提交、别打进镜像**（里面有数据库口令与 `secret_key`）—— 整个 `data/` 已在
+  `.gitignore` 里；
 * 对外只暴露 `80` 与 OneBot 的 `16700`；OneBot 端口尽量限制来源 IP；
 * 走 HTTPS 就在前面再放一层反向代理（或在 nginx 里加证书），Cookie 是登录凭据，别裸奔；
-* 备份挂载卷（`botnode-logs` 里有 sqlite 数据库）。
+* 备份宿主 `data/`（配置、sqlite 数据库、Kook 密钥、头像都在里面）。
 
 ## 6. 升级与回滚
 
@@ -162,8 +167,8 @@ git pull
 docker compose up -d --build          # 重新构建并滚动替换
 ```
 
-卷不动，数据与日志都还在。回滚就是把代码切回旧提交再 `up -d --build`（镜像标签也可以带版本号，
-用 `scripts\build-all.bat v0.1.0` 打出 `botnode:v0.1.0` 之类长期留着）。
+`./data` 与日志卷都不动，数据都还在。回滚就是把代码切回旧提交再 `up -d --build`（镜像标签也可以
+带版本号，用 `scripts\build-all.bat v0.1.0` 打出 `botnode:v0.1.0` 之类长期留着）。
 
 ## 7. 常见问题
 
@@ -172,7 +177,8 @@ docker compose up -d --build          # 重新构建并滚动替换
 | 控制台能开，接口全 502 | 后端没起来。`docker logs botnode` 看是不是连不上数据库（`[database]` 填错） |
 | OneBot 实现端连不上 `16700` | 容器里 `[onebot] host` 还是 `127.0.0.1` —— 改成 `0.0.0.0` 并确认宿主端口已映射 |
 | 刷新工作流页面 404 | 前端的静态服务器没配「回落到 `index.html`」；用镜像里的 nginx 没这个问题 |
-| 数据重启后没了 | 没挂 `/app/data`（sqlite 在那里面），或用了 `docker run --rm` |
+| 数据重启后没了 | 没挂 `/app/data`（配置与 sqlite 都在里面），或用了 `docker run --rm` |
+| 宿主上改不了 `data/config.toml`（Linux） | 容器以 root 跑，自动生成的那份属主是 root：`sudo chown -R $USER data`，或先自己 `cp config.toml.example data/config.toml` 再启动 |
 | 登录后一会儿就掉 | 前面还套了一层代理时，确认 `X-Forwarded-Proto` 传对了（HTTPS 下 Cookie 要 `Secure`） |
 | 构建时拉依赖很慢 | 用 `--build-arg` 换 NPM / PyPI 镜像源（见第 1 节） |
 | 构建时报 `failed to resolve source metadata ... EOF` | Docker Hub 连不上，配镜像加速器（见第 8 节） |

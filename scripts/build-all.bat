@@ -108,11 +108,11 @@ echo   前端产物  frontend\dist
 echo   后端产物  build\backend
 if not "%SKIP_DOCKER%"=="1" echo   镜像      botnode:%TAG%
 echo.
-echo 镜像怎么跑（把下面四行拼成一条命令，或直接用 docker compose）：
+echo 镜像怎么跑（把下面三行拼成一条命令，或直接用 docker compose）：
 echo   docker run -d --name botnode -p 8080:80 -p 16700:16700
-echo     -v "%CD%\config.toml:/app/config.toml:ro"
-echo     -v botnode-logs:/app/logs -v botnode-data:/app/data
+echo     -v "%CD%\data:/app/data" -v botnode-logs:/app/logs
 echo     botnode:%TAG%
+echo 配置不用先准备：第一次启动会照模板生成 data\config.toml，改完重启容器即生效
 echo 或者：docker compose up -d --build
 echo.
 pause

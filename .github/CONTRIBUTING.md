@@ -12,7 +12,7 @@
 |---|---|---|
 | Python | 3.12+ | 后端 |
 | Node.js | 20+ | 控制台（`frontend/`） |
-| MariaDB | 可选 | 不装就用 sqlite（`config.toml` 里 `driver = "sqlite"`） |
+| MariaDB | 可选 | 不装就用 sqlite（`data/config.toml` 里 `driver = "sqlite"`） |
 | Redis | 可选 | 不装就用进程内缓存（默认） |
 
 ```bash
@@ -21,7 +21,7 @@ cd BotNode
 
 python -m venv .venv && .venv\Scripts\activate     # Windows（Linux: source .venv/bin/activate）
 pip install -r requirements.txt -r requirements-dev.txt
-copy config.toml.example config.toml               # Linux: cp
+copy config.toml.example data\config.toml        # Linux: cp config.toml.example data/config.toml
 
 cd frontend && npm install && cd ..
 ```
@@ -60,7 +60,7 @@ scripts/       启动脚本（start-all / start-backend / start-frontend，Windo
 * **文档就近**：模块 docstring 只留一句话定位 + 指回文档；设计取舍（为什么这么做）写在 `docs/<模块>/`。新增 / 重命名 / 删除文件时同步更新对应的索引文档。
 * **日志**：用各模块的接入点（`workflow_logger()` / `cache_logger()` …），**不要**直接 `default_core()`；日志实例**用到才取**，不要在模块级取（会把进程默认核心按默认参数定死）。
 * **异常口径**：业务失败（算不出、取不到、对方回错）抛 `NodeFailure`，只停当前分支；环境问题（没接线、缺依赖）抛普通异常并留堆栈；连不上 / 超时这类**可预期的环境问题**抛 `EnvironmentFailure`（日志只记一行）。细节见 [`docs/workflow/workflow.md`](../docs/workflow/workflow.md) 第 5.5 节。
-* **配置**：只有根目录 `config.py` / `app.py` 读 `config.toml`，包内一律由上层把选项传进来（`from_mapping` / 构造参数）—— 包内不 import `config`。
+* **配置**：只有根目录 `config.py` / `app.py` 读 `data/config.toml`（模板 `config.toml.example`），包内一律由上层把选项传进来（`from_mapping` / 构造参数）—— 包内不 import `config`。
 * 文案、注释、文档用中文，术语与现有文档保持一致（「归属」「运行开关」「发布 ≠ 运行」这类词已经有确定含义）。
 
 ## 4. 测试
