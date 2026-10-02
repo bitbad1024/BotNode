@@ -1,16 +1,25 @@
 """配置：读 TOML、用 pydantic 校验取值，产出一份 :class:`Settings`。
 
-配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成 ``config.toml``
-才生效（后者已进 ``.gitignore`` 不入库）。容错口径是「能跑就跑」：文件 / 某节 / 某项没写都按
-字段默认值补齐，只有**值写错**才抛 :class:`ConfigError`（报错带完整出处，如
-``logging.database.port``）；已经废弃的键直接报错并指路，不静默忽略。
+配置文件是 TOML（用 ``#`` 写注释），模板见 ``config.toml.example``，复制成
+``data/config.toml`` 才生效（后者已进 ``.gitignore`` 不入库）。容错口径是「能跑就跑」：文件 /
+某节 / 某项没写都按字段默认值补齐，只有**值写错**才抛 :class:`ConfigError`（报错带完整出处，
+如 ``logging.database.port``）；已经废弃的键直接报错并指路，不静默忽略。
+
+**配置为什么住 ``data/`` 而不是仓库根**：
+
+* 配置本就是**运行时数据**，跟 sqlite（``data/botnode.db``）、Kook 密钥、上传的头像同处一地
+  —— 备份 / 搬迁 / 容器挂载都只搬 ``data/`` 一个目录，不会漏掉某一项；
+* Docker 里 ``data/`` 是**按目录挂**的，容器才写得进去，于是「首次启动照模板生成一份配置」
+  才有可能。挂单个文件时宿主上那份不存在，Docker 会先建一个**同名目录**，容器也写不进去
+  （``data/`` 是目录，Docker 建目录正好是我们要的）；
+* 仓库根目录只留代码入口与模板，运行时数据一份都不散在根里。
 
 用法::
 
     from config import ConfigError, Settings
 
     try:
-        settings = Settings.load("config.toml")
+        settings = Settings.load()  # 默认读 data/config.toml
     except ConfigError as exc:
         ...  # 报给用户，别拿默认值糊过去
 
@@ -41,8 +50,8 @@ from botnode.core.logger import LogLevel
 
 #: 项目根目录：配置、日志、数据库文件的相对路径都相对它解析
 BASE_DIR: Path = Path(__file__).resolve().parent
-#: 默认配置文件（不入库）
-CONFIG_PATH: Path = BASE_DIR / "config.toml"
+#: 默认配置文件（不入库）：跟数据住一起，理由见模块文档
+CONFIG_PATH: Path = BASE_DIR / "data" / "config.toml"
 #: 配置模板（入库）
 TEMPLATE_PATH: Path = BASE_DIR / "config.toml.example"
 #: Kook 凭证加密密钥的落盘位置：``[kook].secret_key`` 留空时自动生成/读取这里

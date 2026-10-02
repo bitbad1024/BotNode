@@ -26,9 +26,10 @@ venv/
 /examples/logs/
 
 #运行期数据（默认头像目录 [api] avatar_dir = data/avatars 落这儿）
+#本地生效的配置也在这儿：data/config.toml（只入库模板 config.toml.example）
 /data/
 
-#配置（本地生效的 config.toml 不入库，只入库模板 config.toml.example）
+#兜底：散落在根目录的配置也别入库
 /config.toml
 
 #前端
