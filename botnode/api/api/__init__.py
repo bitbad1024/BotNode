@@ -8,6 +8,7 @@
     profile/  个人设置入口：``<prefix>/profile``（改昵称 / 头像）
     onebot/   OneBot 管理入口：``<prefix>/onebot/clients``、``<prefix>/onebot/tokens``（兼容面）
     bots/     机器人管理入口：``<prefix>/bots``（跨平台增 / 启停 / 删）
+    owners/   归属清单入口：``GET <prefix>/owners``（按归属筛选时的下拉选项）
     log/      运行日志入口：``GET <prefix>/logs``
     workflow/ 工作流入口：``<prefix>/workflows``（定义 / 版本 / 发布 / 入库前校验）
 
@@ -20,6 +21,7 @@ from .auth.router import router as auth_router
 from .bots.router import router as bots_router
 from .log.router import router as log_router
 from .onebot.router import router as onebot_router
+from .owners.router import router as owners_router
 from .profile.router import router as profile_router
 from .workflow import router as workflow_router
 
@@ -28,6 +30,7 @@ __all__ = [
     "bots_router",
     "log_router",
     "onebot_router",
+    "owners_router",
     "profile_router",
     "workflow_router",
 ]

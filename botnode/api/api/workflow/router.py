@@ -40,7 +40,9 @@ from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode, HttpStatus
 from ...common.models import ApiResponse
 from ...logging import api_logger
+from ..onebot.dependencies import get_user_store
 from botnode.workflow import (
+    WorkflowDefinitionRecord,
     WorkflowNameConflict,
     apply_config_defaults,
     canonical_draft_json,
@@ -76,6 +78,34 @@ from .responses import (
 )
 
 router = APIRouter(prefix="/workflows", tags=["工作流"])
+
+
+async def _owner_names(request: Request) -> dict[str, str]:
+    """这次请求要用的「归属 id -> 昵称」映射。
+
+    归属的数量就是用户数（通常个位数），一次查齐比按 id 逐个反查省事；存储从
+    ``request.app.state`` 取（:func:`~botnode.api.api.onebot.dependencies.get_user_store`），
+    所以路由函数的签名不用为它多接一个参数。
+    """
+    users = get_user_store(request)
+    return {record.id: record.nickname for record in await users.list_all()}
+
+
+async def _data_of(request: Request, record: WorkflowDefinitionRecord) -> WorkflowData:
+    """一条记录 -> 响应，顺带填上归属昵称（管理员看的是全库，列表 / 详情都靠它认人）。"""
+    names = await _owner_names(request)
+    return WorkflowData.from_record(record, owner_name=names.get(record.owner_id, ""))
+
+
+async def _data_of_many(
+    request: Request, records: list[WorkflowDefinitionRecord]
+) -> list[WorkflowData]:
+    """一批记录 -> 响应（列表用；昵称一次查齐，不 N+1）。"""
+    names = await _owner_names(request)
+    return [
+        WorkflowData.from_record(item, owner_name=names.get(item.owner_id, ""))
+        for item in records
+    ]
 
 
 def _audit(message: str, *, owner_id: str, **extra: object) -> None:
@@ -141,7 +171,7 @@ async def create_workflow(
         name=record.name,
         trace_id=trace_id_of(request),
     )
-    return ApiResponse(data=WorkflowData.from_record(record), trace_id=trace_id_of(request))
+    return ApiResponse(data=await _data_of(request, record), trace_id=trace_id_of(request))
 
 
 @router.get("")
@@ -158,7 +188,7 @@ async def list_workflows(
         owner_id=owner_filter_of(user, owner_id), limit=limit, offset=offset
     )
     return ApiResponse(
-        data=[WorkflowData.from_record(item) for item in records],
+        data=await _data_of_many(request, records),
         trace_id=trace_id_of(request),
     )
 
@@ -172,7 +202,7 @@ async def get_workflow(
 ) -> ApiResponse[WorkflowData]:
     """定义详情；不存在 / 是别人的统一 404。"""
     record = await get_in_scope(store, user, workflow_id)
-    return ApiResponse(data=WorkflowData.from_record(record), trace_id=trace_id_of(request))
+    return ApiResponse(data=await _data_of(request, record), trace_id=trace_id_of(request))
 
 
 @router.patch("/{workflow_id}")
@@ -200,7 +230,7 @@ async def rename_workflow(
         name=payload.name,
         trace_id=trace_id_of(request),
     )
-    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id_of(request))
+    return ApiResponse(data=await _data_of(request, updated), trace_id=trace_id_of(request))
 
 
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -269,7 +299,7 @@ async def save_draft(
         workflow_id=record.id,
         trace_id=trace_id,
     )
-    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id)
+    return ApiResponse(data=await _data_of(request, updated), trace_id=trace_id)
 
 
 @router.get("/{workflow_id}/draft")
@@ -344,7 +374,7 @@ async def save_version(
         trace_id=trace_id,
     )
     result = SaveVersionResultData(
-        workflow=WorkflowData.from_record(latest),
+        workflow=await _data_of(request, latest),
         version=WorkflowVersionData.from_record(version),
         created=created,
     )
@@ -445,7 +475,7 @@ async def publish_workflow(
         enabled=published.enabled,
         trace_id=trace_id_of(request),
     )
-    return ApiResponse(data=WorkflowData.from_record(published), trace_id=trace_id_of(request))
+    return ApiResponse(data=await _data_of(request, published), trace_id=trace_id_of(request))
 
 
 @router.put("/{workflow_id}/enabled")
@@ -493,7 +523,7 @@ async def set_workflow_enabled(
         version=updated.published_version,
         trace_id=trace_id_of(request),
     )
-    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id_of(request))
+    return ApiResponse(data=await _data_of(request, updated), trace_id=trace_id_of(request))
 
 
 @router.put("/{workflow_id}/settings")
@@ -527,12 +557,13 @@ async def update_workflow_settings(
         multi_instance=updated.multi_instance,
         trace_id=trace_id_of(request),
     )
-    return ApiResponse(data=WorkflowData.from_record(updated), trace_id=trace_id_of(request))
+    return ApiResponse(data=await _data_of(request, updated), trace_id=trace_id_of(request))
 
 
 @router.get("/{workflow_id}/published")
 async def get_published_workflow(
     workflow_id: str,
+    request: Request,
     store: WorkflowStoreDep,
     user: CurrentUserDep,
 ) -> ApiResponse[PublishedWorkflowData]:
@@ -555,7 +586,7 @@ async def get_published_workflow(
         )
     return ApiResponse(
         data=PublishedWorkflowData(
-            workflow=WorkflowData.from_record(record),
+            workflow=await _data_of(request, record),
             version=WorkflowVersionData.from_record(snapshot),
         )
     )

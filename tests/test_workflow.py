@@ -3286,6 +3286,74 @@ async def test_api_trace_id_is_filled_in_every_workflow_response() -> None:
         assert checked.json()["trace_id"] == checked.headers["X-Trace-Id"]
 
 
+async def test_api_owners_lists_everyone_for_admin_and_self_for_user() -> None:
+    """``GET /owners``：给「按归属筛选」提供选项 —— 管理员拿全量，普通用户只有自己。
+
+    昵称一起回来（下拉直接显示显示名，前端不必再查人）；没登录一律 401。
+    """
+    async with api_client(api_app()) as client:
+        assert (await client.get("/api/owners")).status_code == 401  # 不往外说有哪些人
+
+        admin = await login(client, ADMIN)
+        registered = await client.post(
+            "/api/auth/register",
+            json={"account": "worker", "password": "botnode-worker", "nickname": "干活的"},
+        )
+        assert registered.status_code == 201, registered.text
+        worker_id = registered.json()["data"]["id"]
+
+        owners = (await client.get("/api/owners", headers=auth(admin))).json()["data"]
+        by_id = {item["owner_id"]: item for item in owners}
+        assert by_id[worker_id]["nickname"] == "干活的"  # 昵称跟着回来
+        assert "u-admin" in by_id  # 管理员自己也在清单里
+
+        worker = await login(client, {"account": "worker", "password": "botnode-worker"})
+        mine = (await client.get("/api/owners", headers=auth(worker))).json()["data"]
+        assert [item["owner_id"] for item in mine] == [worker_id]  # 只看得见自己
+
+
+async def test_api_workflow_list_carries_owner_name_and_filters_by_owner() -> None:
+    """工作流列表：每条带**归属昵称**；管理员 ``?owner_id=`` 可缩到某个归属。
+
+    管理员看的是全库，两条流分属不同人时光有名字分不清是谁的 —— 归属昵称与归属筛选补的
+    就是这一块。普通用户传了 ``owner_id`` 也不生效：隔离始终在服务端按登录身份把关。
+    """
+    async with api_client(api_app()) as client:
+        admin = await login(client, ADMIN)
+        registered = await client.post(
+            "/api/auth/register",
+            json={"account": "worker", "password": "botnode-worker", "nickname": "干活的"},
+        )
+        worker_id = registered.json()["data"]["id"]
+        worker = await login(client, {"account": "worker", "password": "botnode-worker"})
+
+        await client.post("/api/workflows", headers=auth(admin), json={"name": "管理员的流"})
+        await client.post("/api/workflows", headers=auth(worker), json={"name": "干活的流"})
+
+        # 管理员默认看全部：两条都在，各自带归属昵称
+        everything = (await client.get("/api/workflows", headers=auth(admin))).json()["data"]
+        assert {item["name"] for item in everything} == {"管理员的流", "干活的流"}
+        names = {item["owner_id"]: item["owner_name"] for item in everything}
+        assert names[worker_id] == "干活的"
+        assert names["u-admin"]  # 昵称非空（演示账号有昵称）
+
+        # 按归属筛：只剩那个人的流
+        only_worker = (
+            await client.get(
+                "/api/workflows", headers=auth(admin), params={"owner_id": worker_id}
+            )
+        ).json()["data"]
+        assert [item["name"] for item in only_worker] == ["干活的流"]
+
+        # 普通用户带别人的归属也不生效：仍然只看得见自己的
+        visible = (
+            await client.get(
+                "/api/workflows", headers=auth(worker), params={"owner_id": "u-admin"}
+            )
+        ).json()["data"]
+        assert [item["name"] for item in visible] == ["干活的流"]
+
+
 async def test_api_delete_workflow_stops_its_scheduled_tasks() -> None:
     """删工作流要**先把定时触发摘掉**：只删库的话任务还在调度器里，到点空跑一趟。
 

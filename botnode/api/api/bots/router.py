@@ -15,7 +15,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 
 from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode
@@ -25,6 +25,7 @@ from ..onebot.dependencies import (
     UserStoreDep,
     is_admin,
     may_touch,
+    owner_filter_of,
 )
 from ..onebot.protocols import TokenLike
 from .dependencies import BotsDep
@@ -81,10 +82,14 @@ async def list_bots(
     user: CurrentUserDep,
     service: BotsDep,
     users: UserStoreDep,
+    owner_id: str | None = Query(default=None, max_length=64),
 ) -> ApiResponse[list[BotData]]:
-    """机器人列表（**只有记录，明文拿不回来**）：非管理员只看得到自己那条。"""
+    """机器人列表（**只有记录，明文拿不回来**）：非管理员只看得到自己那条。
+
+    管理员默认看全部，``?owner_id=`` 可缩到某个归属（与工作流列表同一套口径）。
+    """
     trace_id: str = trace_id_of(request)
-    records = await service.list_records(owner_id=None if is_admin(user) else user.user.id)
+    records = await service.list_records(owner_id=owner_filter_of(user, owner_id))
     names = await _nicknames_of(users, [record.owner_id for record in records])
     data: list[BotData] = []
     for record in records:

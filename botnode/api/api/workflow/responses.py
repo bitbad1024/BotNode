@@ -154,6 +154,8 @@ class WorkflowData(_Frozen):
 
     id: str
     owner_id: str
+    #: 归属那个 id 在用户表里的昵称（查不到就是空串）—— 管理员看的是全库，靠它认人
+    owner_name: str = Field(default="", description="归属的昵称（空串 = 查不到 / 没设过）")
     name: str
     status: str
     current_version: int
@@ -170,10 +172,14 @@ class WorkflowData(_Frozen):
     updated_at: float
 
     @classmethod
-    def from_record(cls, record: WorkflowDefinitionRecord) -> WorkflowData:
+    def from_record(
+        cls, record: WorkflowDefinitionRecord, *, owner_name: str = ""
+    ) -> WorkflowData:
+        """记录 -> 响应；``owner_name`` 由调用方查好传进来（本层不碰用户表）。"""
         return cls(
             id=record.id,
             owner_id=record.owner_id,
+            owner_name=owner_name,
             name=record.name,
             status=record.status,
             current_version=record.current_version,
