@@ -1,19 +1,11 @@
 """bridge（平台总线）的日志接入点。
 
 接的是 ``nacho.core.logger`` 那套进程门面，用名字 ``bridge``（相对核心 ``nacho`` ->
-``nacho.bridge``）:::
-
-    from nacho.platforms.bridge import bridge_logger
-
-    bridge_logger().info("网关已就绪")
-
-**业务模块一律不直接 ``default_core()``** —— 要日志实例就调 :func:`bridge_logger`；
-装配层建完核心后，也可把实例通过构造参数（``logger=``）传入各适配器 / 网关，
-由模块自己的 ``_log()`` 方法取用。
-
-核心由装配层经 :func:`set_core` 存进本模块的槽位（组合根 ``nacho.bootstrap`` 或
-:func:`nacho.wiring.wire_loggers` 负责）。``import`` 本模块**零副作用** —— 没装配就调用
-:func:`bridge_logger` 会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
+``nacho.bridge``）：``bridge_logger().info("网关已就绪")``。**业务模块一律不直接
+``default_core()``** —— 要日志实例就调 :func:`bridge_logger`，装配层也可经 ``logger=``
+传给网关 / 各适配器。核心由装配层 :func:`set_core` 存进本模块槽位；``import`` 零副作用，
+没装配就调用会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。详见
+``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 

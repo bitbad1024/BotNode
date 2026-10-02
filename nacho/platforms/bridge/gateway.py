@@ -2,22 +2,10 @@
 
 它自己**不懂任何平台**——事件从适配器来（适配器翻译成
 :class:`~nacho.platforms.bridge.models.PlatformEvent` 后调 :meth:`Gateway.publish`），发送按
-``platform`` 路由给对应适配器。本模块只依赖 ``nacho.core``（logger）与同包的模型 /
-协议，满足「bridge 不 import 平台包」的依赖方向。
-
-装配形态（P2-5 的样子）::
-
-    gateway = Gateway()
-    adapter = OneBotAdapter(server, publish=gateway.publish)  # 投递口构造时交给适配器
-    gateway.register(adapter)
-    await gateway.start()          # -> adapter.start()
-
-订阅与异常口径（对齐 onebot 的 ``_emit``）：handler 抛出的异常**只记日志**，不淹总线、
-不影响其它订阅者 —— 事件分发是「尽力而为」，一条业务出错不该连累整条接入层。
-
-发送口径（对齐 onebot 节点）：**环境问题当场抛**。没注册这个平台是装配问题，
-:class:`ConnectionError` 带上当前已注册的平台列表，看得见、改得了；「发出去、对方答了
-不成功」才走 :class:`~nacho.platforms.bridge.models.ActionResult` 的 ``ok=False``。
+``platform`` 路由给对应适配器。两条口径：订阅者抛出的异常**只记日志**（事件分发是尽力
+而为）；发送**环境问题当场抛**（没注册这个平台是装配问题，``ConnectionError`` 带上已
+注册的平台列表），「发出去、对方答了不成功」才走 ``ActionResult`` 的 ``ok=False``。
+装配形态见 ``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 
