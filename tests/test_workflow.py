@@ -2103,29 +2103,52 @@ async def test_operator_takes_operands_from_wire_with_hand_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_operator_soft_fails_to_empty_string() -> None:
-    """算不出来不算事故（warning + 空串，不打断流程）：空值 / 非数字 / 除数为 0 / 运算符不合法。"""
+async def test_operator_failure_stops_propagation() -> None:
+    """算不出来 = **业务失败**（抛 NodeFailure，引擎停止向下传播）：空值 / 非数字 / 除数为 0 /
+    运算符不合法 —— 不再送空串，免得下游拿着「没算出来」的结果继续跑。"""
+    from nacho.workflow.nodes import NodeFailure
 
-    async def run(symbol: str, left: str, right: str) -> tuple[str, list[str]]:
+    async def failing(symbol: str, left: str, right: str) -> str:
         node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
         ctx_ = NodeExecutionContext()
         ctx_.inputs = {"left": left, "right": right}
-        result = await exec_operator(node_, ctx_)
-        return str(result["operator_result"]), ctx_.log
+        with pytest.raises(NodeFailure) as caught:
+            await exec_operator(node_, ctx_)
+        assert any("算不出来" in line for line in ctx_.log)  # 痕迹照留
+        return str(caught.value)
 
-    value, log = await run("+", "", "1")  # 左值空
-    assert value == "" and any("左值为空" in line for line in log)
+    assert "左值为空" in await failing("+", "", "1")
+    assert "不是数字" in await failing("*", "一会儿", "2")
+    assert "除数为 0" in await failing("/", "1", "0")
+    assert "除数为 0" in await failing("%", "1", "0")  # 取余同管
+    assert "不合法" in await failing("≈", "1", "2")  # 没走过校验的图：非法运算符也走这条
 
-    value, log = await run("*", "一会儿", "2")  # 非数字
-    assert value == "" and any("不是数字" in line for line in log)
 
-    value, log = await run("/", "1", "0")  # 除数为 0
-    assert value == "" and any("除数为 0" in line for line in log)
-    value, log = await run("%", "1", "0")  # 取余同管
-    assert value == "" and any("除数为 0" in line for line in log)
+@pytest.mark.asyncio
+async def test_operator_failure_in_graph_skips_downstream() -> None:
+    """图里跑：operator 算不出来时下游整段跳过（不是拿空串继续跑）。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("m", "operator", operator="+", left="当前时间为：", right="1"),
+                node("l", "log", message="手填兜底"),  # 内容入口接了 operator（算不出来）
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "m"),
+                edge("s", "l"),
+                edge("m", "l", "operator_result", "message"),
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不抛：业务失败只停自己这条线
 
-    value, log = await run("≈", "1", "2")  # 没走过校验的图：非法运算符也走这条
-    assert value == "" and any("不合法" in line for line in log)
+    assert any("[failed] m:" in line for line in ctx.log)
+    # log 的另一条活入边（start）还在，所以照常执行；内容入口没被失败节点顶掉
+    assert any("[INFO] l: 手填兜底" in line for line in ctx.log)
 
 
 def test_operator_symbol_is_validated() -> None:
