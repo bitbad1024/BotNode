@@ -16,6 +16,10 @@
 照常送 ``False`` 到下游，不抛。要「到点固定播报」就把 target 节点（手动填）接在
 send 前面。
 
+**内容为空也不发**：``message`` 是空串 / 纯空白时不发 —— ``send_ok`` 送 ``False`` 到
+下游。上游「算不出来」这类业务失败送下来的就是**空串**（``operator`` / ``json`` /
+``regex`` 同一口径），不拦就等于往平台上发一条空消息，平台多半回个参数错误。
+
 **两种失败是分开的**（与 ``http`` 节点同一口径）：
 
 * 环境 / 配置问题 —— 没接总线（``ctx.gateway`` 是 None）—— 当场抛出去，整条流程
@@ -80,6 +84,13 @@ async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
         raise ConnectionError(
             f"[send:{node.id}] 需要平台总线：装配时把 Gateway 交给工作流运行时（ctx.gateway）"
         )
+
+    if not message.strip():
+        # 内容为空（上游「算不出来」送的就是空串）：不发 —— 与「没有 target 就不发」同口径，
+        # 免得把上游的空值当内容真的发到平台上
+        ctx.logger.warning(f"[send:{node.id}] 消息内容为空，跳过发送", node_id=node.id)
+        ctx.log.append(f"[send] {node.id}: 内容为空，跳过")
+        return {"send_ok": False, "send_data": ""}
 
     response = await gateway.reply(target, message)
     ok = bool(response.ok)

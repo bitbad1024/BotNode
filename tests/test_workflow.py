@@ -1839,6 +1839,44 @@ async def test_send_without_target_skips_and_requires_gateway() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_empty_message_skips() -> None:
+    """内容为空（上游「算不出来」送的就是空串）：不发，send_ok=False 送下游，也不碰网关。"""
+    from nacho.workflow.nodes import exec_send
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="snd1", type="send")
+    target = gateway.make_target("onebot", chat="group", chat_id="1")
+
+    ctx_.inputs = {"target": target, "message": ""}  # 上游送了空串
+    result = await exec_send(node_, ctx_)
+    assert result == {"send_ok": False, "send_data": ""}
+    assert gateway.reply_calls == []  # 没往平台上发一条空消息
+    assert any("内容为空" in line for line in ctx_.log)
+
+    ctx_.inputs = {"target": target, "message": "   "}  # 纯空白同样跳过
+    await exec_send(node_, ctx_)
+    assert gateway.reply_calls == []
+
+
+@pytest.mark.asyncio
+async def test_onebot_empty_message_skips() -> None:
+    """onebot 别名同款：内容为空时不发，retcode 记 1（没发出去）、data 空串送下游。"""
+    from nacho.workflow.nodes import exec_onebot
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="ob1", type="onebot")
+    ctx_.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
+        "message": "",
+    }
+    result = await exec_onebot(node_, ctx_)
+    assert result == {"onebot_retcode": 1, "onebot_data": ""}
+    assert gateway.reply_calls == []
+
+
+@pytest.mark.asyncio
 async def test_send_failed_receipt_warns_but_flows_on() -> None:
     """对方收下但回执不成功（ok=False）：不抛，send_ok=False + send_data 送下游自己判断。"""
     from nacho.workflow.nodes import exec_send
