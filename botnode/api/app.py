@@ -73,7 +73,7 @@ def create_app(
     workflow_store: WorkflowStoreLike | None = None,
     workflow_triggers: WorkflowTriggerLike | None = None,
     avatar_store: AvatarStore | None = None,
-    title: str = "botnode",
+    title: str = "BotNode",
     version: str = __version__,
     logger: BaseLogger | None = None,
 ) -> FastAPI:
@@ -111,7 +111,7 @@ def create_app(
     log: BaseLogger = logger if logger is not None else api_logger(API_LOGGER_NAME)
     # 访问日志只进文件与控制台：落库那份是审计时间线（/logs 查的就是它），一次请求一条
     # 的访问流水进了库只会把「谁干了什么」淹掉 —— 这份静音已内建在 api_logger 里，见
-    # botnode.api.logging，这里不需要再做任何事。
+    # botnode.api.logging（日志接入点：模块名仍是小写包名），这里不需要再做任何事。
     chosen_hasher: PasswordHasher = hasher if hasher is not None else Pbkdf2PasswordHasher()
 
     # 用户 / 会话都只保留落库实现（见各自 store_sql），所以都得有一块库：优先显式传的 ``db``，
@@ -192,7 +192,7 @@ def create_app(
     app = FastAPI(
         title=title,
         version=version,
-        description="botnode 接口层：登录等对外接口（数据协议见各接口的 Schema）。",
+        description="BotNode 接口层：登录等对外接口（数据协议见各接口的 Schema）。",
         lifespan=lifespan,
     )
     # 中间件后加的先执行：访问日志在外层，能兜住里面抛出来的异常
