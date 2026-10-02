@@ -11,25 +11,25 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("sqlmodel", reason="落库会话要装 sqlmodel：pip install \"nacho[api]\"")
-pytest.importorskip("aiosqlite", reason="sqlite 异步驱动要装 aiosqlite：pip install \"nacho[api]\"")
+pytest.importorskip("sqlmodel", reason="落库会话要装 sqlmodel：pip install \"botnode[api]\"")
+pytest.importorskip("aiosqlite", reason="sqlite 异步驱动要装 aiosqlite：pip install \"botnode[api]\"")
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
-from nacho.api import (  # noqa: E402
+from botnode.api import (  # noqa: E402
     ClientInfo,
     SessionService,
     SqlSessionStore,
     TokenHashCollisionError,
     describe_client,
 )
-from nacho.api.common.errors import UnauthorizedError  # noqa: E402
-from nacho.api.services.session.tokens import (  # noqa: E402
+from botnode.api.common.errors import UnauthorizedError  # noqa: E402
+from botnode.api.services.session.tokens import (  # noqa: E402
     TOKEN_PREFIX,
     TokenIndex,
     hash_token,
 )
-from nacho.core.cache import Cache  # noqa: E402
+from botnode.core.cache import Cache  # noqa: E402
 
 #: 几个真实形状的 UA（截取了有辨识度的部分）
 UA_CHROME_MAC: str = (
@@ -174,7 +174,7 @@ class TestOpenAndAuthenticate:
     async def test_unknown_token_is_rejected(self, cache: Cache) -> None:
         service = await make_service(cache)
         with pytest.raises(UnauthorizedError):
-            await service.authenticate("nacho_随便编的")
+            await service.authenticate("botnode_随便编的")
 
     async def test_empty_token_is_rejected(self, cache: Cache) -> None:
         service = await make_service(cache)
@@ -247,7 +247,7 @@ class TestReuse:
 
     async def test_reuse_refuses_unknown_or_empty_token(self, cache: Cache) -> None:
         service = await make_service(cache)
-        assert await service.reuse("nacho_没有这条", user_id="u-0001") is None
+        assert await service.reuse("botnode_没有这条", user_id="u-0001") is None
         assert await service.reuse("", user_id="u-0001") is None
 
     async def test_reuse_refuses_when_the_record_is_gone(
@@ -347,7 +347,7 @@ class TestRevoke:
 
     async def test_revoke_missing_session_is_false(self, cache: Cache) -> None:
         service = await make_service(cache)
-        assert await service.revoke(hash_token("nacho_没有这条"), user_id="u-0001") is False
+        assert await service.revoke(hash_token("botnode_没有这条"), user_id="u-0001") is False
 
     async def test_revoke_all_logs_everything_out(
         self, cache: Cache, client: ClientInfo
@@ -381,7 +381,7 @@ class TestSqlSessionStore:
             await store.ensure_schema()
             await store.ensure_schema()  # 幂等
 
-            token_hash = hash_token("nacho_x")
+            token_hash = hash_token("botnode_x")
             row = await store.create(token_hash, "u-0001", client=client, remembered=True)
             assert row.token_hash == token_hash
             assert row.device_name == "Chrome · macOS"
@@ -401,7 +401,7 @@ class TestSqlSessionStore:
         try:
             store = SqlSessionStore(engine)
             await store.ensure_schema()
-            token_hash = hash_token("nacho_x")
+            token_hash = hash_token("botnode_x")
             await store.create(token_hash, "u-0001", client=client, remembered=False)
 
             updated = await store.set_remembered(token_hash, remembered=True)
@@ -409,7 +409,7 @@ class TestSqlSessionStore:
             assert updated.remembered is True
             assert (await store.get(token_hash)) == updated  # 落库了，不只是返回值的花样
 
-            assert await store.set_remembered(hash_token("nacho_没有这条"), remembered=True) is None
+            assert await store.set_remembered(hash_token("botnode_没有这条"), remembered=True) is None
         finally:
             await engine.dispose()
 
@@ -472,7 +472,7 @@ class TestTokenHashCollision:
         try:
             store = SqlSessionStore(engine)
             await store.ensure_schema()
-            token_hash = hash_token("nacho_x")
+            token_hash = hash_token("botnode_x")
             first = await store.create(token_hash, "u-0001", client=client, remembered=False)
 
             with pytest.raises(TokenHashCollisionError):

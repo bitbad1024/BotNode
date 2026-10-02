@@ -1,7 +1,7 @@
 """``SqlUserStore``（SQLModel 落库）的测试：建表、种数据、查询、唯一性，以及接入 ``create_app`` 后的登录链路。
 
 跑在临时 sqlite 文件 + ``aiosqlite`` 上（文件由 ``tmp_path`` 管，用完即删）；需要 ``sqlmodel`` /
-``aiosqlite``（``pip install "nacho[api]"``），没装就整文件跳过。
+``aiosqlite``（``pip install "botnode[api]"``），没装就整文件跳过。
 """
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("sqlmodel", reason="落库存储要装 sqlmodel：pip install \"nacho[api]\"")
-pytest.importorskip("aiosqlite", reason="sqlite 异步驱动要装 aiosqlite：pip install \"nacho[api]\"")
-pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"nacho[api]\"")
-pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"nacho[dev]\"")
+pytest.importorskip("sqlmodel", reason="落库存储要装 sqlmodel：pip install \"botnode[api]\"")
+pytest.importorskip("aiosqlite", reason="sqlite 异步驱动要装 aiosqlite：pip install \"botnode[api]\"")
+pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"botnode[api]\"")
+pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"botnode[dev]\"")
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E40
 from sqlmodel import select  # noqa: E402
 from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from nacho.api import (  # noqa: E402
+from botnode.api import (  # noqa: E402
     AccountAlreadyExistsError,
     ApiOptions,
     ApiResponse,
@@ -31,10 +31,10 @@ from nacho.api import (  # noqa: E402
     Pbkdf2PasswordHasher,
     create_app,
 )
-from nacho.api.services.user.store_sql import SqlUserStore, UserTable  # noqa: E402
+from botnode.api.services.user.store_sql import SqlUserStore, UserTable  # noqa: E402
 
-#: 演示账号（见 nacho.api.services.user.demo.DEMO_USERS）
-ADMIN = {"account": "admin", "password": "nacho-admin"}
+#: 演示账号（见 botnode.api.services.user.demo.DEMO_USERS）
+ADMIN = {"account": "admin", "password": "botnode-admin"}
 #: 测试用的哈希迭代次数。默认 20 万次是生产该有的值，但登录断言与迭代次数无关
 #: （哈希串自带参数），降到 1000 次省掉每个用例重复付的那笔钱。
 TEST_ITERATIONS: int = 1_000
@@ -260,7 +260,7 @@ async def test_create_app_with_db_serves_login(tmp_path: Path) -> None:
                 assert me.status_code == 200
 
                 denied = await client.post(
-                    "/api/auth/login", json={"account": "guest", "password": "nacho-guest"}
+                    "/api/auth/login", json={"account": "guest", "password": "botnode-guest"}
                 )
                 assert denied.status_code == 403  # 停用账号
     finally:

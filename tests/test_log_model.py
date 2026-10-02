@@ -1,4 +1,4 @@
-"""``nacho/core/logger/models.py`` 单元测试。
+"""``botnode/core/logger/models.py`` 单元测试。
 对应提交 ``8a3aa12 feat(logger): 新增日志数据模型 LogLevel 与 LogRecord``，
 并覆盖其后对 ``LogLevel.parse`` 签名、``Any`` 清理等调整后的行为。
 """
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from nacho.core.logger.models import LogLevel, LogRecord, normalize_timestamp
+from botnode.core.logger.models import LogLevel, LogRecord, normalize_timestamp
 
 #: ``2020-01-01T00:00:00Z`` 对应的 Unix 时间戳，多个用例共用
 EPOCH_2020 = 1577836800.0
@@ -175,7 +175,7 @@ class TestLogRecordFromDict:
         record = LogRecord(
             message="机器人执行失败",
             level=LogLevel.ERROR,
-            logger_name="nacho.robot",
+            logger_name="botnode.robot",
             timestamp=EPOCH_2020,
             extra={"robot_id": "r-001"},
             exc_text="Traceback ...",
@@ -235,7 +235,7 @@ class TestLogRecordMatches:
         return LogRecord(
             message="机器人执行第 1 步",
             level=LogLevel.INFO,
-            logger_name="nacho.robot",
+            logger_name="botnode.robot",
             timestamp=EPOCH_2020,
             extra={"robot_id": "r-001"},
         )
@@ -249,8 +249,8 @@ class TestLogRecordMatches:
         assert not record.matches(level="WARNING")
 
     def test_logger_name_must_equal(self, record: LogRecord) -> None:
-        assert record.matches(logger_name="nacho.robot")
-        assert not record.matches(logger_name="nacho.api")
+        assert record.matches(logger_name="botnode.robot")
+        assert not record.matches(logger_name="botnode.api")
 
     def test_owner_is_filtered_exactly_when_given(self, record: LogRecord) -> None:
         """``owner_id=None`` 不限所有者；给了值就精确匹配——空串就是「只要公共的」。"""

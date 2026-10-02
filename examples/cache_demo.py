@@ -7,10 +7,10 @@
 跑完约 1 分钟（本机起了 Redis 时约 15 秒）—— 大头在第 7 段：连接被拒之后驱动还会重试，
 每次要等二十几秒。最后一段「真连 Redis」可选，先探一下端口，没人听就直接跳过。
 
-缓存层对外只有一个门面 :class:`~nacho.core.cache.core.Cache`：业务代码只写 ``get`` /
+缓存层对外只有一个门面 :class:`~botnode.core.cache.core.Cache`：业务代码只写 ``get`` /
 ``set`` / ``list_push`` / ``hash_set`` 这一套，背后是 Redis 还是进程内存由 ``backend``
 决定 —— 两边语义对齐（键是 ``str``，值是字符串 / 列表 / 哈希三种结构之一、TTL 按秒），
-换后端不用改业务代码。``nacho.core.cache`` 里的 ``cache`` 就是 ``Cache()`` 的进程级单例
+换后端不用改业务代码。``botnode.core.cache`` 里的 ``cache`` 就是 ``Cache()`` 的进程级单例
 （和 ``app.py`` 里用的是同一个）。
 
 按顺序演示这几件事：
@@ -46,15 +46,15 @@ from typing import cast
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import Settings  # noqa: E402
-from nacho.core.cache import (  # noqa: E402
+from botnode.core.cache import (  # noqa: E402
     Cache,
     CacheError,
     CacheOptions,
     RedisOptions,
     cache,
 )
-from nacho.core.logger import BaseLogger, LogCore, configure, default_core  # noqa: E402
-from nacho.core.logger import manager as log_manager  # noqa: E402
+from botnode.core.logger import BaseLogger, LogCore, configure, default_core  # noqa: E402
+from botnode.core.logger import manager as log_manager  # noqa: E402
 
 #: 业务日志实例：main 里先 configure() 建进程默认核心，再取它
 log: BaseLogger
@@ -109,7 +109,7 @@ async def main() -> None:
     enable_line_buffering()
     # 先建进程默认核心再取日志实例：缓存层自己记的 warning（比如 Redis 连不上而退回内存）
     # 也进这个核心，所以它的提示和业务日志会出现在同一个控制台上
-    core: LogCore = configure("nacho", console_color=True, dispatch_timeout=0.05)
+    core: LogCore = configure("botnode", console_color=True, dispatch_timeout=0.05)
     await core.start()
     log = default_core().child("demo.cache")
 
@@ -261,13 +261,13 @@ async def main() -> None:
         print("\n=== 8. 真连 Redis（可选）：本机有服务就真跑一遍 ===")
         if not can_connect("127.0.0.1", 6379):
             print("  6379 上没人听（本机没起 Redis），这一段跳过 —— 探端口几百毫秒就出结果，")
-            print("  比让驱动去试连再等重试快得多。想真跑：pip install \"nacho[redis]\" 装驱动，")
+            print("  比让驱动去试连再等重试快得多。想真跑：pip install \"botnode[redis]\" 装驱动，")
             print("  起个 redis-server（或 docker run -p 6379:6379 redis）再运行本示例。")
         else:
             live = Cache(
                 CacheOptions(
                     backend="redis",
-                    namespace="nacho-demo",
+                    namespace="botnode-demo",
                     redis=RedisOptions(socket_timeout=1.0),
                 )
             )
@@ -282,7 +282,7 @@ async def main() -> None:
                 other = Cache(
                     CacheOptions(
                         backend="redis",
-                        namespace="nacho-demo-other",
+                        namespace="botnode-demo-other",
                         redis=RedisOptions(socket_timeout=1.0),
                     )
                 )
