@@ -17,6 +17,7 @@ import { fetchOwners, type Owner } from '../../lib/ownersApi'
 import { ApiRequestError } from '../../lib/http'
 import { useToast } from '../../common/Toast'
 import OwnerFilter, { ownerName } from '../../common/OwnerFilter'
+import { useAuth } from '../auth/authStore'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
 import { EmptyState } from '../../common/EmptyState'
 import { ListSkeleton } from '../../common/Skeleton'
@@ -51,6 +52,9 @@ function statusLabel(w: WorkflowData): { text: string; cls: string } {
 
 export default function WorkflowPage() {
   const { pushToast } = useToast()
+  const { state } = useAuth()
+  /** 自己的归属 id：新建出来的流永远归它（后端按登录用户落库，不认前端传的归属） */
+  const myId = state.user?.id ?? ''
 
   const [items, setItems] = useState<WorkflowData[]>([])
   const [loading, setLoading] = useState(true)
@@ -68,6 +72,9 @@ export default function WorkflowPage() {
   const [owners, setOwners] = useState<Owner[]>([])
   /** 筛选中的归属 id；空串 = 全部（下拉只在选项有两个以上时出现） */
   const [ownerFilter, setOwnerFilter] = useState('')
+
+  /** 能不能新建：只看「全部」或自己的归属 —— 切到别人的归属时建的还是自己名下的，别给这种错觉 */
+  const canCreate = ownerFilter === '' || ownerFilter === myId
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -172,10 +179,12 @@ export default function WorkflowPage() {
           </div>
           <div className={styles.panelActions}>
             <OwnerFilter owners={owners} value={ownerFilter} onChange={setOwnerFilter} />
-            <button className="btn btn-primary" onClick={() => setCreating(true)}>
-              <IconPlus size={15} />
-              新建
-            </button>
+            {canCreate && (
+              <button className="btn btn-primary" onClick={() => setCreating(true)}>
+                <IconPlus size={15} />
+                新建
+              </button>
+            )}
           </div>
         </div>
         {loading ? (
@@ -185,13 +194,19 @@ export default function WorkflowPage() {
         ) : items.length === 0 ? (
           <EmptyState
             icon={IconEdit}
-            title="还没有工作流"
-            hint="用节点 + 连线编排自动化流程：开始节点支持时间触发（cron）与消息触发，搭配日志 / 测试节点。"
+            title={canCreate ? '还没有工作流' : '这个归属下还没有工作流'}
+            hint={
+              canCreate
+                ? '用节点 + 连线编排自动化流程：开始节点支持时间触发（cron）与消息触发，搭配日志 / 测试节点。'
+                : '切回「全部」或自己的归属才能新建；别人名下的流只能查看与编辑。'
+            }
             action={
-              <button className="btn btn-primary" onClick={() => setCreating(true)}>
-                <IconPlus size={15} />
-                新建工作流
-              </button>
+              canCreate ? (
+                <button className="btn btn-primary" onClick={() => setCreating(true)}>
+                  <IconPlus size={15} />
+                  新建工作流
+                </button>
+              ) : undefined
             }
           />
         ) : (
