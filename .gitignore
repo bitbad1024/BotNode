@@ -41,3 +41,6 @@ frontend/*.tsbuildinfo
 frontend/.env.*.local
 
 .trae
+
+# playwright-cli 的工作目录（截图 / 快照 / 控制台日志这类诊断产物）
+.playwright-cli/
