@@ -8,6 +8,8 @@ BotNode 是一个可以自己部署的机器人框架。它在三件事上做了
 
 技术栈：后端 Python 3.12+（FastAPI / SQLModel），控制台 React + TypeScript。
 
+![](./docs/workflow.jpg)
+
 ## 启动
 
 ```bash
