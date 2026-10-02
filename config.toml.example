@@ -248,3 +248,5 @@ reconnect_max_interval = 60.0
 rest_min_interval = 0.2
 # REST 瞬时失败重试次数（429 / 5xx / 网络抖动）
 rest_max_retries = 3
+# REST 持久连接的空闲上限（秒）：超了主动重建（服务端会按空闲时间掐连接，不重建就得白试一次）
+rest_idle_timeout = 30.0

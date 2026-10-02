@@ -343,10 +343,22 @@ class KookClient:
         """发一次 HTTP 请求并解析 JSON 回应（同步，跑在 ``to_thread`` 里）。
 
         连接复用：同一 host 懒建一条持久连接（``self._rest_conn``），成功读完回应后留着
-        下一条复用；429 / 5xx / 连接错误都算瞬时失败，丢连接交给 :meth:`_rest` 重试。
+        下一条复用；空闲超过 ``rest_idle_timeout`` 就主动重建（服务端会按空闲时间掐连接，
+        等到请求时才撞上已关的连接就得白试一次）。429 / 5xx / 连接错误都算瞬时失败，
+        丢连接交给 :meth:`_rest` 重试。
         """
         parts = urlsplit(url)
         conn = self._rest_conn
+        if (
+            conn is not None
+            and time.monotonic() - self._last_rest > self._options.rest_idle_timeout
+        ):
+            # 连接空闲太久：服务端（或中间链路）多半已经把它掐了 —— 主动重建，别等到发
+            # 请求才撞上 "Remote end closed connection without response" 再白试一次
+            with suppress(Exception):
+                conn.close()
+            conn = None
+            self._rest_conn = None
         if conn is None:
             conn = http.client.HTTPSConnection(
                 parts.hostname or _DEFAULT_API_HOST,

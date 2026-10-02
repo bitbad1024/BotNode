@@ -118,6 +118,7 @@ def test_options_defaults_and_from_mapping() -> None:
     assert options.reconnect_max_interval == 60.0  # 官方：获取 gateway 那一步上限 60
     assert options.rest_min_interval == 0.2
     assert options.rest_max_retries == 3
+    assert options.rest_idle_timeout == 30.0
 
     options = KookOptions.from_mapping(
         {"gateway": "wss://x/y", "token": "abc", "heartbeat_interval": 10, "不认的键": 1}
@@ -345,6 +346,29 @@ async def test_client_rest_reuses_connection(monkeypatch: pytest.MonkeyPatch) ->
     await client.call("send_channel_msg", target_id="ch-1", content="a")
     await client.call("send_channel_msg", target_id="ch-1", content="b")
     assert created["n"] == 1  # 只建了一条连接
+
+
+async def test_client_rest_rebuilds_connection_after_idle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连接空闲超过 rest_idle_timeout：主动重建，不等请求时才撞上已关的连接白试一次。"""
+    client = KookClient(
+        KookOptions(token="abc", rest_min_interval=0.0, rest_idle_timeout=0.05)
+    )
+    created: dict[str, int] = {"n": 0}
+
+    def fake_conn(host: str, *, timeout: float) -> _FakeConnection:
+        created["n"] += 1
+        return _FakeConnection(
+            host,
+            timeout=timeout,
+            script=lambda n: (200, {"code": 0, "message": "success", "data": {"msg_id": "m"}}),
+        )
+
+    monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
+    await client.call("send_channel_msg", target_id="ch-1", content="a")
+    await asyncio.sleep(0.06)  # 空闲超过阈值
+    await client.call("send_channel_msg", target_id="ch-1", content="b")
+
+    assert created["n"] == 2  # 空闲超时 -> 重建（与上面「连着发就复用」互补）
 
 
 async def test_client_rest_retries_on_429(monkeypatch: pytest.MonkeyPatch) -> None:

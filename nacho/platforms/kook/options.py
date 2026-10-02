@@ -33,6 +33,8 @@ DEFAULT_RECONNECT_MAX_INTERVAL: float = 60.0
 DEFAULT_REST_MIN_INTERVAL: float = 0.2
 #: 默认 REST 瞬时失败重试次数（429 / 5xx / 网络抖动）
 DEFAULT_REST_MAX_RETRIES: int = 3
+#: 默认 REST 连接空闲上限（秒）：空闲超过它就主动重建（服务端会按空闲时间掐连接）
+DEFAULT_REST_IDLE_TIMEOUT: float = 30.0
 
 
 def _pick(data: Mapping[str, object], allowed: Iterable[str]) -> dict[str, object]:
@@ -69,6 +71,8 @@ class KookOptions:
     rest_min_interval: float = DEFAULT_REST_MIN_INTERVAL
     #: REST 瞬时失败重试次数（429 / 5xx / 网络抖动）
     rest_max_retries: int = DEFAULT_REST_MAX_RETRIES
+    #: REST 持久连接的空闲上限（秒）：超了主动重建，别等请求时才撞上已关的连接
+    rest_idle_timeout: float = DEFAULT_REST_IDLE_TIMEOUT
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> KookOptions:
@@ -97,5 +101,8 @@ class KookOptions:
             ),
             rest_max_retries=cast(
                 int, picked.get("rest_max_retries", DEFAULT_REST_MAX_RETRIES)
+            ),
+            rest_idle_timeout=cast(
+                float, picked.get("rest_idle_timeout", DEFAULT_REST_IDLE_TIMEOUT)
             ),
         )
