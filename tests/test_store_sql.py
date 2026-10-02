@@ -223,7 +223,8 @@ async def test_add_inserts_row_and_rejects_duplicate(tmp_path: Path) -> None:
         await store.ensure_schema()
         record = await store.add(account="newbie", password_hash="hash", nickname="新来的")
         assert (record.id, record.account, record.nickname) == ("u-newbie", "newbie", "新来的")
-        assert record.roles == () and record.disabled is False
+        # 新账号默认是**普通用户**（= USER_ROLE）：不再是空角色，别让它「谁也不是」
+        assert record.roles == ("user",) and record.disabled is False
         assert await store.get_by_account("newbie") == record  # 确实落库了，不只是内存里的对象
         rows = await rows_of(engine)  # 表里真的多了一行（不是只在会话里挂着）
         assert [(row.id, row.account, row.nickname) for row in rows] == [

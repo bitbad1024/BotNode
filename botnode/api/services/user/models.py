@@ -18,6 +18,11 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+#: 普通用户的角色名：**注册出来的账号都带它**（落库那份由 :meth:`UserStore.add` 的默认值保证）。
+#: 判断管理员另有 ``ADMIN_ROLE``（见 :func:`botnode.api.api.onebot.dependencies.is_admin`），
+#: 它只看 ``admin``，所以这里是「一般用户」的标记，不是权限开关。
+USER_ROLE: str = "user"
+
 
 @dataclass(frozen=True)
 class UserRecord:

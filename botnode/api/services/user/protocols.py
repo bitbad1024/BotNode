@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
-from .models import UserRecord
+from .models import USER_ROLE, UserRecord
 
 
 @runtime_checkable
@@ -50,11 +50,20 @@ class UserStore(Protocol):
         ...
 
     async def add(
-        self, *, account: str, password_hash: str, nickname: str = ""
+        self,
+        *,
+        account: str,
+        password_hash: str,
+        nickname: str = "",
+        roles: Iterable[str] = (USER_ROLE,),
     ) -> UserRecord:
         """新增一个账号（注册用），返回落库后的记录。
 
         ``password_hash`` 是**已经算好**的哈希（明文密码不进这一层）；``id`` 由实现自己生成。
+
+        ``roles`` 默认 :data:`~.models.USER_ROLE` —— 注册出来的是**普通用户**。别默认成空元组：
+        那样库里写下的就是 ``[]``，账号成了「什么也不是」，前端连角色标签都显示不出来，而它本该
+        与同类账号长得一样。要开管理员就在管理入口显式传。
 
         账号已被占用时抛
         :class:`~botnode.api.common.errors.AccountAlreadyExistsError`：实现要在写库时兜住唯一约束，
