@@ -1,0 +1,35 @@
+# 构建上下文里不要的东西（镜像里用不到，还会拖慢 docker build）
+
+# ---- 版本控制与本地虚拟环境 ----
+.git/
+.gitignore
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 前端本地依赖与旧产物（镜像里会重新 npm ci + build）----
+frontend/node_modules/
+frontend/dist/
+
+# ---- 打包脚本的产物 ----
+build/
+dist/
+
+# ---- 运行期数据：日志 / sqlite / 头像 ----
+logs/
+data/
+
+# ---- 本地配置（含数据库密码与 secret_key，绝不能进镜像）----
+config.toml
+
+# ---- 与运行无关：测试 / 文档 / 示例 ----
+tests/
+docs/
+examples/
+*.md
+TODO.md
