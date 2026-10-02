@@ -236,6 +236,8 @@ token = ""
 secret_key = ""
 # 心跳间隔（秒）：Kook 网关要求定期发心跳，超时会被断开
 heartbeat_interval = 30.0
+# 心跳抖动（秒）：实际间隔在 间隔±抖动 里随机（官方口径 30 秒 + rand(-5, +5)）
+heartbeat_jitter = 5.0
 # 发一个动作（REST）后等回应的超时（秒）
 action_timeout = 30.0
 # 断线后重连的间隔（秒）

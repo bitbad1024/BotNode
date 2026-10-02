@@ -471,6 +471,8 @@ class KookSettings(_Region):
     token: str = ""  # Bot Token（Kook 开放平台签发；留空 = 不接入）
     secret_key: str = ""  # Bot Token 落库加密的密钥（kook 凭证行加密用；留空则无法存 kook 凭证）
     heartbeat_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    #: 心跳抖动（秒）：官方口径 30 秒 + rand(-5, +5)，别让所有机器人同一时刻打心跳
+    heartbeat_jitter: float = Field(default=5.0, ge=0, description="不小于 0 的秒数")
     action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
     reconnect_interval: float = Field(default=3.0, gt=0, description="大于 0 的秒数")
     reconnect_max_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")

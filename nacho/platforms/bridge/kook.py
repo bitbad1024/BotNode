@@ -119,6 +119,7 @@ def _bot_options(template: KookOptions, token: str) -> KookOptions:
         token=token,
         secret_key="",
         heartbeat_interval=template.heartbeat_interval,
+        heartbeat_jitter=template.heartbeat_jitter,
         action_timeout=template.action_timeout,
         reconnect_interval=template.reconnect_interval,
         reconnect_max_interval=template.reconnect_max_interval,

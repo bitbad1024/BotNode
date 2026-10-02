@@ -21,6 +21,8 @@ DEFAULT_GATEWAY: str = ""
 DEFAULT_TOKEN: str = ""
 #: 默认心跳间隔（秒）：Kook 网关要求客户端定期发心跳，超时会被断开
 DEFAULT_HEARTBEAT_INTERVAL: float = 30.0
+#: 默认心跳抖动（秒）：官方口径是 30 秒 + rand(-5, +5)，别让所有客户端同一时刻打心跳
+DEFAULT_HEARTBEAT_JITTER: float = 5.0
 #: 默认动作超时（秒）：发出去的动作等这么久还没回应就算失败
 DEFAULT_ACTION_TIMEOUT: float = 30.0
 #: 默认断线重连间隔（秒）：连接断开后等这么久再重连
@@ -55,6 +57,8 @@ class KookOptions:
     secret_key: str = ""
     #: 心跳间隔（秒）
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL
+    #: 心跳抖动（秒）：实际间隔在 ``heartbeat_interval ± heartbeat_jitter`` 里随机
+    heartbeat_jitter: float = DEFAULT_HEARTBEAT_JITTER
     #: 单个动作等回应的超时（秒）
     action_timeout: float = DEFAULT_ACTION_TIMEOUT
     #: 断线后重连的间隔（秒）
@@ -77,6 +81,9 @@ class KookOptions:
             secret_key=cast(str, picked.get("secret_key", "")),
             heartbeat_interval=cast(
                 float, picked.get("heartbeat_interval", DEFAULT_HEARTBEAT_INTERVAL)
+            ),
+            heartbeat_jitter=cast(
+                float, picked.get("heartbeat_jitter", DEFAULT_HEARTBEAT_JITTER)
             ),
             action_timeout=cast(float, picked.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
             reconnect_interval=cast(

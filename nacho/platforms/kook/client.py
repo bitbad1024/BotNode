@@ -409,6 +409,16 @@ class KookClient:
             self._sn = 0
             self._gateway_url = ""
 
+    def _heartbeat_interval(self) -> float:
+        """下一轮心跳的间隔：官方是 30 秒 + rand(-5, +5) —— 别让所有客户端同一时刻打心跳。
+
+        抖动幅度取 ``min(heartbeat_jitter, interval / 2)``：配了很短的间隔（测试 / 特殊
+        场合）时不至于把间隔抖成负数或凭空放大。
+        """
+        interval = self._options.heartbeat_interval
+        jitter = min(self._options.heartbeat_jitter, interval / 2)
+        return max(0.01, interval + random.uniform(-jitter, jitter))
+
     async def _heartbeat(self) -> None:
         """定期发 signal 2（ping，带最近 sn）并等 pong。
 
@@ -416,9 +426,8 @@ class KookClient:
         只能靠这一条发现，所以超时要主动断开、交给 :meth:`_run_loop` 重连，而不是一直往
         一条死连接上发心跳。
         """
-        interval = self._options.heartbeat_interval
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(self._heartbeat_interval())
             ws = self._ws
             if ws is None:
                 continue

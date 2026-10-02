@@ -113,6 +113,7 @@ def test_options_defaults_and_from_mapping() -> None:
     options = KookOptions()
     assert options.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
     assert options.token == ""
+    assert options.heartbeat_jitter == 5.0  # 官方 30 秒 + rand(-5, +5)
     assert options.reconnect_max_interval == 30.0
     assert options.rest_min_interval == 0.2
     assert options.rest_max_retries == 3
@@ -549,6 +550,20 @@ async def test_reconnect_signal_without_connection_is_safe() -> None:
     await client._handle_raw(json.dumps({"s": 5, "d": {"code": 40107}}))  # noqa: SLF001
 
     assert client._session_id == "" and client._sn == 0  # noqa: SLF001
+
+
+def test_heartbeat_interval_jitters_within_official_window() -> None:
+    """心跳间隔带抖动（官方 30 ± 5）：抖动为 0 时精确，间隔很小时抖动同步收敛。"""
+    client = KookClient(KookOptions(heartbeat_interval=30.0, heartbeat_jitter=5.0))
+    samples = [client._heartbeat_interval() for _ in range(50)]  # noqa: SLF001
+    assert all(25.0 <= value <= 35.0 for value in samples)
+    assert len(set(samples)) > 1  # 真的抖了，不是固定值
+
+    fixed = KookClient(KookOptions(heartbeat_interval=30.0, heartbeat_jitter=0.0))
+    assert fixed._heartbeat_interval() == 30.0  # noqa: SLF001
+
+    short = KookClient(KookOptions(heartbeat_interval=0.1))  # 抖动收敛到 interval/2
+    assert 0.05 <= short._heartbeat_interval() <= 0.15  # noqa: SLF001
 
 
 async def test_pong_signal_releases_heartbeat() -> None:
