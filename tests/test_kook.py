@@ -156,7 +156,7 @@ def test_parse_event_and_action_response() -> None:
 def test_action_path_maps_actions() -> None:
     """动作名 -> REST 端点路径（能力表查出来的，不再兜底到 create）。"""
     assert _action_path("send_channel_msg") == "/message/create"
-    assert _action_path("send_dm_msg") == "/message/create"
+    assert _action_path("send_dm_msg") == "/direct-message/create"  # 私聊是另一套端点
     assert _action_path("delete_msg") == "/message/delete"
     with pytest.raises(ValueError, match="不在注册表"):
         _action_path("未知动作")  # 拼错动作名当场抛，不兜底
@@ -489,6 +489,93 @@ async def test_client_heartbeat_pings_latest_sn() -> None:
         await client.stop()
         server.close()
         await server.wait_closed()
+
+
+# --------------------------------------------------------------------------- 网关信令
+class _FakeWs:
+    """假的 WS 连接：记下发出去的报文与有没有被关（``closed_evt`` 让测试不用睡等）。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.closed_evt = asyncio.Event()
+        self.sent: list[str] = []
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(payload)
+
+    async def close(self) -> None:
+        self.closed = True
+        self.closed_evt.set()
+
+
+async def test_reconnect_signal_resets_resume_state_and_closes() -> None:
+    """signal 5（reconnect）：清 sn / session_id / 网关地址 + 清队列 + 主动断开。
+
+    官方口径：收到 reconnect 要重新获取 gateway、清空 sn 与消息队列，否则消息会错乱。
+    """
+    client = KookClient(KookOptions(token="abc"))
+    ws = _FakeWs()
+    client._ws = ws  # noqa: SLF001
+    client._session_id = "sess-1"  # noqa: SLF001
+    client._sn = 42  # noqa: SLF001
+    client._gateway_url = "wss://gw.example/?token=x"  # noqa: SLF001
+    await client._inbox.put(  # noqa: SLF001
+        KookEvent(
+            type=EVENT_TEXT,
+            channel_type="GROUP",
+            target_id="ch-1",
+            author_id="u-1",
+            content="hi",
+        )
+    )
+
+    await client._handle_raw(  # noqa: SLF001
+        json.dumps({"s": 5, "d": {"code": 41008, "err": "Missing params"}})
+    )
+
+    assert ws.closed is True  # 主动断开，让 _run_loop 重新走一遍（含重新获取网关）
+    assert client._session_id == ""  # noqa: SLF001
+    assert client._sn == 0  # noqa: SLF001
+    assert client._gateway_url == ""  # 下次重新 discover，不再拿失效地址续传  # noqa: SLF001
+    assert client._inbox.empty()  # 队列一并清掉  # noqa: SLF001
+
+
+async def test_reconnect_signal_without_connection_is_safe() -> None:
+    """没连着时收到 reconnect：只清状态，不炸。"""
+    client = KookClient(KookOptions(token="abc"))
+    client._session_id = "sess-1"  # noqa: SLF001
+    client._sn = 7  # noqa: SLF001
+
+    await client._handle_raw(json.dumps({"s": 5, "d": {"code": 40107}}))  # noqa: SLF001
+
+    assert client._session_id == "" and client._sn == 0  # noqa: SLF001
+
+
+async def test_pong_signal_releases_heartbeat() -> None:
+    """signal 3（pong）：放行正在等它的那条心跳腿。"""
+    client = KookClient(KookOptions(token="abc"))
+
+    await client._handle_raw(json.dumps({"s": 3}))  # noqa: SLF001
+
+    assert client._pong.is_set() is True  # noqa: SLF001
+
+
+async def test_heartbeat_closes_connection_when_pong_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """心跳发出后没等到 pong（官方 6 秒，测试里调短）：主动断开，交给重连循环。"""
+    monkeypatch.setattr("nacho.platforms.kook.client._PONG_TIMEOUT", 0.05)
+    client = KookClient(KookOptions(token="abc", heartbeat_interval=0.01))
+    ws = _FakeWs()
+    client._ws = ws  # noqa: SLF001
+    task = asyncio.create_task(client._heartbeat())  # noqa: SLF001
+    try:
+        await asyncio.wait_for(ws.closed_evt.wait(), timeout=2.0)
+    finally:
+        task.cancel()
+
+    assert ws.closed is True  # 不再往死连接上发心跳
+    assert json.loads(ws.sent[0]) == {"s": 2, "sn": 0}  # 先发了 ping（带最新 sn）
 
 
 async def test_client_resume_rejected_falls_back_to_fresh_connection() -> None:

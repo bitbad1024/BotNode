@@ -588,7 +588,8 @@ class KookAction:
 #: 动作注册表（能力表面）：动作名 -> 端点 + 参数契约
 KOOK_ACTIONS: dict[str, KookAction] = {
     "send_channel_msg": KookAction("send_channel_msg", "/message/create", ("target_id", "content")),
-    "send_dm_msg": KookAction("send_dm_msg", "/message/create", ("target_id", "content")),
+    # 私聊是另一套端点（官方 /api/v3/direct-message/create）：/message/create 只认频道号
+    "send_dm_msg": KookAction("send_dm_msg", "/direct-message/create", ("target_id", "content")),
     "delete_msg": KookAction("delete_msg", "/message/delete", ("msg_id",)),
 }
 
