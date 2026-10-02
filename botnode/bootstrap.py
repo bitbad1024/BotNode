@@ -59,7 +59,7 @@ _db_engine: AsyncEngine | None = None
 _gateway: Gateway | None = None
 #: OneBot 适配器（包着反向 WS 服务端）；主协程停在它的 serve_forever 上
 _onebot_adapter: OneBotAdapter | None = None
-#: Kook 适配器（包着正向 WS 客户端）；配了 [kook].secret_key 或 [kook].token 才建，否则 None
+#: Kook 适配器（包着正向 WS 客户端）；有 [kook].secret_key（留空时入口自动生成）才建
 _kook_adapter: KookAdapter | None = None
 #: 消息路由（trigger=message 工作流的登记处 / 消息分发处）；载入时一并登记
 _message_router: MessageRouter | None = None
@@ -181,8 +181,9 @@ async def run(
     :param api_host / api_port: 接口层监听地址 —— 这两个归入口管（``ApiOptions`` 里没有，它
         只管前缀与令牌有效期）；
     :param onebot: ``[onebot]`` 那块配置，交给 ``OneBotOptions.from_mapping``；
-    :param kook: ``[kook]`` 那块配置，交给 ``KookOptions.from_mapping``；``token`` 留空就
-        不接入 Kook（跳过建适配器）；
+    :param kook: ``[kook]`` 那块配置，交给 ``KookOptions.from_mapping``；``secret_key`` 为空
+        就不接入 Kook（跳过建适配器）—— 正常启动时入口会先把留空的密钥补上
+        （``data/secret_key``，见 ``config.load_or_create_secret_key``）；
     :param cache_config: ``[cache]`` 那块配置，交给 ``CacheOptions.from_mapping``。
     """
     global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter, _kook_adapter
@@ -215,20 +216,18 @@ async def run(
     # Kook 适配器（正向 WS 客户端，**多客户端**）：**一个**适配器管多个机器人
     # （dict[bot_id, client]），Gateway 里 Kook 只占一个 platform 槽位，之后经 /api/bots
     # 增删 Kook 机器人也不会撞「同平台重复注册」的限制。凭证行来自 bot_credentials
-    # （platform=kook 且启用），Bot Token 从 token_secret 解密出来逐个 ``add_bot``；
-    # [kook].token 配了且没入库（旧部署）则作为**兼容路径**追加一个合成机器人。
-    # secret_key 配了就算「接入了 Kook」，适配器照建（哪怕此刻一个机器人都没有）——
-    # 这样之后经接口新增 Kook 机器人能立刻拉起连接。
+    # （platform=kook 且启用），Bot Token 用 [kook].secret_key 从 token_secret 解密出来逐个
+    # ``add_bot``；网关地址由客户端连接前自己 discover（配置文件里不填）。
+    # 有 secret_key 就算「接入了 Kook」，适配器照建（哪怕此刻一个机器人都没有）—— 这样之后
+    # 经接口新增 Kook 机器人能立刻拉起连接。留空时入口已经自动生成/读取一份（data/secret_key），
+    # 所以正常总有值；真为空（比如不走入口的测试）就一个 Kook 适配器都不建。
     kook_options = KookOptions.from_mapping(kook) if kook is not None else KookOptions()
     secret_key: str = kook_options.secret_key
     _kook_adapter = None
-    if secret_key or kook_options.token:
+    if secret_key:
         _kook_adapter = KookAdapter(kook_options, publish=_gateway.publish)
         kook_credentials = await tokens.list_platform("kook", enabled_only=True)
         for cred in kook_credentials:
-            if not secret_key:
-                log.warning("Kook 凭证行存在但没配 secret_key，跳过登记", bot_id=cred.bot_id)
-                continue
             try:
                 bot_token = await tokens.decrypt_token(cred.bot_id, secret_key)
             except ValueError as exc:
@@ -243,10 +242,6 @@ async def run(
                 log.warning("Kook 凭证行没有密文，跳过登记", bot_id=cred.bot_id)
                 continue
             _kook_adapter.add_bot(cred.bot_id, bot_token, owner_id=cred.owner_id)
-        # 兼容路径：[kook].token 配了但没走凭证行（旧部署）时，仍按原样接一个
-        if kook_options.token and not kook_credentials:
-            # 兼容路径无凭证行 -> 无归属（owner_id 留空串）：事件 owner 为空，消息触发不路由
-            _kook_adapter.add_bot("kook:config", kook_options.token, owner_id="")
         _gateway.register(_kook_adapter)
 
     # 机器人管理服务：跨平台统一「增 / 启停 / 删」，凭证落库 + 适配器生命周期一起封在

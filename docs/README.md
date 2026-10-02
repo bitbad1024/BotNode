@@ -76,7 +76,8 @@ db ──► core.logger 的模型        bots ──► 无 botnode 依赖
 2. `cache.configure(CacheOptions.from_mapping(...))` + `await cache.start()`；
 3. 建库表与演示账号（`SqlBotStore` / `SqlUserStore` / `SqlSessionStore` / `SqlWorkflowStore`）；
 4. 建 `Gateway()`，建 `OneBotAdapter` 并 `register`；
-5. 配了 `[kook]` 才建 `KookAdapter`（凭证行的 token 解密后逐个 `add_bot`）；
+5. 有 `[kook].secret_key`（留空时入口自动生成 / 读取 `data/secret_key`）才建 `KookAdapter`
+   （凭证行的 Bot Token 解密后逐个 `add_bot`；网关地址由客户端连接前自己 discover）；
 6. 建 `BotManager`（跨平台增 / 启停 / 删）；
 7. 建 `MessageRouter` 并挂上 `gateway.subscribe(on_platform_event)`；
 8. `create_app(...)` 建 FastAPI 并起服务；

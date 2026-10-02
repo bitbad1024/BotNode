@@ -21,7 +21,7 @@
 
     from botnode.platforms.onebot import OneBotOptions, OneBotServer
 
-    server = OneBotServer(OneBotOptions(host="0.0.0.0", port=6700), handler=on_event)
+    server = OneBotServer(OneBotOptions(host="0.0.0.0", port=16700), handler=on_event)
     await server.start()
     await server.serve_forever()
 """

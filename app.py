@@ -54,10 +54,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import (
     CONFIG_PATH,
+    KEY_FILE,
     TEMPLATE_PATH,
     ConfigError,
     DatabaseSettings,
     Settings,
+    load_or_create_secret_key,
 )
 from botnode import __version__
 from botnode.core.logger import (
@@ -245,13 +247,19 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         )
         if settings.config_path is None:
             core.warning(f"没找到配置文件，按默认值启动；模板见 {TEMPLATE_PATH.name}")
+        # Kook 凭证的加密密钥：配置留空就自动生成/读取 data/secret_key —— 落盘而不是每次随机，
+        # 否则重启后已落库的 Bot Token 密文会全部解不开（见 config.load_or_create_secret_key）
+        kook_config: dict[str, object] = settings.kook.model_dump()
+        if not settings.kook.secret_key.strip():
+            kook_config["secret_key"] = load_or_create_secret_key()
+            core.info("Kook 密钥未配置，已自动生成/读取", path=str(KEY_FILE))
         await run(
             engine=db,
             api=settings.api.model_dump(),
             api_host=settings.api.host,
             api_port=settings.api.port,
             onebot=settings.onebot.model_dump(),
-            kook=settings.kook.model_dump(),
+            kook=kook_config,
             cache_config=settings.cache.model_dump(),
         )
     except (ConfigError, RuntimeError, SQLAlchemyError) as exc:  # 连不上库 / 建表被拒等
