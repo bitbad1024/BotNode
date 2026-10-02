@@ -265,6 +265,7 @@ class TestKookRegion:
         assert kook.reconnect_max_interval == 60.0  # 官方：获取 gateway 那一步上限 60
         assert kook.rest_min_interval == 0.2
         assert kook.rest_max_retries == 3
+        assert kook.rest_idle_timeout == 30.0  # 持久连接空闲上限：超了主动重建
 
     def test_kook_section_reads_token_and_intervals(self, tmp_path: Path) -> None:
         settings = Settings.load(

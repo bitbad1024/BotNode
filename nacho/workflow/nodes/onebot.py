@@ -16,6 +16,9 @@ target 化之前，``onebot`` 节点带 ``action`` / ``group_id`` / ``user_id`` 
 **没有 target 就不发**（与 send 同一口径）：``target`` 没接、或接了但运行值是 None / 空串，
 不发 —— ``onebot_retcode`` 记 1（没发出去）、``onebot_data`` 空串送下游，不抛。
 
+**内容为空也不发**（与 send 同一口径）：``message`` 是空串 / 纯空白时同样不发 ——
+``onebot_retcode`` 记 1、``onebot_data`` 空串送下游。
+
 **breaking 提醒**：库里旧的 ``onebot`` 图（用 ``action`` / ``group_id`` 配置、上游接
 ``message`` / ``group_id`` 端口）已不能照跑，需迁移到 ``send`` + ``target`` 节点
 （去向统一走 target 值端口）。
@@ -27,7 +30,7 @@ from typing import Any
 from ..models import WorkflowNode
 from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
-from .send import _dump
+from .send import _clip, _dump
 
 
 def _retcode_of(response: Any) -> int:
@@ -79,6 +82,12 @@ async def exec_onebot(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str
             f"[onebot:{node.id}] 需要平台总线：装配时把 Gateway 交给工作流运行时（ctx.gateway）"
         )
 
+    if not message.strip():
+        # 内容为空（上游「算不出来」送的就是空串）：不发，retcode 记 1（与 send 同一口径）
+        ctx.logger.warning(f"[onebot:{node.id}] 消息内容为空，跳过发送", node_id=node.id)
+        ctx.log.append(f"[onebot] {node.id}: 内容为空，跳过")
+        return {"onebot_retcode": 1, "onebot_data": ""}
+
     response = await gateway.reply(target, message)
     ok = bool(response.ok)
     retcode = _retcode_of(response)
@@ -86,11 +95,14 @@ async def exec_onebot(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str
 
     # 回执不成功只是「对方的回答」：记 warning 照常往下走（连不上 / 没连接那种才抛，见模块文档）
     report = ctx.logger.info if ok else ctx.logger.warning
-    report(
-        f"[onebot:{node.id}] reply -> retcode {retcode}",
-        ok=ok,
-        retcode=retcode,
-        data=data,
-    )
+    fields: dict[str, object] = {
+        "ok": ok,
+        "retcode": retcode,
+        "data": data,
+        "message_chars": len(message),
+    }
+    if not ok:  # 失败才带内容片段：看得出到底发了什么
+        fields["message_preview"] = _clip(message)
+    report(f"[onebot:{node.id}] reply -> retcode {retcode}", **fields)
     ctx.log.append(f"[onebot] {node.id}: reply -> retcode {retcode}")
     return {"onebot_retcode": retcode, "onebot_data": data}

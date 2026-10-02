@@ -478,6 +478,8 @@ class KookSettings(_Region):
     reconnect_max_interval: float = Field(default=60.0, gt=0, description="大于 0 的秒数")
     rest_min_interval: float = Field(default=0.2, gt=0, description="大于 0 的秒数")
     rest_max_retries: int = Field(default=3, ge=0, description="不小于 0 的次数")
+    #: 持久连接的空闲上限（秒）：服务端会按空闲时间掐连接，超了就主动重建
+    rest_idle_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
 
 
 # --------------------------------------------------------------------------- 整份设置

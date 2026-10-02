@@ -16,6 +16,10 @@
 照常送 ``False`` 到下游，不抛。要「到点固定播报」就把 target 节点（手动填）接在
 send 前面。
 
+**内容为空也不发**：``message`` 是空串 / 纯空白时不发 —— ``send_ok`` 送 ``False`` 到
+下游。上游「算不出来」这类业务失败送下来的就是**空串**（``operator`` / ``json`` /
+``regex`` 同一口径），不拦就等于往平台上发一条空消息，平台多半回个参数错误。
+
 **两种失败是分开的**（与 ``http`` 节点同一口径）：
 
 * 环境 / 配置问题 —— 没接总线（``ctx.gateway`` 是 None）—— 当场抛出去，整条流程
@@ -38,6 +42,15 @@ from typing import Any
 from ..models import WorkflowNode
 from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
+
+
+#: 日志里展示「发出去的内容」时的截断长度（避免一段长文本刷屏）
+CLIP_CHARS: int = 40
+
+
+def _clip(raw: str) -> str:
+    """日志里展示的内容片段：太长截断（够看出发了什么就行）。"""
+    return raw if len(raw) <= CLIP_CHARS else raw[:CLIP_CHARS] + "…"
 
 
 def _dump(data: object) -> str:
@@ -81,17 +94,28 @@ async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
             f"[send:{node.id}] 需要平台总线：装配时把 Gateway 交给工作流运行时（ctx.gateway）"
         )
 
+    if not message.strip():
+        # 内容为空（上游「算不出来」送的就是空串）：不发 —— 与「没有 target 就不发」同口径，
+        # 免得把上游的空值当内容真的发到平台上
+        ctx.logger.warning(f"[send:{node.id}] 消息内容为空，跳过发送", node_id=node.id)
+        ctx.log.append(f"[send] {node.id}: 内容为空，跳过")
+        return {"send_ok": False, "send_data": ""}
+
     response = await gateway.reply(target, message)
     ok = bool(response.ok)
     data = _dump(response.data)
 
     # 回执不成功只是「对方的回答」：记 warning 照常往下走（连不上 / 没连接那种才抛，见模块文档）
     report = ctx.logger.info if ok else ctx.logger.warning
-    report(
-        f"[send:{node.id}] reply -> {'ok' if ok else 'failed'}",
-        target_platform=getattr(target, "platform", ""),
-        ok=ok,
-        data=data,
-    )
+    fields: dict[str, object] = {
+        "target_platform": getattr(target, "platform", ""),
+        "ok": ok,
+        "data": data,
+        "message_chars": len(message),
+    }
+    if not ok:
+        # 失败才带内容片段：光一个 ok=False 看不出去的是什么（上游送了空串 / 内容被截断都能一眼看出）
+        fields["message_preview"] = _clip(message)
+    report(f"[send:{node.id}] reply -> {'ok' if ok else 'failed'}", **fields)
     ctx.log.append(f"[send] {node.id}: reply -> {'ok' if ok else 'failed'}")
     return {"send_ok": ok, "send_data": data}
