@@ -44,7 +44,8 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: 跑测试
-        run: python -m pytest -q -rs  # -rs：把跳过的用例与原因也打出来
+        # -rs 打出跳过的用例与原因；-n auto 并行（runner 通常 2 核）
+        run: python -m pytest -q -rs -n auto
 
   # ------------------------------------------------------------------ 后端（Windows）
   backend-windows:
@@ -65,7 +66,8 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: 跑测试
-        run: python -m pytest -q -rs
+        # -rs 打出跳过的用例与原因；Windows 上多进程启动略慢，-n auto 仍比串行快
+        run: python -m pytest -q -rs -n auto
 
   # ------------------------------------------------------------------ 前端
   frontend:

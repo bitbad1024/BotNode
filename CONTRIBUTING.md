@@ -64,13 +64,16 @@ examples/      可运行的最小示例
 ## 4. 测试
 
 ```bash
-pytest                                                  # 全量
-pytest tests/test_workflow.py -q                        # 单个文件
-pytest tests/test_workflow.py -k condition -q           # 挑用例
+pytest  # 全量：串行约 25 秒
+pytest -n auto  # 并行：约 9 秒，快 2~3 倍
+pytest -n 0  # 强制串行：排错时输出不交错
+pytest tests/test_workflow.py -q  # 单个文件
+pytest tests/test_workflow.py -k condition -q  # 挑用例
 ```
 
+* **为什么能并行**：用例之间是隔离的 —— 临时目录各用各的（`tmp_path`）、日志核心与进程级单例在各自 worker 进程里独立、Redis 用例带自己的 namespace、需要端口的用 `free_port()` 动态取。
 * 新增 / 修改行为**必须带用例**：正常路径 + 边界（空值、失败分支）。
-* 外部依赖一律**打桩**：不依赖真 Redis、MariaDB、网络（`httpx.AsyncClient` 有现成的替身写法，见 `tests/test_workflow.py`；需要真端口的用例用回环地址 + `free_port()`）。
+* 外部依赖一律**打桩**：不依赖真 Redis、MariaDB、网络（`httpx.AsyncClient` 有现成的替身写法，见 `tests/test_workflow.py`；需要真端口的用例用回环地址 + `free_port()`）。本机若真起了 Redis，`tests/test_cache.py` 里那条真连用例会自动跑起来（没服务则跳过）。
 * 提交前本地跑一遍全量；CI 会跑同样的命令（见 `.github/workflows/ci.yml`）。
 
 ## 5. 提交与分支
