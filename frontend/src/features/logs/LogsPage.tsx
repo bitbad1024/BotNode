@@ -3,7 +3,8 @@
  *
  * 数据全部来自后端真实检索，前端不造任何一条日志：查不到就空态，接口挂了就错误态。
  * - 筛选（级别 / 模块 / 关键字 / 时间范围）点「查询」才生效，避免边打边请求；
- * - 管理员额外能选归属（全部 / 仅公共 / 指定 owner_id）与日志来源（落库 / 本机文件）；
+ * - 管理员额外能选归属（全部 / 仅公共 / 具体某个人 —— 下拉直接列人，不用手敲 owner_id）
+ *   与日志来源（落库 / 本机文件）；
  *   普通用户后端强制只返回自己名下的，UI 上直接不露出这两个条件；
  * - 响应带 total，底部走通用分页条（`common/Pagination`）：页码 + 首尾 / 上下页 + 跳页，
  *   每页条数 20/50/100/200；筛选条件 / 每页条数一变就回到第 1 页，数据变少时页码自动收口；
@@ -11,8 +12,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { searchLogs, LOG_LEVELS, type LogEntry } from './logsApi'
+import { fetchOwners, type Owner } from '../../lib/ownersApi'
 import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
+import { ownerName } from '../../common/OwnerFilter'
 import { IconRefresh, IconChevronDown, IconAlert, IconClock } from '../../common/icons'
 import { ListSkeleton } from '../../common/Skeleton'
 import Pagination, { totalPagesOf } from '../../common/Pagination'
@@ -32,8 +35,8 @@ type Filters = {
   loggerName: string
   startTime: string // datetime-local 原值
   endTime: string
-  ownerMode: 'all' | 'public' | 'custom'
-  ownerId: string
+  /** 归属：`all` = 全部；`public` = 只看公共；其余值就是归属 id（下拉直接列人） */
+  owner: string
   source: 'database' | 'local' | 'both'
 }
 
@@ -43,8 +46,7 @@ const EMPTY_FILTERS: Filters = {
   loggerName: '',
   startTime: '',
   endTime: '',
-  ownerMode: 'all',
-  ownerId: '',
+  owner: 'all',
   source: 'database',
 }
 
@@ -89,6 +91,8 @@ export default function LogsPage() {
   )
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
+  /** 可选归属：归属下拉直接列人（管理员才用得上；拉不到就只剩「全部 / 仅公共」） */
+  const [owners, setOwners] = useState<Owner[]>([])
 
   // 请求序号：每次拉取自增，只有「最新一次」的结果会被采用（旧响应丢弃，不盖新页面）
   const requestSeq = useRef(0)
@@ -113,10 +117,9 @@ export default function LogsPage() {
       const end = toUnix(filters.endTime)
       if (end !== undefined) params.end = end
       if (isAdmin) {
-        if (filters.ownerMode === 'public') params.owner_id = '' // 空串=只看公共
-        if (filters.ownerMode === 'custom' && filters.ownerId.trim()) {
-          params.owner_id = filters.ownerId.trim()
-        }
+        // 归属三态：all = 不传（全部）；public = 空串（只看公共）；其余就是归属 id
+        if (filters.owner === 'public') params.owner_id = ''
+        else if (filters.owner !== 'all') params.owner_id = filters.owner
         const source = SOURCE_PARAMS[filters.source]
         if (source) params.source = source
       }
@@ -215,11 +218,19 @@ export default function LogsPage() {
     if (draft.startTime) n++
     if (draft.endTime) n++
     if (isAdmin) {
-      if (draft.ownerMode !== 'all') n++
+      if (draft.owner !== 'all') n++
       if (draft.source !== 'database') n++
     }
     return n
   }, [draft, isAdmin])
+
+  // 归属下拉的选项（只有管理员用得上）：拉一次就够，失败也不影响查日志
+  useEffect(() => {
+    if (!isAdmin) return
+    void fetchOwners()
+      .then(({ data }) => setOwners(data))
+      .catch(() => undefined)
+  }, [isAdmin])
 
   const totalPages = totalPagesOf(total, pageSize)
 
@@ -309,29 +320,18 @@ export default function LogsPage() {
                 <span className={styles.fieldLabel}>归属</span>
                 <select
                   className={styles.control}
-                  value={draft.ownerMode}
-                  onChange={(e) =>
-                    patchDraft({ ownerMode: e.target.value as Filters['ownerMode'] })
-                  }
+                  value={draft.owner}
+                  onChange={(e) => patchDraft({ owner: e.target.value })}
                 >
                   <option value="all">全部归属</option>
                   <option value="public">仅公共日志</option>
-                  <option value="custom">指定 owner_id</option>
+                  {owners.map((owner) => (
+                    <option key={owner.owner_id} value={owner.owner_id}>
+                      {ownerName(owner.owner_id, owners)}
+                    </option>
+                  ))}
                 </select>
               </label>
-
-              {draft.ownerMode === 'custom' && (
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>owner_id</span>
-                  <input
-                    className={styles.control}
-                    type="text"
-                    value={draft.ownerId}
-                    placeholder="如 u-admin"
-                    onChange={(e) => patchDraft({ ownerId: e.target.value })}
-                  />
-                </label>
-              )}
 
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>来源</span>
@@ -449,8 +449,9 @@ export default function LogsPage() {
                               className={`${styles.ownerChip} ${
                                 entry.owner_id ? '' : styles.ownerPublic
                               }`}
+                              title={entry.owner_id || '公共（框架自身的日志，没有归属）'}
                             >
-                              {entry.owner_id || '公共'}
+                              {entry.owner_id ? ownerName(entry.owner_id, owners) : '公共'}
                             </span>
                           )}
                           {!!entry.exc_text && <span className={styles.excFlag}>异常栈</span>}
