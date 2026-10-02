@@ -12,14 +12,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend:
-    name: 后端测试（pytest / ${{ matrix.os }}）
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Windows 是主开发环境，Ubuntu 是常见的部署环境 —— 两边都跑，跨平台问题当场暴露
-        os: [ubuntu-latest, windows-latest]
+  # ------------------------------------------------------------------ 后端（Linux）
+  backend-linux:
+    name: 后端测试（pytest / ubuntu + Redis）
+    runs-on: ubuntu-latest
+    # tests/test_cache.py 里有一条「本机有 Redis 就真连一遍」的用例（没服务会自动 skip）：
+    # 这里起一个**官方 redis 镜像**当服务容器，让那条也真跑起来（其余 Redis 用例本来就是打桩的）。
+    # 镜像来自 Docker Hub 的 Docker Official Images（`library/redis`，Redis 官方维护）——
+    # GitHub Actions 只负责把容器拉起来，不提供 Redis 本身。
+    # 注：services（容器）只在 Linux runner 上可用，所以 Windows 那份单独一个 job。
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379  # 映射到 runner 的 localhost:6379，正是 RedisOptions 的默认地址
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -33,8 +44,30 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: 跑测试
-        run: python -m pytest -q
+        run: python -m pytest -q -rs  # -rs：把跳过的用例与原因也打出来
 
+  # ------------------------------------------------------------------ 后端（Windows）
+  backend-windows:
+    name: 后端测试（pytest / windows）
+    # Windows 是主开发环境，主要看跨平台问题；这里不提供 Redis（Actions 的容器服务不支持
+    # Windows runner）—— 那条真连 Redis 的用例会自动跳过，其余照跑。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 装依赖
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: 跑测试
+        run: python -m pytest -q -rs
+
+  # ------------------------------------------------------------------ 前端
   frontend:
     name: 前端构建（vite build）
     runs-on: ubuntu-latest
