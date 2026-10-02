@@ -31,6 +31,7 @@ from ..models import ValidationIssue, WorkflowNode
 from .base import (
     TRIGGER_PORT,
     ConfigField,
+    EnvironmentFailure,
     NodeExecutionContext,
     NodeFailure,
     PortSpec,
@@ -140,8 +141,18 @@ async def exec_http(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
 
     httpx = _import_httpx()
     ctx.logger.info("HTTP 请求", node_id=node.id, method=method, url=url)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.request(method, url, headers=headers, content=body or None)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(method, url, headers=headers, content=body or None)
+    except httpx.HTTPError as exc:
+        # 连不上 / 超时 / DNS / 协议错：**可预期的环境问题** —— 抛 EnvironmentFailure，引擎
+        # 只记一行、不铺 httpx 那几十行堆栈；消息里写清方法、地址、超时与异常类型
+        # （httpx 的 str(exc) 常常是空串，光靠它排不了错）
+        detail = str(exc).strip()
+        reason = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+        raise EnvironmentFailure(
+            f"{method} {url} 请求失败（{reason}，timeout={timeout}s）"
+        ) from exc
 
     text: str = response.text
     report = ctx.logger.warning if response.status_code >= 400 else ctx.logger.info

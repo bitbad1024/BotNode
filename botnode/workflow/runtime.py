@@ -37,6 +37,40 @@ def _log() -> BaseLogger | BoundLogger:
     return workflow_logger("workflow.runtime")
 
 
+def _log_run_failure(
+    logger: BaseLogger | BoundLogger,
+    message: str,
+    exc: BaseException,
+    **fields: object,
+) -> None:
+    """记一条执行失败：**可预期的环境问题**只记一行，别的异常才铺堆栈。
+
+    固定带上三样排错信息：``node_id`` / ``node_type``（哪个节点）与 ``error_type`` /
+    ``error``（什么错）。异常链是「引擎包装 → 节点抛的错 → 底层库的错」，所以这里拆开取：
+    ``error_type`` 用**最内层**（到底是 httpx 超时还是 DNS 失败），``error`` 用节点那层
+    （外层包装的消息只是把原因又包一遍，底层库的消息又常常是空串）。
+
+    连不上 / 超时这类「外面不通」是预期内的（节点抛
+    :class:`~botnode.workflow.nodes.base.EnvironmentFailure`）：记堆栈只会把日志刷满，
+    httpx / httpcore 那几十行帧没有信息增量。
+    """
+    cause = exc.__cause__ if exc.__cause__ is not None else exc  # 节点自己抛的那一层
+    root = cause
+    while root.__cause__ is not None:  # 追到最里头：ReadTimeout / ConnectError / DNS 失败…
+        root = root.__cause__
+    extra: dict[str, object] = {
+        **fields,
+        "node_id": getattr(exc, "node_id", ""),
+        "node_type": getattr(exc, "node_type", ""),
+        "error_type": type(root).__name__,
+        "error": str(cause) or repr(cause),
+    }
+    if getattr(exc, "expected", False):
+        logger.error(message, **extra)
+    else:
+        logger.exception(message, **extra)
+
+
 def make_trigger(
     workflow_id: str,
     version: int,
@@ -120,7 +154,7 @@ async def run_published_workflow(
         await runner.run(graph, ctx)
         log.info("工作流执行完成", version=version, node_count=len(graph.nodes))
     except Exception as exc:  # noqa: BLE001 — 执行引擎异常不能让发布接口挂掉
-        log.error("工作流执行失败", version=version, error=str(exc))
+        _log_run_failure(log, "工作流执行失败", exc, version=version)
 
 
 def _message_start_ids(graph: WorkflowGraph) -> set[str]:
@@ -338,12 +372,13 @@ class MessageRouter:
                 await self._run(workflow_id, version, trigger_data=trigger_data, user_id=user_id)
                 ran += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能淹其它
-                _log().exception(
+                _log_run_failure(
+                    _log(),
                     "消息触发执行工作流失败",
+                    exc,
                     workflow_id=workflow_id,
                     owner_id=owner_id,
                     version=version,
-                    error=str(exc),
                 )
         return ran
 
@@ -471,12 +506,13 @@ async def load_published_workflows(
                 )
                 registered += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动
-                log.error(
+                _log_run_failure(
+                    log,
                     "启动载入已发布工作流失败",
+                    exc,
                     workflow_id=definition.id,
                     owner_id=definition.owner_id,  # 谁的流没载进来，当场认得出
                     version=definition.published_version,
-                    error=str(exc),
                 )
         offset += len(definitions)
         if len(definitions) < page_size:

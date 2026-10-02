@@ -2,8 +2,10 @@
 
 **节点执行函数不在这里**：一类节点一个文件，都在 :mod:`botnode.workflow.nodes`。本模块只管
 「怎么按顺序跑、值怎么沿边流」：只跑 **start 可达的主流程节点**（孤儿永不执行），按入边把
-上游产出投递到入口、按输出端口名记下产出，**分流节点按选中出口剪枝**并级联下游，同步执行
-（不并发）。**业务失败停止向下传播**：节点抛 ``NodeFailure``（算不出来 / 对方回了错这类
+上游产出投递到入口、按输出端口名记下产出；**节点要不要执行只看控制流（trigger）入边** ——
+数据边（``message`` / ``target``）只送值，``start.target -> send.target`` 这种跨在条件之前的
+数据边不会把未选中分支上的节点撑活。分流节点按选中出口剪枝（同样只剪控制流边）并级联下游，
+同步执行（不并发）。**业务失败停止向下传播**：节点抛 ``NodeFailure``（算不出来 / 对方回了错这类
 「没做成」）时本节点不产出、出边置死，下游整段跳过，别的分支照跑；环境问题抛普通异常才
 中断整条。触发是**开始节点**自己的事（``trigger=time`` 登记到调度器）。图算法在
 :mod:`botnode.workflow.graph`。运行语义的完整清单见 ``docs/workflow/workflow.md`` 第 7.3 节。
@@ -27,14 +29,42 @@ from .graph import (
 )
 from .models import WorkflowEdge, WorkflowGraph
 from .nodes import NodeExecutionContext, get_executor, get_spec
-from .nodes.base import NodeFailure
+from .nodes.base import EnvironmentFailure, NodeFailure
 
 __all__ = [
     # 老 import 路径留的门（新代码从 botnode.workflow 取）
     "NodeExecutionContext",
+    "NodeExecutionError",
     "SimpleWorkflowRunner",
     "get_executor",
 ]
+
+
+class NodeExecutionError(RuntimeError):
+    """节点执行时抛出的**环境问题**：包上「哪个节点」再往外抛。
+
+    与 :class:`~botnode.workflow.nodes.base.NodeFailure`（业务失败，只停下游）分开：
+    本类说明「这份配置 / 这台机器有问题」，整条流程中断并保留原异常链（``__cause__``），
+    日志里据此能直接定位到节点。
+
+    消息里**带上异常类型与 repr**：``str(exc)`` 常常是空串（httpx 的超时 / 连接异常就是
+    这种），光记它等于什么都没记。
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        node_type: str,
+        cause: BaseException,
+        *,
+        expected: bool = False,
+    ) -> None:
+        detail = str(cause) or repr(cause)
+        super().__init__(f"节点 {node_type}:{node_id} 执行失败：{type(cause).__name__}: {detail}")
+        self.node_id: str = node_id
+        self.node_type: str = node_type
+        #: 是不是**可预期的环境问题**（连不上 / 超时）：日志据此决定要不要铺堆栈
+        self.expected: bool = expected
 
 
 class SimpleWorkflowRunner:
@@ -71,11 +101,28 @@ class SimpleWorkflowRunner:
                 if target in in_degree:
                     in_degree[target] += 1
 
+        #: 控制流（``trigger``）入边条数：**它才决定「这个节点要不要执行」** —— 数据边
+        #: （``message`` / ``target``）只送值、不驱动执行。分流剪枝与「上游失败」都只剪
+        #: 控制流，所以 ``send`` 这种「触发走 trigger 边、去向走 target 数据边」的节点，
+        #: 不会因为还有一条跨分支的活数据边就被误跑。
+        trigger_in: dict[str, int] = {node_id: 0 for node_id in runnable}
+        #: 节点 -> 它的**控制流出边**目标（同一目标多条边就重复几次，减活边计数时逐条减）。
+        #: 口径与 ``trigger_in`` 对称：**看这条边进的是不是 ``trigger`` 入口，不看它从哪个
+        #: 端口出来** —— 分流节点的出口叫 ``true`` / ``false``，它们同样是控制流。以前按源
+        #: 端口名筛，条件节点的出边一条都进不了这张表，于是「条件被跳过」传不到它的下游
+        #: （下游的活入边减不掉，照样执行）。
+        trigger_out: dict[str, list[str]] = {node_id: [] for node_id in runnable}
+        for edge in graph.edges:
+            if edge.source not in trigger_in or edge.target not in trigger_in:
+                continue
+            if edge_target_port(edge) != DEFAULT_EDGE_PORT:
+                continue
+            trigger_in[edge.target] += 1
+            trigger_out[edge.source].append(edge.target)
+
         queue = deque(node_id for node_id in runnable if in_degree[node_id] == 0)
-        #: 结构入度快照（拓扑推进会改 in_degree；「这个节点原本有没有入边」以它为准）
-        in_total = dict(in_degree)
-        #: 还「活」的入边条数：分流剪枝减它；原本有入边、减到 0 => 这个节点整段跳过
-        live_in: dict[str, int] = dict(in_degree)
+        #: 还「活」的**控制流**入边条数：分流剪枝 / 上游失败减它；原本有、减到 0 => 整段跳过
+        live_trigger_in: dict[str, int] = dict(trigger_in)
         ran: set[str] = set()
         #: 被剪枝跳过的节点：不执行，出边同样置死（级联到它的下游）
         skipped: set[str] = set()
@@ -87,17 +134,18 @@ class SimpleWorkflowRunner:
             current_id = queue.popleft()
             if current_id in ran or current_id in skipped:
                 continue
-            if in_total[current_id] > 0 and live_in[current_id] == 0:
-                # 入边全被剪死（分流节点没走这边 / 上游业务失败）：整段跳过，跳过也留痕可查
+            if trigger_in[current_id] > 0 and live_trigger_in[current_id] == 0:
+                # 控制流入边全被剪死（分流节点没走这边 / 上游业务失败）：整段跳过，跳过也留痕
                 skipped.add(current_id)
                 reason = skip_reasons.get(current_id, "分支未选中")
                 ctx.log.append(f"[skip] {current_id}: {reason}，未执行")
                 self._release(
                     current_id,
                     out_edges,
+                    trigger_out,
                     runnable,
                     in_degree,
-                    live_in,
+                    live_trigger_in,
                     queue,
                     dead=True,
                     skip_reasons=skip_reasons,
@@ -120,28 +168,47 @@ class SimpleWorkflowRunner:
                 self._release(
                     current_id,
                     out_edges,
+                    trigger_out,
                     runnable,
                     in_degree,
-                    live_in,
+                    live_trigger_in,
                     queue,
                     dead=True,
                     skip_reasons=skip_reasons,
                     reason=f"上游 {node.type}:{current_id} 失败",
                 )
                 continue
+            except Exception as exc:  # noqa: BLE001 — 环境问题：包上节点信息再抛，原异常链照留
+                raise NodeExecutionError(
+                    current_id,
+                    node.type,
+                    exc,
+                    expected=isinstance(exc, EnvironmentFailure),
+                ) from exc
             produced[current_id] = output
             ran.add(current_id)
             spec = get_spec(node.type)
             if spec is not None and spec.branching:
-                # 分流节点：只让**选中出口**（返回值里给了真值的输出端口）的边活着，
-                # 其余出口的出边剪死 —— condition 只返回走的那一边
+                # 分流节点：只让**选中出口**（返回值里给了真值的输出端口）的边活着，其余出口的
+                # **控制流**出边剪死（数据边不驱动执行，不参与剪枝）—— condition 只返回走的那边
                 taken = {name for name, value in (output or {}).items() if value}
                 for edge in graph.edges:
                     if edge.source != current_id or edge_source_port(edge) in taken:
                         continue
+                    if edge_target_port(edge) != DEFAULT_EDGE_PORT:
+                        continue
                     if edge.target in runnable:
-                        live_in[edge.target] -= 1
-            self._release(current_id, out_edges, runnable, in_degree, live_in, queue, dead=False)
+                        live_trigger_in[edge.target] -= 1
+            self._release(
+                current_id,
+                out_edges,
+                trigger_out,
+                runnable,
+                in_degree,
+                live_trigger_in,
+                queue,
+                dead=False,
+            )
 
         if len(ran) + len(skipped) != len(runnable):
             missing = [nid for nid in runnable if nid not in ran and nid not in skipped]
@@ -151,28 +218,33 @@ class SimpleWorkflowRunner:
     def _release(
         node_id: str,
         out_edges: Mapping[str, Sequence[str]],
+        trigger_out: Mapping[str, Sequence[str]],
         runnable: set[str],
         in_degree: dict[str, int],
-        live_in: dict[str, int],
+        live_trigger_in: dict[str, int],
         queue: deque[str],
         *,
         dead: bool,
         skip_reasons: dict[str, str] | None = None,
         reason: str = "",
     ) -> None:
-        """节点处理完（执行 / 跳过）后放行下游：结构入度减 1，减到 0 的进拓扑队列。
+        """节点处理完（执行 / 跳过 / 失败）后放行下游：结构入度减 1，减到 0 的进拓扑队列。
 
-        ``dead=True``（整个节点被剪枝跳过 / 上游业务失败）时出边全部置死：下游的「活入边」
-        跟着减，死路就这样一级一级传下去，直到和别的活分支汇合。``reason`` 会顺着死路
-        往下传，所以下下游的 ``[skip]`` 也写得出是被谁带停的。
+        ``dead=True``（整个节点被剪枝跳过 / 上游业务失败）时**控制流出边**全部置死：下游的
+        「活控制流入边」跟着减，死路就这样一级一级传下去，直到和别的活分支汇合；数据边不
+        减（它不驱动执行，只送值）。``reason`` 会顺着死路往下传，所以下下游的 ``[skip]``
+        也写得出是被谁带停的。
         """
+        if dead:
+            for trigger_target in trigger_out[node_id]:
+                if trigger_target not in runnable:
+                    continue
+                live_trigger_in[trigger_target] -= 1
+                if skip_reasons is not None and reason:
+                    skip_reasons[trigger_target] = reason
         for target in out_edges[node_id]:
             if target not in runnable:
                 continue
-            if dead:
-                live_in[target] -= 1
-                if skip_reasons is not None and reason:
-                    skip_reasons[target] = reason
             in_degree[target] -= 1
             if in_degree[target] == 0:
                 queue.append(target)

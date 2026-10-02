@@ -525,7 +525,7 @@ class OneBotServer:
                 "onebot 报文解析失败，已忽略",
                 owner_id=conn.id,
                 remote=conn.remote,
-                error=str(exc),
+                error=str(exc) or repr(exc),
             )
             return
         if event is not None:

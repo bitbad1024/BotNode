@@ -278,7 +278,7 @@ class KookClient:
                     failures += 1  # 握手没成：官方——回退到第 1 步
             except Exception as exc:  # noqa: BLE001 — 连不上就退出来等下轮重连
                 failures += 1
-                self._log.warning("kook 连接失败，稍后重连", error=str(exc))
+                self._log.warning("kook 连接失败，稍后重连", error=str(exc) or repr(exc))
             if self._stopping:
                 return
             if failures > _RESUME_STEPS:
@@ -521,7 +521,7 @@ class KookClient:
             try:
                 await cast(object, ws).send(json.dumps({"s": 2, "sn": self._sn}))  # type: ignore[attr-defined]
             except Exception as exc:  # noqa: BLE001 — 发不出去由下面的超时 / 收报文循环兜底
-                self._log.debug("kook 心跳发送失败", error=str(exc))
+                self._log.debug("kook 心跳发送失败", error=str(exc) or repr(exc))
                 continue
             try:
                 await asyncio.wait_for(self._pong.wait(), timeout=_PONG_TIMEOUT)
@@ -597,7 +597,7 @@ class KookClient:
         try:
             event = parse_event(cast("Mapping[str, object]", data))
         except ValidationError as exc:
-            self._log.warning("kook 事件解析失败，已忽略", error=str(exc))
+            self._log.warning("kook 事件解析失败，已忽略", error=str(exc) or repr(exc))
             return
         if event.self_id and not self.self_id:
             self.self_id = event.self_id
@@ -626,7 +626,7 @@ class KookClient:
             try:
                 await cast(object, ws).send(json.dumps({"s": 2, "sn": self._sn}))  # type: ignore[attr-defined]
             except Exception as exc:  # noqa: BLE001
-                self._log.debug("kook 心跳发送失败", error=str(exc))
+                self._log.debug("kook 心跳发送失败", error=str(exc) or repr(exc))
 
         asyncio.get_running_loop().create_task(_send())
 

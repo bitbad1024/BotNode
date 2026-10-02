@@ -149,13 +149,13 @@ workflow_versions             每次保存一张不可变图快照
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | 回显（画布联调）：把入口的值原样从出口送下去，夹在中间看「线上流过了什么」 | `trigger` / `message` → `trigger` / `message` | `message`（缺省 `hello`） |
 | `constant.py` | **常量**：一个节点一个值，从 `value` 出口送下去 | `trigger` → `trigger` / `value` | **`value`**（必填，没有默认值） |
-| `http.py` | 发一次 HTTP 请求；**4xx / 5xx = 业务失败**（对方回了错）：抛 `NodeFailure`，停止向下传播；连不上 / 超时是环境问题，直接抛 | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
+| `http.py` | 发一次 HTTP 请求；**4xx / 5xx = 业务失败**（对方回了错）：抛 `NodeFailure`，停止向下传播；连不上 / 超时是**可预期的环境问题**：抛 `EnvironmentFailure`，中断整条流程但日志只记一行（不铺 httpx 堆栈） | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
 | `delay.py` | **等待**：异步等一会儿再往下走（`await asyncio.sleep`，**不阻塞事件循环**）；`0` = 不等（临时把等待关掉） | `trigger` / `seconds` → `trigger` | `seconds`（**入口**：接线覆盖手填，缺省 5；`0` 允许，上限 1 小时 —— 手填值由自注册校验器把，线上的值运行期判断） |
 | `json.py` | **JSON**：解析 JSON 文本 + 点路径取值（HTTP 的搭档）；空文本 / 解析失败 / 路径取不到 = **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `json` / `path` → `trigger` / `json_value` | `json`（**入口**必填：接线或手填）、`path`（缺省空 = 取整个文档；点分段，数字段是数组下标） |
 | `regex.py` | **正则**：提取第一个匹配（有组取组）/ 替换所有匹配（脱敏改写）；空文本 / 空正则 / 没匹配 / 正则语法错 = **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `text` / `pattern` / `replace` → `trigger` / `regex_value` | `text`、`pattern`（**入口**必填：接线或手填）、`action`（缺省 extract；枚举由自注册校验器把）、`replace`（替换文本，支持 \1 反向引用）、`flags`（i/m/s 组合，缺省无） |
 | `now.py` | **当前时间**：产出「现在」（服务器本地时区）——格式化文本 + Unix 时间戳（整数秒）；没有失败分支 | `trigger` / `format` → `trigger` / `now_text` / `now_ts` | `format`（strftime 指令，缺省 `%Y-%m-%d %H:%M:%S`，可接线覆盖） |
-| `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（有活入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
-| `send.py` | **发送**：把 `message` 发到 `target` 指向的会话（target 化：去向从图上 target 值端口拿，内容从 message 端口拿）；走 `ctx.gateway.reply(target, message)`，平台差异（OneBot 整数号 / Kook 字符串号）由适配器翻译；**没有 target 就不发**（`send_ok=False` 照常送下游），回执（`send_ok` / `send_data`）成功时送下游，**失败回执 = 业务失败**：抛 `NodeFailure`，停止向下传播；没接总线（环境问题）→ 当场抛 | `trigger` / `target` / `message` → `trigger` / `send_ok` / `send_data` | `message`（**入口**必填：接线或手填；`target` 只能接线，从 `start.target` 或 `target` 节点来） |
+| `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的控制流边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（还有活 `trigger` 入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
+| `send.py` | **发送**：把 `message` 发到 `target` 指向的会话（target 化：去向从图上 target 值端口拿，内容从 message 端口拿）；走 `ctx.gateway.reply(target, message)`，平台差异（OneBot 整数号 / Kook 字符串号）由适配器翻译；**`target` 是数据边、不驱动执行**（触发走 `trigger` 边），**没有 target 就不发**（`send_ok=False` 照常送下游），回执（`send_ok` / `send_data`）成功时送下游，**失败回执 = 业务失败**：抛 `NodeFailure`，停止向下传播；没接总线（环境问题）→ 当场抛 | `trigger` / `target` / `message` → `trigger` / `send_ok` / `send_data` | `message`（**入口**必填：接线或手填；`target` 只能接线，从 `start.target` 或 `target` 节点来） |
 | `onebot.py` | **OneBot（send 的别名）**：target 化改造后**与 send 同款输入**（`target` 会话定位 + `message` 内容），执行同样走 `ctx.gateway.reply(target, message)`，平台差异由适配器翻译；唯一差别是回执转**老端口名**（`onebot_retcode` / `onebot_data`，retcode 从平台回执的 `raw` 下探）；**没有 target 就不发**（`onebot_retcode` 记 1、`onebot_data` 空串送下游）；**回执不成功 = 业务失败**：抛 `NodeFailure`，停止向下传播（与 send 同口径）。**breaking**：旧 `onebot` 图（`action` / `group_id` 配置）需迁移到 `send` + `target` 节点 | `trigger` / `target` / `message` → `trigger` / `onebot_retcode` / `onebot_data` | `message`（**入口**必填：接线或手填；`target` 只能接线，从 `start.target` 或 `target` 节点来） |
 | `operator.py` | **运算**：对两个操作数做一次算术（`+` / `-` / `*` / `/` / `%`）；`/` 是真除法、`%` 按 Python 语义，结果文本化（整数值不带小数点）；算不出来（空值 / 非数字 / 除数为 0 / 运算符不合法）= **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `left` / `right` → `trigger` / `operator_result` | `left` / `right`（**入口**必填：接线或手填）、`operator`（缺省 `+`，枚举由自注册校验器把） |
 | `cache.py` | **缓存**：把一个变量存进缓存 / 取回来 —— **跨执行（跨工作流）传递状态**的通道；`get` 没取到不算事故（回 `default` 默认值，没填就是空串），`set` 空值 = 清成空串；`key` 入口没接线也没填 / 账号作用域却没有归属 → 当场抛；缓存键按作用域拼前缀（`workflow:graph:{图 id}:{键}` / `workflow:acct:{账号 id}:{键}`） | `trigger` / `key` / `value` / `default` → `trigger` / `cache_value` | `action`（缺省 `get`）、`scope`（缺省 `workflow`；枚举都由自注册校验器把）、`key`（**入口**必填：接线或手填）、`value`（手填兜底，也能接线）、`default`（`get` 读不到时的默认值，手填兜底 / 也能接线） |
@@ -244,10 +244,12 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 - 返回：**本节点产出的值**（`dict`，**键 = 已声明的输出端口名**）。引擎按边把它投递给下游的
   对应入口；多出来的键不会被投递（`start` 的 `scheduled` / `task_id` 就是这种「只给日志看」的
   信息）。没有产出就返回 `{}`（像 `log` / `end` 那样）。
-- 执行是**串行**的（节点之间有数据依赖）；**分支剪枝**已由引擎支持（`condition` 这类分流节点）：
-  节点注册 `branching=True` 后，引擎只让「选中出口」（返回值里给了真值的输出端口）的边活着，
-  没走的分支整段跳过 —— `ctx.log` 留 `[skip]` 痕迹，被跳过节点的下游也跟着死，直到与别的
-  活分支汇合（有活入边就照常执行）；并行执行留给将来。
+- 执行是**串行**的（节点之间有数据依赖）；**要不要执行只看 `trigger` 入边**：数据边
+  （`message` / `target`）只送值，不会把节点撑活；
+- **分支剪枝**已由引擎支持（`condition` 这类分流节点）：节点注册 `branching=True` 后，引擎只让
+  「选中出口」（返回值里给了真值的输出端口）的**控制流**边活着，没走的分支整段跳过 ——
+  `ctx.log` 留 `[skip]` 痕迹，被跳过节点的下游也跟着死，直到与别的活分支汇合（还有活
+  `trigger` 入边就照常执行）；并行执行留给将来。
 
 ### 5.3 上下文 `NodeExecutionContext` 能给什么
 
@@ -287,7 +289,8 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 | 情况 | 怎么办 | 例子 |
 |---|---|---|
 | **业务失败**（这一趟没做成：算不出来、取不到、对方回了错） | 抛 `NodeFailure`：**停止向下传播** —— 本节点不产出值、出边全部置死，下游整段跳过（`ctx.log` 留 `[failed]` / `[skip]`），**别的分支与流程其余部分照常跑**，不留堆栈 | `operator` 算不出来；`json` / `regex` 取不到、抽不到；`http` 的 4xx / 5xx；`send` / `onebot` 的失败回执 |
-| **环境问题**（连不上、超时、配置写错、依赖没装） | 直接 `raise`（普通异常）：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 节点连不上、`url` 入口没接线也没填；`send` 没接总线 / 没这个平台 / 归属下没在线连接；`cache` 的 `key` 入口没接线也没填、账号作用域却没有归属 |
+| **可预期的环境问题**（连不上、超时、对端拒绝、DNS 失败） | 抛 `EnvironmentFailure`（`ConnectionError` 子类）：整条流程照样中断，但日志**只记一行**（哪个节点 + 什么原因），**不铺底层堆栈** —— httpx / httpcore 那几十行帧没有信息增量 | `http` 节点连不上 / 超时 |
+| **其它环境问题**（配置写错、依赖没装、没接线、没接总线） | 直接 `raise`（普通异常）：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 的 `url` 入口没接线也没填；`send` 没接总线 / 没这个平台 / 归属下没在线连接；`cache` 的 `key` 入口没接线也没填、账号作用域却没有归属 |
 
 **为什么业务失败不再「送空串继续」**：空值会一路传到下游 —— 上一节的真实事故就是
 「operator 算不出来 → 空串 → send 把空消息发了出去 → 平台回个参数错误」。失败的值当结果
@@ -411,7 +414,7 @@ async def test_my_node_outputs(...) -> None:
 - [ ] 类型专属校验（可选）：注册时挂 `validator`，配置写错在保存时就报
 - [ ] 需要的拓扑约束：`role` / `min_outgoing` / `max_outgoing` / `expression_field`
 - [ ] 画布**不用改**：`label` / `order` / 端口 / `fields` 声明全了，节点就自动出现在面板上
-- [ ] 环境问题会抛、业务结果会返回（第 5.5 节）
+- [ ] 环境问题会抛（连不上 / 超时用 `EnvironmentFailure`，其余抛普通异常）、业务结果会返回（第 5.5 节）
 - [ ] 有单测，且外部依赖是打桩的
 
 ## 6. 要加的东西放哪
@@ -456,11 +459,16 @@ async def test_my_node_outputs(...) -> None:
 - 只跑 **start 沿出边可达的主流程节点**：孤儿节点允许存在于图里、允许保存，但永不执行；
 - 按拓扑顺序逐个跑。跑之前按**入边**把上游产出投递到本节点的入口（`ctx.inputs`，键 = 目标
   端口名），跑完把返回值按**输出端口名**记下来供下游取；
-- **分支剪枝**（`condition` 这类分流节点）：执行后只让「选中出口」的边活着，没走的分支整段
-  跳过（`[skip]` 记在 `ctx.log`）并级联到它的下游；与另一条分支汇合（还有活入边）的节点照常执行；
+- **执行由控制流决定**：节点要不要跑，只看指向它的 **`trigger` 入边** —— 数据边（`message` /
+  `target`）只送值、不驱动执行。所以 `start.target -> send.target` 这种跨在条件之前的数据边
+  **不会**把未选中分支上的 `send` 撑活（以前会：那样 message 取不到值，报「内容为空」）；
+- **分支剪枝**（`condition` 这类分流节点）：执行后只让「选中出口」的**控制流**边活着，没走的
+  分支整段跳过（`[skip]` 记在 `ctx.log`）并级联到它的下游；与另一条分支汇合（还有活 `trigger`
+  入边）的节点照常执行；
 - **业务失败停止向下传播**（`NodeFailure`）：节点自己判定「没做成」时抛它 —— 本节点**不产出
   值**（下游那条边取不到，回落到手填值）、出边全部置死，下游整段跳过并写明是被谁带停的；
-  **别的分支与流程其余部分照常跑**，不留堆栈。环境问题才抛普通异常中断整条；
+  **别的分支与流程其余部分照常跑**，不留堆栈。环境问题才中断整条：可预期的（连不上 / 超时）
+  抛 `EnvironmentFailure`，失败日志只记一行（堆栈没有信息增量）；别的抛普通异常并留堆栈；
 - 同步执行（不并发），因为单条图的节点之间有数据依赖；并行执行留给将来；
 - 触发是**开始节点**自己的事（`start` 的 `config.trigger`）：`time` 时它把整张图登记到
   `TaskManager`，由调度器按 cron 触发整条流程；`message`（缺省）被动等消息接入，发布 / 试跑时

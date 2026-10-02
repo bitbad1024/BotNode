@@ -236,7 +236,7 @@ async def run(
                 log.error(
                     "Kook 凭证行解不开（secret_key 不对或密文损坏），跳过登记",
                     bot_id=cred.bot_id,
-                    error=str(exc),
+                    error=str(exc) or repr(exc),
                 )
                 continue
             if not bot_token:

@@ -956,6 +956,130 @@ async def test_executor_stops_downstream_on_node_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_branch_pruning_ignores_cross_branch_data_edges() -> None:
+    """分流未选中的分支**不该因为一条跨分支的数据边**而执行。
+
+    真实场景：``start.target -> send.target`` 是数据边（跨在条件之前），而 send 的触发走
+    ``trigger`` 边。以前「只要还有一条活入边就执行」，于是没走中的那条分支上的 send 也跑了
+    （message 拿不到，报「内容为空」）。现在执行与否只看**控制流**入边。
+    """
+    ran: list[str] = []
+
+    @register_node("prune-mark-a")
+    async def exec_mark_a(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    @register_node("prune-mark-b")
+    async def exec_mark_b(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", left="1", operator="==", right="2"),  # 1 == 2 -> false
+                node("on_true", "prune-mark-a"),
+                node("on_false", "prune-mark-b"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "c"),
+                edge("c", "on_true"),  # true 出口：没走中
+                edge("c", "on_false", "false", "trigger"),  # false 出口：走中
+                # 跨分支的数据边（模仿 start.target -> send.target）：以前它会把 on_true 撑活
+                edge("s", "on_true", "message", "value"),
+                edge("s", "on_false", "message", "value"),
+                edge("on_true", "e"),
+                edge("on_false", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    assert ran == ["on_false"]  # 只有走中的那条分支执行
+    assert any("[skip] on_true" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_node_with_only_data_edges_still_runs() -> None:
+    """只有数据入边（没有控制流入边）的节点照常执行：数据边不驱动、也不阻止执行。"""
+    ran: list[str] = []
+
+    @register_node("data-only")
+    async def exec_data_only(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("d", "data-only"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "d", "message", "value"),  # 纯数据边：不是控制流
+                edge("d", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    assert ran == ["d"]
+
+
+@pytest.mark.asyncio
+async def test_executor_wraps_environment_error_with_node_context() -> None:
+    """节点抛环境异常（不是 NodeFailure）：包上节点信息再抛，原异常链保留（堆栈里看得到）。"""
+    from botnode.workflow.executor import NodeExecutionError
+
+    @register_node("boom-env")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise ValueError("配置写错了")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("b", "boom-env"), node("e", "end")],
+            "edges": [edge("s", "b"), edge("b", "e")],
+        }
+    )
+    with pytest.raises(NodeExecutionError) as caught:
+        await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
+
+    assert caught.value.node_id == "b"
+    assert caught.value.node_type == "boom-env"
+    assert "ValueError" in str(caught.value) and "配置写错了" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ValueError)  # 堆栈里连着原始异常
+
+
+@pytest.mark.asyncio
+async def test_executor_wrapped_error_survives_empty_message() -> None:
+    """原异常消息为空（httpx 那种）：包装后的消息仍然非空（用 repr 兜底）。"""
+
+    @register_node("boom-empty-msg")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise ValueError("")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [node("s", "start"), node("b", "boom-empty-msg"), node("e", "end")],
+            "edges": [edge("s", "b"), edge("b", "e")],
+        }
+    )
+    from botnode.workflow.executor import NodeExecutionError
+
+    with pytest.raises(NodeExecutionError) as caught:
+        await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
+
+    assert str(caught.value)  # 非空
+    assert "ValueError" in str(caught.value)
+
+
+@pytest.mark.asyncio
 async def test_executor_failed_node_produces_nothing_downstream() -> None:
     """失败节点**不产出**：下游如有其它活入边照常执行，但从失败那条线拿不到值（回落手填）。"""
     from botnode.workflow.nodes import NodeFailure
@@ -1172,12 +1296,33 @@ async def test_http_error_status_skips_downstream_in_graph(
 
 @pytest.mark.asyncio
 async def test_http_node_raises_on_connection_failure(fake_http: type[FakeAsyncClient]) -> None:
-    """连不上 / 超时是环境问题：直接抛出去，别伪装成「成功但没内容」。"""
+    """连不上 / 超时是环境问题：直接抛，但消息里要带方法 / 地址 / 超时与异常类型。"""
     import httpx
+
+    from botnode.workflow.nodes import EnvironmentFailure
 
     fake_http.error = httpx.ConnectError("连不上")
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(EnvironmentFailure) as caught:
+        await exec_http(http_node(), NodeExecutionContext())
+
+    message = str(caught.value)
+    assert "GET" in message and "https://api.example.com/items" in message
+    assert "ConnectError" in message and "timeout=" in message
+    assert isinstance(caught.value.__cause__, httpx.ConnectError)  # 原异常链保留
+
+
+async def test_http_node_connection_failure_names_the_exception_when_str_is_empty(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """``str(exc)`` 为空（httpx 常见）时消息也不能空着 —— 用类型名兜底。"""
+    import httpx
+
+    from botnode.workflow.nodes import EnvironmentFailure
+
+    fake_http.error = httpx.ReadTimeout("")
+
+    with pytest.raises(EnvironmentFailure, match="ReadTimeout"):
         await exec_http(http_node(), NodeExecutionContext())
 
 
@@ -1401,9 +1546,15 @@ async def test_executor_delay_rejects_bad_wired_seconds() -> None:
             }
         )
 
-    with pytest.raises(ValueError, match="不是数字"):
+    from botnode.workflow.executor import NodeExecutionError
+
+    with pytest.raises(NodeExecutionError, match="不是数字") as caught:
         await SimpleWorkflowRunner().run(graph_with("一会儿"), NodeExecutionContext())
-    with pytest.raises(ValueError, match="超过上限"):
+    assert caught.value.node_id == "d"  # 包装后能一眼看出是哪个节点炸的
+    assert caught.value.node_type == "delay"
+    assert isinstance(caught.value.__cause__, ValueError)
+
+    with pytest.raises(NodeExecutionError, match="超过上限"):
         await SimpleWorkflowRunner().run(graph_with("99999"), NodeExecutionContext())
 
 
@@ -1643,6 +1794,48 @@ async def test_condition_picks_branch_and_engine_prunes_skipped_side() -> None:
     assert not any("[INFO] yes" in line for line in ctx_.log)  # true 侧被剪掉
     assert any("[skip] yes: 分支未选中，未执行" in line for line in ctx_.log)
     assert any("[end] e 流程结束" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_skipping_a_branching_node_cascades_to_its_downstream() -> None:
+    """被跳过的**分流节点**同样要级联：它下游的节点也得跟着跳过。
+
+    真实事故：``条件①「不满足」-> 条件② -> HTTP -> 发送``。条件①走 ``true`` 时条件②被跳过，
+    但条件②的出边是从 ``true`` 端口出来的 —— 按源端口名筛「控制流出边」的话，条件②的下游
+    减不到活入边，HTTP / 发送照样跑（结果两条消息都发出去）。
+    """
+
+    def outer_graph(right: str) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("c1", "condition", left="1", operator="==", right=right),
+                node("c2", "condition", left="1", operator="==", right="1"),
+                node("hit", "log", message="内层下面"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "c1"),
+                edge("c1", "e", source_port="true"),  # 外层满足：直接收尾
+                edge("c1", "c2", source_port="false"),  # 外层不满足：进内层条件
+                edge("c2", "hit", source_port="true"),
+                edge("hit", "e"),
+            ],
+        }
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(WorkflowGraph.model_validate(outer_graph("1")), ctx_)
+    assert any("[condition] c1: 1 == 1 -> true" in line for line in ctx_.log)
+    assert not any("[condition] c2" in line for line in ctx_.log)  # 内层条件被跳过
+    assert not any("[INFO] hit" in line for line in ctx_.log)  # 它的下游一并跳过（级联）
+    assert any("[skip] c2" in line for line in ctx_.log)
+    assert any("[skip] hit" in line for line in ctx_.log)  # 理由也顺着传下去了
+    assert any("[end] e 流程结束" in line for line in ctx_.log)
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(WorkflowGraph.model_validate(outer_graph("2")), ctx_)
+    assert any("[condition] c2: 1 == 1 -> true" in line for line in ctx_.log)  # 这次走内层
+    assert any("[INFO] hit: 内层下面" in line for line in ctx_.log)
 
 
 @pytest.mark.asyncio
@@ -3535,6 +3728,92 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
         assert await load_published_workflows(store, scheduler) == 1
         assert scheduler.get(f"wf-{definition.id}-s") is not None  # 定时开始节点登记上了
         assert ran == []  # 而下游（probe）一次都没跑
+    finally:
+        await engine.dispose()
+
+
+async def test_workflow_failure_log_has_stack_type_and_node() -> None:
+    """执行失败时日志带**堆栈 / 异常类型 / 哪个节点**：只记 ``str(exc)`` 会是空串，排不了错。"""
+    from botnode.core.scheduler import TaskManager
+    from botnode.workflow.runtime import run_published_workflow
+
+    @register_node("boom-env-log")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise ValueError("")  # 消息为空：正是「排不了错」的那种
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+    graph = {
+        "nodes": [node("s", "start"), node("b", "boom-env-log"), node("e", "end")],
+        "edges": [edge("s", "b"), edge("b", "e")],
+    }
+    definition = await store.create("u-admin", "会炸的流")
+    await store.add_version(
+        definition, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+
+    try:
+        async with runtime_logs() as records:
+            await run_published_workflow(definition.id, 1, store, TaskManager())
+            await wait_for_records(records, count=1)
+
+        failures = [r for r in records if r.message == "工作流执行失败"]
+        assert failures, [r.message for r in records]
+        record = failures[0]
+        assert record.extra["error_type"] == "ValueError"  # 取**最内层**原因，不是外层包装
+        assert record.extra["node_id"] == "b"
+        assert record.extra["node_type"] == "boom-env-log"
+        assert record.extra["error"]  # 消息非空（str(exc) 空时用 repr 兜底）
+        assert record.exc_text and "ValueError" in record.exc_text  # 意外异常：堆栈照留
+    finally:
+        await engine.dispose()
+
+
+async def test_expected_environment_failure_logs_one_line(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """可预期的环境问题（超时 / 连不上）：日志**只记一行**、不铺 httpx 那几十行堆栈。
+
+    ``error_type`` / ``error`` 都取**最内层**原因（``ReadTimeout``），不是外层包装的名字 ——
+    排错要看的是「到底哪一步不通、为什么」。
+    """
+    import httpx
+
+    from botnode.core.scheduler import TaskManager
+    from botnode.workflow.runtime import run_published_workflow
+
+    fake_http.error = httpx.ReadTimeout("")
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("h", "http", url="https://v1.hitokoto.cn/", method="GET", timeout=20),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "h"), edge("h", "e")],
+    }
+    definition = await store.create("u-admin", "会超时的流")
+    await store.add_version(
+        definition, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph)
+    )
+
+    try:
+        async with runtime_logs() as records:
+            await run_published_workflow(definition.id, 1, store, TaskManager())
+            await wait_for_records(records, count=1)
+
+        failures = [r for r in records if r.message == "工作流执行失败"]
+        assert failures, [r.message for r in records]
+        record = failures[0]
+        assert record.exc_text in (None, "")  # 不铺堆栈
+        assert record.extra["error_type"] == "ReadTimeout"
+        assert record.extra["node_id"] == "h" and record.extra["node_type"] == "http"
+        error = str(record.extra["error"])
+        assert "v1.hitokoto.cn" in error and "timeout=20.0s" in error  # 一行说清
     finally:
         await engine.dispose()
 
