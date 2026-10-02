@@ -8,7 +8,11 @@
 
     框架 -> 网关：signal 2（ping，带最近 sn）；或 REST API（发消息等动作）
     网关 -> 框架：signal 1（hello）/ signal 0（事件）/ signal 3（pong）/
-                  signal 5（reconnect：这条连接已失效，要主动断开并重新获取网关）
+                  signal 5（reconnect：这条连接已失效，要主动断开并重新获取网关）/
+                  signal 6（resume ack：续传成功，带这一轮有效的 session_id）
+
+两条超时按官方口径：连上后 6 秒内要收到 hello、发出 ping 后 6 秒内要收到 pong，
+超了就主动断开重连（半开连接只能这样发现）。
 
 Kook 的正向 WS **只推事件，不能发消息**；发消息走 **REST API**（HTTP POST，带 Bot Token）。
 所以 :meth:`KookClient.call` 走 HTTP，而不是 WS —— 这是与 OneBot 的另一个关键差异。
@@ -70,6 +74,8 @@ _REST_RETRYABLE_STATUS: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 #: 心跳超时（秒）：官方——发出 ping 后 6 秒内没收到 pong 就进入超时状态
 _PONG_TIMEOUT: float = 6.0
+#: 握手超时（秒）：官方——连上 websocket 后 6 秒内应收到 hello，否则算连接超时
+_HELLO_TIMEOUT: float = 6.0
 
 
 class _RestRetryable(Exception):
@@ -134,6 +140,7 @@ class KookClient:
         )
         self._ws: object | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._hello_task: asyncio.Task[None] | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
         #: 事件收报 -> handler 之间的有界队列：收报文这条腿只往里面塞，另起 worker 按序取，
         #: 保证「一条处理完再下一条」并给上游背压（对齐 OneBot 的 _consume 语义）
@@ -198,6 +205,11 @@ class KookClient:
         """停客户端：关连接、停心跳、停重连（幂等）。"""
         self._stopping = True
         self._stopped.set()
+        if self._hello_task is not None:
+            self._hello_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._hello_task
+            self._hello_task = None
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -382,6 +394,9 @@ class KookClient:
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat(), name="kook-heartbeat"
             )
+            self._hello_task = asyncio.create_task(
+                self._hello_watchdog(), name="kook-hello"
+            )
             self._consume_task = asyncio.create_task(
                 self._consume(), name="kook-events"
             )
@@ -390,6 +405,11 @@ class KookClient:
                 async for raw in ws:
                     await self._handle_raw(cast("str | bytes", raw))
             finally:
+                if self._hello_task is not None:
+                    self._hello_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await self._hello_task
+                    self._hello_task = None
                 if self._heartbeat_task is not None:
                     self._heartbeat_task.cancel()
                     with suppress(asyncio.CancelledError):
@@ -408,6 +428,17 @@ class KookClient:
             self._session_id = ""
             self._sn = 0
             self._gateway_url = ""
+
+    async def _hello_watchdog(self) -> None:
+        """握手表：官方——连上 websocket 后 6 秒内应收到 hello，没收到就是连接超时。
+
+        网关「连上了但不发 hello 也不掐线」这种半开连接，只能靠这一条发现。
+        """
+        await asyncio.sleep(_HELLO_TIMEOUT)
+        if self._greeted:
+            return
+        self._log.warning("kook 握手超时，主动断开重连", timeout=_HELLO_TIMEOUT)
+        await self._close_current()
 
     def _heartbeat_interval(self) -> float:
         """下一轮心跳的间隔：官方是 30 秒 + rand(-5, +5) —— 别让所有客户端同一时刻打心跳。
@@ -459,14 +490,15 @@ class KookClient:
         if signal == 1:  # hello：记下 session_id（断线重连 resume 要用），立刻 ping 一次
             code = data.get("code", 0) if isinstance(data, dict) else 0
             if code != 0:
-                # 续传被拒（session 失效 / token 不对 / 网关不认这条续传）：清掉续传状态，
-                # 下轮重连走全新连接；否则会拿失效 session_id 无限重试
+                # 握手失败（token 无效 / 过期）/ 续传被拒：清掉续传状态并**主动断开**，
+                # 下轮重连走全新连接；干等网关掐线的话，这条死连接会一直挂着
                 self._log.warning(
-                    "kook 网关拒绝续传（hello code=%s），下次将全新连接", code=code
+                    "kook 握手失败（hello code=%s），主动断开后全新连接", code=code
                 )
                 self._session_id = ""
                 self._sn = 0
                 self._gateway_url = ""
+                await self._close_current()
                 return
             if isinstance(data, dict) and isinstance(data.get("session_id"), str):
                 self._session_id = data["session_id"]
@@ -485,6 +517,11 @@ class KookClient:
             return
         if signal == 3:  # pong：心跳回应，不推进 sn（但要把心跳那条腿放行）
             self._pong.set()
+            return
+        if signal == 6:  # resume ack：续传成功，服务端可能下发新的 session_id
+            if isinstance(data, dict) and isinstance(data.get("session_id"), str):
+                self._session_id = data["session_id"]
+            self._greeted = True  # 能续传说明这条连接是好的
             return
         if signal != 0 or not isinstance(data, dict):
             return

@@ -575,6 +575,61 @@ async def test_pong_signal_releases_heartbeat() -> None:
     assert client._pong.is_set() is True  # noqa: SLF001
 
 
+async def test_hello_failure_closes_connection() -> None:
+    """hello code != 0（token 无效 / 续传被拒）：清续传状态并主动断开，不等网关掐线。"""
+    client = KookClient(KookOptions(token="abc"))
+    ws = _FakeWs()
+    client._ws = ws  # noqa: SLF001
+    client._gateway_url = "wss://gw.example/?token=x"  # noqa: SLF001
+
+    await client._handle_raw(json.dumps({"s": 1, "d": {"code": 40103}}))  # noqa: SLF001
+
+    assert ws.closed is True
+    assert client._session_id == ""  # noqa: SLF001
+    assert client._gateway_url == ""  # 下次重新 discover，全新连接  # noqa: SLF001
+
+
+async def test_resume_ack_updates_session_id() -> None:
+    """signal 6（resume ack）：续传成功后按服务端下发的 session_id 更新，并认下这条连接。"""
+    client = KookClient(KookOptions(token="abc"))
+    client._session_id = "sess-old"  # noqa: SLF001
+
+    await client._handle_raw(  # noqa: SLF001
+        json.dumps({"s": 6, "d": {"session_id": "sess-new"}})
+    )
+
+    assert client._session_id == "sess-new"  # noqa: SLF001
+    assert client._greeted is True  # noqa: SLF001
+
+
+async def test_hello_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连上后 6 秒（测试里调短）没收到 hello：主动断开，不干等网关掐线。"""
+    monkeypatch.setattr("nacho.platforms.kook.client._HELLO_TIMEOUT", 0.05)
+    port = free_port()
+    closed: list[int] = []
+
+    async def handler(ws) -> None:  # type: ignore[no-untyped-def]
+        with suppress(Exception):
+            await ws.wait_closed()  # 不发 hello，只挂着
+        closed.append(1)
+
+    server = await serve(handler, "127.0.0.1", port)
+    client = KookClient(
+        KookOptions(
+            gateway=f"ws://127.0.0.1:{port}",
+            token="abc",
+            reconnect_interval=0.05,  # 别等默认 3 秒
+        )
+    )
+    try:
+        await client.start()
+        assert await wait_until(lambda: len(closed) >= 1, timeout=2.0)
+    finally:
+        await client.stop()
+        server.close()
+        await server.wait_closed()
+
+
 async def test_heartbeat_closes_connection_when_pong_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
