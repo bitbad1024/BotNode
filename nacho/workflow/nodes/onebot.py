@@ -30,7 +30,7 @@ from typing import Any
 from ..models import WorkflowNode
 from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
 from .registry import register_node
-from .send import _dump
+from .send import _clip, _dump
 
 
 def _retcode_of(response: Any) -> int:
@@ -95,11 +95,14 @@ async def exec_onebot(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str
 
     # 回执不成功只是「对方的回答」：记 warning 照常往下走（连不上 / 没连接那种才抛，见模块文档）
     report = ctx.logger.info if ok else ctx.logger.warning
-    report(
-        f"[onebot:{node.id}] reply -> retcode {retcode}",
-        ok=ok,
-        retcode=retcode,
-        data=data,
-    )
+    fields: dict[str, object] = {
+        "ok": ok,
+        "retcode": retcode,
+        "data": data,
+        "message_chars": len(message),
+    }
+    if not ok:  # 失败才带内容片段：看得出到底发了什么
+        fields["message_preview"] = _clip(message)
+    report(f"[onebot:{node.id}] reply -> retcode {retcode}", **fields)
     ctx.log.append(f"[onebot] {node.id}: reply -> retcode {retcode}")
     return {"onebot_retcode": retcode, "onebot_data": data}

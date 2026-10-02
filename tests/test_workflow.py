@@ -1838,6 +1838,65 @@ async def test_send_without_target_skips_and_requires_gateway() -> None:
         await exec_send(node_, no_gateway)
 
 
+class _RecordingLogger:
+    """假的日志实例：记下消息与结构化字段（``ctx.log`` 只有文字，看不到字段）。"""
+
+    def __init__(self) -> None:
+        self.infos: list[tuple[str, dict[str, object]]] = []
+        self.warnings: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, message: str, **fields: object) -> None:
+        self.infos.append((message, fields))
+
+    def warning(self, message: str, **fields: object) -> None:
+        self.warnings.append((message, fields))
+
+
+@pytest.mark.asyncio
+async def test_send_failure_logs_what_was_sent() -> None:
+    """回执失败时日志带上内容长度与片段：不再只剩一个 ok=False，看得出到底发了什么。"""
+    from nacho.workflow.nodes import exec_send
+
+    content = "当前时间为：2026-10-02 18:57:51"
+    gateway = _FakeGateway(response=_FakeActionResponse(status="failed", retcode=1200))
+    recorder = _RecordingLogger()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway, logger=recorder)
+    node_ = WorkflowNode(id="snd1", type="send")
+    ctx_.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
+        "message": content,
+    }
+
+    await exec_send(node_, ctx_)
+
+    _, fields = recorder.warnings[-1]
+    assert fields["ok"] is False
+    assert fields["message_chars"] == len(content)
+    assert "当前时间为" in str(fields["message_preview"])
+
+
+@pytest.mark.asyncio
+async def test_send_success_logs_length_without_preview() -> None:
+    """发送成功只记长度、不记内容片段（日志不囤正文）。"""
+    from nacho.workflow.nodes import exec_send
+
+    gateway = _FakeGateway()
+    recorder = _RecordingLogger()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway, logger=recorder)
+    node_ = WorkflowNode(id="snd1", type="send")
+    ctx_.inputs = {
+        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
+        "message": "开播了",
+    }
+
+    await exec_send(node_, ctx_)
+
+    _, fields = recorder.infos[-1]
+    assert fields["ok"] is True
+    assert fields["message_chars"] == 3
+    assert "message_preview" not in fields
+
+
 @pytest.mark.asyncio
 async def test_send_empty_message_skips() -> None:
     """内容为空（上游「算不出来」送的就是空串）：不发，send_ok=False 送下游，也不碰网关。"""

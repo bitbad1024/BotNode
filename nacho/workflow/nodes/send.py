@@ -44,6 +44,15 @@ from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, inp
 from .registry import register_node
 
 
+#: 日志里展示「发出去的内容」时的截断长度（避免一段长文本刷屏）
+CLIP_CHARS: int = 40
+
+
+def _clip(raw: str) -> str:
+    """日志里展示的内容片段：太长截断（够看出发了什么就行）。"""
+    return raw if len(raw) <= CLIP_CHARS else raw[:CLIP_CHARS] + "…"
+
+
 def _dump(data: object) -> str:
     """回执数据转文本：紧凑 JSON（不是 JSON 原生的值用 ``str`` 兜底）。"""
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -98,11 +107,15 @@ async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
 
     # 回执不成功只是「对方的回答」：记 warning 照常往下走（连不上 / 没连接那种才抛，见模块文档）
     report = ctx.logger.info if ok else ctx.logger.warning
-    report(
-        f"[send:{node.id}] reply -> {'ok' if ok else 'failed'}",
-        target_platform=getattr(target, "platform", ""),
-        ok=ok,
-        data=data,
-    )
+    fields: dict[str, object] = {
+        "target_platform": getattr(target, "platform", ""),
+        "ok": ok,
+        "data": data,
+        "message_chars": len(message),
+    }
+    if not ok:
+        # 失败才带内容片段：光一个 ok=False 看不出去的是什么（上游送了空串 / 内容被截断都能一眼看出）
+        fields["message_preview"] = _clip(message)
+    report(f"[send:{node.id}] reply -> {'ok' if ok else 'failed'}", **fields)
     ctx.log.append(f"[send] {node.id}: reply -> {'ok' if ok else 'failed'}")
     return {"send_ok": ok, "send_data": data}
