@@ -111,6 +111,8 @@ export interface ValidationReport {
 export interface WorkflowData {
   id: string
   owner_id: string
+  /** 归属的昵称（空串 = 查不到 / 没设过）：管理员看的是全库，列表里靠它认人 */
+  owner_name: string
   name: string
   status: 'draft' | 'published'
   /** **运行开关**：发布 ≠ 运行 —— 默认关，拨开才真的按已发布版本跑 */
@@ -176,9 +178,15 @@ export function createWorkflow(name: string) {
   return http.post<WorkflowData, { name: string }>('/workflows', { name })
 }
 
-/** GET /workflows：列表（普通用户只看自己的）。 */
-export function listWorkflows() {
-  return http.get<WorkflowData[]>('/workflows')
+/**
+ * GET /workflows：列表（普通用户只看自己的）。
+ *
+ * `ownerId` 只对管理员有意义（普通用户传了也只看得见自己的）：按归属筛时传它。
+ */
+export function listWorkflows(ownerId = '') {
+  return http.get<WorkflowData[]>('/workflows', {
+    params: ownerId ? { owner_id: ownerId } : undefined,
+  })
 }
 
 /** GET /workflows/{id}：单个工作流详情。 */

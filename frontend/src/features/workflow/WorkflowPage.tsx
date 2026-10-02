@@ -13,8 +13,10 @@ import {
   setWorkflowEnabled,
   type WorkflowData,
 } from './workflowApi'
+import { fetchOwners, type Owner } from '../../lib/ownersApi'
 import { ApiRequestError } from '../../lib/http'
 import { useToast } from '../../common/Toast'
+import OwnerFilter, { ownerName } from '../../common/OwnerFilter'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
 import { EmptyState } from '../../common/EmptyState'
 import { ListSkeleton } from '../../common/Skeleton'
@@ -62,19 +64,25 @@ export default function WorkflowPage() {
   const [renameValue, setRenameValue] = useState('')
   /** 打开设置弹窗的那条工作流（null = 没开） */
   const [settingsFor, setSettingsFor] = useState<WorkflowData | null>(null)
+  /** 可选归属：归属列的显示名与筛选下拉都用它（普通用户只会拿到自己那一条） */
+  const [owners, setOwners] = useState<Owner[]>([])
+  /** 筛选中的归属 id；空串 = 全部（下拉只在选项有两个以上时出现） */
+  const [ownerFilter, setOwnerFilter] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     setFailure('')
     try {
-      const { data } = await listWorkflows()
-      setItems(data)
+      // 归属清单与列表一起取：它同时供归属列显示名与筛选下拉用
+      const [list, ownerList] = await Promise.all([listWorkflows(ownerFilter), fetchOwners()])
+      setItems(list.data)
+      setOwners(ownerList.data)
     } catch (err) {
       setFailure(describe(err))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [ownerFilter])
 
   useEffect(() => {
     void load()
@@ -162,10 +170,13 @@ export default function WorkflowPage() {
           <div className={styles.panelHeadText}>
             <h3 className={styles.panelTitle}>工作流列表</h3>
           </div>
-          <button className="btn btn-primary" onClick={() => setCreating(true)}>
-            <IconPlus size={15} />
-            新建
-          </button>
+          <div className={styles.panelActions}>
+            <OwnerFilter owners={owners} value={ownerFilter} onChange={setOwnerFilter} />
+            <button className="btn btn-primary" onClick={() => setCreating(true)}>
+              <IconPlus size={15} />
+              新建
+            </button>
+          </div>
         </div>
         {loading ? (
           <div className={styles.skeletonPad}>
@@ -187,7 +198,8 @@ export default function WorkflowPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                {/* 表头顺序照着下面每行的 td 来：名称 / 状态 / 运行 / 版本 / 时间 / 操作 */}
+                {/* 表头顺序照着下面每行的 td 来：所有者 / 名称 / 状态 / 运行 / 版本 / 时间 / 操作 */}
+                <th>所有者</th>
                 <th>名称</th>
                 <th>状态</th>
                 <th>运行</th>
@@ -202,6 +214,11 @@ export default function WorkflowPage() {
                 const st = statusLabel(w)
                 return (
                   <tr key={w.id}>
+                    {/* 归属：普通用户只有自己一份，管理员看的是全库 —— 名字撞车时靠它认人 */}
+                    <td className={styles.ownerCell} title={w.owner_id}>
+                      {/* 后端已给 owner_name；万一它是空串（老数据 / 没设昵称）就用归属清单兜底 */}
+                      {w.owner_name || ownerName(w.owner_id, owners)}
+                    </td>
                     <td className={styles.nameCell}>
                       {renameId === w.id ? (
                         <input
