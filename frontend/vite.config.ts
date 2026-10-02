@@ -15,6 +15,10 @@ export default defineConfig({
     },
   },
   server: {
+    // 监听所有网卡：同一局域网里的手机 / 另一台机器也能打开控制台调试
+    // （只在本机用就换成 '127.0.0.1'）。开发服没有额外防护，别放在公共网络里跑。
+    // 顺带解决一个坑：默认只绑 ::1 时，http://127.0.0.1:<port> 会连接被拒。
+    host: '0.0.0.0',
     // 5173 是 Vite 的默认端口，但 Windows 会随机保留一段动态端口范围
     // （netsh interface ipv4 show excludedportrange protocol=tcp 可见），
     // 且保留段不固定、每次系统/服务重启都可能变化：之前选的 5273 后来就落进了
