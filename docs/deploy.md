@@ -90,8 +90,8 @@ docker compose up -d --build
 
 | 容器路径 | 装什么 | 丢了会怎样 |
 |---|---|---|
-| `/app/logs` | 日志分片 + `sqlite` 数据库文件（`[database] path` 默认就落在 `logs/`） | 日志没了；**sqlite 用户所有数据都没了** |
-| `/app/data` | 头像等上传文件 | 头像变回默认 |
+| `/app/logs` | 日志分片（`[logging.file].dir` 默认 `logs/`） | 只是日志没了，数据无碍 |
+| `/app/data` | `sqlite` 数据库（`[database].path` 默认 `data/botnode.db`）、`secret_key`（Kook 凭证加密密钥）、头像上传 | **用户数据没了**；Bot Token 也得重填（密钥丢了解不开旧密文） |
 | `/app/config.toml` | 配置（只读挂载） | 没挂就按代码默认值启动（会打一行 warning） |
 
 ## 3. 容器里要改的配置
@@ -105,20 +105,20 @@ host = "0.0.0.0"
 port = 16700
 
 [api]
-# 保持 127.0.0.1 即可：nginx 和它在同一个容器里，走回环就够了。
-# 想让外部直连 18080（不经 nginx），才改成 "0.0.0.0" 并映射端口。
+# 代码默认是 "0.0.0.0"（谁都能连）；容器里 nginx 和它同处一个容器，走回环就够，建议改回：
 host = "127.0.0.1"
 port = 18080
 ```
 
 其余按需：
 
-* `[database]`：默认 `sqlite`（文件落在 `/app/logs`，随卷持久化）；要用 MariaDB 就把 `driver` 改成
+* `[database]`：默认 `sqlite`（文件落在 `/app/data/botnode.db`，随 `botnode-data` 卷持久化）；要用 MariaDB 就把 `driver` 改成
   `mariadb` 并填连接项 —— 注意容器里的 `host` 不是 `127.0.0.1`，而是数据库服务的地址
   （compose 里加一个 `mariadb` 服务，host 就写服务名）。
 * `[cache]`：默认进程内内存缓存；要用 Redis 同理，`host` 写 Redis 服务名而不是本机。
 * `[logging]`：控制台出口在容器里就是 `docker logs botnode`，文件出口落在 `/app/logs`。
-* `[kook]`：Kook 是正向连接，出网即可，不需要额外映射端口。
+* `[kook]`：Kook 是正向连接，出网即可，不需要额外映射端口；`secret_key` 留空会自动生成到
+  `/app/data/secret_key`（在 `botnode-data` 卷里 —— 卷丢了 Bot Token 要重填）。
 
 ## 4. 不用 Docker 的部署
 
@@ -148,7 +148,8 @@ port = 18080
 
 ## 5. 上线前必须做的事
 
-* **改掉演示账号**（`admin` / `robot` / `guest`）与默认密码 —— 它们由开发用代码写入，公网部署前删掉或改密；
+* **改掉演示账号 `admin` 的默认密码**（`botnode-admin`，由开发用代码写入）—— 公网部署前务必改密；
+  要别的账号不用改代码：在登录页注册即可（新账号是普通用户）；
 * **`config.toml` 别提交、别打进镜像**（里面有数据库口令与 `secret_key`），仓库已 `.gitignore`；
 * 对外只暴露 `80` 与 OneBot 的 `16700`；OneBot 端口尽量限制来源 IP；
 * 走 HTTPS 就在前面再放一层反向代理（或在 nginx 里加证书），Cookie 是登录凭据，别裸奔；
@@ -171,12 +172,12 @@ docker compose up -d --build          # 重新构建并滚动替换
 | 控制台能开，接口全 502 | 后端没起来。`docker logs botnode` 看是不是连不上数据库（`[database]` 填错） |
 | OneBot 实现端连不上 `16700` | 容器里 `[onebot] host` 还是 `127.0.0.1` —— 改成 `0.0.0.0` 并确认宿主端口已映射 |
 | 刷新工作流页面 404 | 前端的静态服务器没配「回落到 `index.html`」；用镜像里的 nginx 没这个问题 |
-| 数据重启后没了 | 没挂 `/app/logs`（sqlite 在那里面），或用了 `docker run --rm` |
+| 数据重启后没了 | 没挂 `/app/data`（sqlite 在那里面），或用了 `docker run --rm` |
 | 登录后一会儿就掉 | 前面还套了一层代理时，确认 `X-Forwarded-Proto` 传对了（HTTPS 下 Cookie 要 `Secure`） |
 | 构建时拉依赖很慢 | 用 `--build-arg` 换 NPM / PyPI 镜像源（见第 1 节） |
 | 构建时报 `failed to resolve source metadata ... EOF` | Docker Hub 连不上，配镜像加速器（见第 8 节） |
 
-部署相关的安全细节见 [../SECURITY.md](../SECURITY.md)。
+部署相关的安全细节见 [`.github/SECURITY.md`](../.github/SECURITY.md)。
 
 ## 8. 拉不到基础镜像？
 

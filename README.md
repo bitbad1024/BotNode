@@ -52,7 +52,7 @@ build-all.bat --no-docker     :: 只打包产物，不碰 Docker
 ./build-all.sh                # Linux / macOS，参数同上
 ```
 
-端口、挂载卷、容器里要改的配置（比如 `[onebot] host` 要改成 `0.0.0.0`）、不用 Docker 的部署方式，
+端口、挂载卷、容器里要改的配置（比如 `[api] host` 建议改回 `127.0.0.1`）、不用 Docker 的部署方式，
 见 [docs/deploy.md](docs/deploy.md)。
 
 ## 测试

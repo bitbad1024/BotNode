@@ -29,9 +29,9 @@ services:
     volumes:
       # 配置（含数据库密码、secret_key）由外面挂进去，绝不打进镜像
       - ./config.toml:/app/config.toml:ro
-      # 日志分片 + sqlite 数据库文件（[database] path 默认落在 logs/ 下）
+      # 日志分片（[logging.file].dir 默认 logs/）
       - botnode-logs:/app/logs
-      # 头像等上传文件
+      # sqlite 数据库（[database].path 默认 data/botnode.db）、Kook 的 secret_key、头像上传
       - botnode-data:/app/data
     environment:
       TZ: Asia/Shanghai

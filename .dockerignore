@@ -27,9 +27,10 @@ data/
 # ---- 本地配置（含数据库密码与 secret_key，绝不能进镜像）----
 config.toml
 
-# ---- 与运行无关：测试 / 文档 / 示例 ----
+# ---- 与运行无关：社区文档 / 启动脚本 / 测试 / 文档 / 示例 ----
+.github/
+scripts/
 tests/
 docs/
 examples/
 *.md
-TODO.md
