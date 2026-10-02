@@ -956,6 +956,83 @@ async def test_executor_stops_downstream_on_node_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_branch_pruning_ignores_cross_branch_data_edges() -> None:
+    """分流未选中的分支**不该因为一条跨分支的数据边**而执行。
+
+    真实场景：``start.target -> send.target`` 是数据边（跨在条件之前），而 send 的触发走
+    ``trigger`` 边。以前「只要还有一条活入边就执行」，于是没走中的那条分支上的 send 也跑了
+    （message 拿不到，报「内容为空」）。现在执行与否只看**控制流**入边。
+    """
+    ran: list[str] = []
+
+    @register_node("prune-mark-a")
+    async def exec_mark_a(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    @register_node("prune-mark-b")
+    async def exec_mark_b(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("c", "condition", left="1", operator="==", right="2"),  # 1 == 2 -> false
+                node("on_true", "prune-mark-a"),
+                node("on_false", "prune-mark-b"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "c"),
+                edge("c", "on_true"),  # true 出口：没走中
+                edge("c", "on_false", "false", "trigger"),  # false 出口：走中
+                # 跨分支的数据边（模仿 start.target -> send.target）：以前它会把 on_true 撑活
+                edge("s", "on_true", "message", "value"),
+                edge("s", "on_false", "message", "value"),
+                edge("on_true", "e"),
+                edge("on_false", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    assert ran == ["on_false"]  # 只有走中的那条分支执行
+    assert any("[skip] on_true" in line for line in ctx.log)
+
+
+@pytest.mark.asyncio
+async def test_node_with_only_data_edges_still_runs() -> None:
+    """只有数据入边（没有控制流入边）的节点照常执行：数据边不驱动、也不阻止执行。"""
+    ran: list[str] = []
+
+    @register_node("data-only")
+    async def exec_data_only(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("d", "data-only"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "d", "message", "value"),  # 纯数据边：不是控制流
+                edge("d", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    assert ran == ["d"]
+
+
+@pytest.mark.asyncio
 async def test_executor_wraps_environment_error_with_node_context() -> None:
     """节点抛环境异常（不是 NodeFailure）：包上节点信息再抛，原异常链保留（堆栈里看得到）。"""
     from botnode.workflow.executor import NodeExecutionError
@@ -1713,6 +1790,48 @@ async def test_condition_picks_branch_and_engine_prunes_skipped_side() -> None:
     assert not any("[INFO] yes" in line for line in ctx_.log)  # true 侧被剪掉
     assert any("[skip] yes: 分支未选中，未执行" in line for line in ctx_.log)
     assert any("[end] e 流程结束" in line for line in ctx_.log)
+
+
+@pytest.mark.asyncio
+async def test_skipping_a_branching_node_cascades_to_its_downstream() -> None:
+    """被跳过的**分流节点**同样要级联：它下游的节点也得跟着跳过。
+
+    真实事故：``条件①「不满足」-> 条件② -> HTTP -> 发送``。条件①走 ``true`` 时条件②被跳过，
+    但条件②的出边是从 ``true`` 端口出来的 —— 按源端口名筛「控制流出边」的话，条件②的下游
+    减不到活入边，HTTP / 发送照样跑（结果两条消息都发出去）。
+    """
+
+    def outer_graph(right: str) -> dict[str, object]:
+        return {
+            "nodes": [
+                node("s", "start"),
+                node("c1", "condition", left="1", operator="==", right=right),
+                node("c2", "condition", left="1", operator="==", right="1"),
+                node("hit", "log", message="内层下面"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "c1"),
+                edge("c1", "e", source_port="true"),  # 外层满足：直接收尾
+                edge("c1", "c2", source_port="false"),  # 外层不满足：进内层条件
+                edge("c2", "hit", source_port="true"),
+                edge("hit", "e"),
+            ],
+        }
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(WorkflowGraph.model_validate(outer_graph("1")), ctx_)
+    assert any("[condition] c1: 1 == 1 -> true" in line for line in ctx_.log)
+    assert not any("[condition] c2" in line for line in ctx_.log)  # 内层条件被跳过
+    assert not any("[INFO] hit" in line for line in ctx_.log)  # 它的下游一并跳过（级联）
+    assert any("[skip] c2" in line for line in ctx_.log)
+    assert any("[skip] hit" in line for line in ctx_.log)  # 理由也顺着传下去了
+    assert any("[end] e 流程结束" in line for line in ctx_.log)
+
+    ctx_ = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(WorkflowGraph.model_validate(outer_graph("2")), ctx_)
+    assert any("[condition] c2: 1 == 1 -> true" in line for line in ctx_.log)  # 这次走内层
+    assert any("[INFO] hit: 内层下面" in line for line in ctx_.log)
 
 
 @pytest.mark.asyncio

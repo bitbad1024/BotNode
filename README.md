@@ -56,9 +56,11 @@ cd frontend && npm install && npm run build
 
 内置工作流节点：`start` / `end`、`log`、`test`、`constant`、`http`、`delay`、`json`、`regex`、`now`、`condition`、`send`、`onebot`、`operator`、`cache`、`target`。
 
-两个运行规则值得记住：
+三个运行规则值得记住：
 
 - **值沿边流**：节点产出按输出端口名往下传，下游按入边接收，没有全局变量。
+- **执行看控制流**：节点要不要跑只看 `trigger` 入边 —— 数据边（`message` / `target`）只送值，
+  所以分流没走中的分支不会因为一条跨分支的数据边而误跑。
 - **失败分两类**：业务失败（算不出、取不到、对方报错）抛 `NodeFailure`，只停当前分支，别的支路照跑；环境问题（连不上、没接线、缺依赖）抛普通异常，整条流程中断并留下堆栈。
 
 自己写节点、写契约、写校验规则，见 [docs/workflow/workflow.md](docs/workflow/workflow.md)。
