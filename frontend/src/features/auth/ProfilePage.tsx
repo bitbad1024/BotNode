@@ -281,36 +281,23 @@ export default function ProfilePage() {
       <div className={styles.page}>
         <div className={styles.head}>
           <h1 className={styles.title}>个人设置</h1>
-          <p className={styles.sub}>修改你的昵称和头像，其他用户可以看到。</p>
+          <p className={styles.sub}>昵称与头像其他用户可见；密码只影响你自己的登录。</p>
         </div>
-        <div className={styles.grid}>
-          <div className={styles.card}>
-            <Skeleton width={56} height={18} />
-            <div className={styles.skelAvatarRow}>
-              <Skeleton width={80} height={80} radius="50%" />
-              <div className={styles.skelLines}>
-                <Skeleton width="68%" height={13} />
-                <Skeleton width="42%" height={11} />
-                <Skeleton width={168} height={34} radius={10} />
-              </div>
-            </div>
-            <div className={styles.divider} />
-            <Skeleton width={48} height={18} />
-            <div className={styles.skelLines} style={{ marginTop: 16 }}>
-              <Skeleton width="100%" height={46} radius={11} />
-              <Skeleton width={128} height={40} radius={10} />
-            </div>
+        <div className={styles.skelHero}>
+          <Skeleton width={84} height={84} radius="50%" />
+          <div className={styles.skelLines}>
+            <Skeleton width="38%" height={18} />
+            <Skeleton width="26%" height={12} />
           </div>
-          <div className={styles.card}>
-            <Skeleton width={56} height={18} />
-            <div className={styles.skelAvatarRow}>
-              <Skeleton width={64} height={64} radius="50%" />
-              <div className={styles.skelLines}>
-                <Skeleton width="62%" height={14} />
-                <Skeleton width="40%" height={11} />
-              </div>
-            </div>
-          </div>
+        </div>
+        <div className={styles.skelCard}>
+          <Skeleton width={64} height={16} />
+          <Skeleton width="100%" height={42} radius={11} />
+        </div>
+        <div className={styles.skelCard}>
+          <Skeleton width={64} height={16} />
+          <Skeleton width="100%" height={42} radius={11} />
+          <Skeleton width="100%" height={42} radius={11} />
         </div>
       </div>
     )
@@ -320,7 +307,7 @@ export default function ProfilePage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <h1 className={styles.title}>个人设置</h1>
-        <p className={styles.sub}>修改你的昵称和头像，其他用户可以看到。</p>
+        <p className={styles.sub}>昵称与头像其他用户可见；密码只影响你自己的登录。</p>
       </div>
 
       {error && (
@@ -338,96 +325,110 @@ export default function ProfilePage() {
         </div>
       )}
 
-      <div className={styles.grid}>
-        {/* 左侧：编辑卡片 */}
-        <div className={styles.card}>
-          <h2 className={styles.cardTitle}>头像</h2>
+      {/* 资料横幅：头像 + 昵称 + 账号 + 角色。换头像的相机直接贴在头像上，不再另起一行 */}
+      <section className={styles.hero}>
+        <div className={styles.heroAvatarWrap}>
+          <AvatarImage initial={initial} size="xl" />
+          <button
+            className={styles.heroEdit}
+            type="button"
+            title="更换头像"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <IconCamera size={15} />
+          </button>
+        </div>
 
-          <div className={styles.avatarSection}>
-            <div className={styles.avatarWrap}>
-              <AvatarImage initial={initial} size="xl" />
-              <button
-                className={styles.avatarEditBtn}
-                type="button"
-                title="更换头像"
-                disabled={uploading}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <IconCamera size={16} />
-              </button>
-            </div>
-
-            <div className={styles.avatarInfo}>
-              <p className={styles.avatarHint}>
-                支持 PNG / JPEG / WebP / GIF，最大 {formatBytes(AVATAR_MAX_BYTES)}
-              </p>
-              {hasAvatar && profile?.avatar_size != null && (
-                <p className={styles.avatarMeta}>
-                  当前头像：{formatBytes(profile.avatar_size)}
-                  {profile.avatar_updated_at != null && profile.avatar_updated_at > 0 && (
-                    <>，更新于 {new Date(profile.avatar_updated_at * 1000).toLocaleDateString('zh-CN')}</>
-                  )}
-                </p>
-              )}
-              <div className={styles.avatarActions}>
-                <button
-                  className="btn"
-                  type="button"
-                  disabled={uploading}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {uploading ? (
-                    <span className={styles.busyInner}>
-                      <span className="spinner" />
-                      上传中…
-                    </span>
-                  ) : (
-                    <>
-                      <IconCamera size={15} />
-                      {hasAvatar ? '更换头像' : '上传头像'}
-                    </>
-                  )}
-                </button>
-                {hasAvatar && (
-                  <button
-                    className="btn btn-danger"
-                    type="button"
-                    disabled={removing}
-                    onClick={() => setConfirm('avatar')}
-                  >
-                    {removing ? (
-                      <span className={styles.busyInner}>
-                        <span className="spinner" />
-                        删除中…
-                      </span>
-                    ) : (
-                      <>
-                        <IconTrash size={15} />
-                        删除头像
-                      </>
-                    )}
-                  </button>
-                )}
-              </div>
-            </div>
+        <div className={styles.heroInfo}>
+          <div className={styles.heroName}>
+            {nicknameTrimmed || profile.nickname || '未命名'}
           </div>
+          <div className={styles.heroMeta}>
+            <span className={styles.heroAccount}>@{profile.account}</span>
+            {profile.roles.map((r) => (
+              <span key={r} className={`chip ${r === 'admin' ? 'chip-accent' : ''}`}>
+                {r}
+              </span>
+            ))}
+          </div>
+          <p className={styles.heroNote}>
+            支持 PNG / JPEG / WebP / GIF，最大 {formatBytes(AVATAR_MAX_BYTES)}
+            {hasAvatar && profile.avatar_size != null && (
+              <>
+                {' · '}当前 {formatBytes(profile.avatar_size)}
+                {profile.avatar_updated_at != null && profile.avatar_updated_at > 0 && (
+                  <>
+                    （更新于{' '}
+                    {new Date(profile.avatar_updated_at * 1000).toLocaleDateString('zh-CN')}）
+                  </>
+                )}
+              </>
+            )}
+          </p>
+        </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            style={{ display: 'none' }}
-            onChange={onFileChange}
-          />
+        <div className={styles.heroActions}>
+          <button
+            className="btn"
+            type="button"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploading ? (
+              <span className={styles.busyInner}>
+                <span className="spinner" />
+                上传中…
+              </span>
+            ) : (
+              <>
+                <IconCamera size={15} />
+                {hasAvatar ? '更换头像' : '上传头像'}
+              </>
+            )}
+          </button>
+          {hasAvatar && (
+            <button
+              className="btn btn-danger"
+              type="button"
+              disabled={removing}
+              onClick={() => setConfirm('avatar')}
+            >
+              {removing ? (
+                <span className={styles.busyInner}>
+                  <span className="spinner" />
+                  删除中…
+                </span>
+              ) : (
+                <>
+                  <IconTrash size={15} />
+                  删除头像
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      </section>
 
-          <div className={styles.divider} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        style={{ display: 'none' }}
+        onChange={onFileChange}
+      />
 
-          <h2 className={styles.cardTitle}>昵称</h2>
+      <div className={styles.sections}>
+        {/* 昵称：一个输入框 + 一颗按钮，同一行 */}
+        <section className={styles.card}>
+          <div className={styles.cardHead}>
+            <h2 className={styles.cardTitle}>昵称</h2>
+            <p className={styles.cardNote}>
+              其他用户看到的名字，{NICKNAME_MIN_LENGTH}-{NICKNAME_MAX_LENGTH} 个字符。
+            </p>
+          </div>
           <form className={styles.form} onSubmit={onSubmitNickname} noValidate>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="profile-nickname">
-                展示名称
-              </label>
+            <div className={styles.inlineForm}>
               <div className={styles.control}>
                 <span className={styles.controlIcon}>
                   <IconUser size={18} />
@@ -441,143 +442,126 @@ export default function ProfilePage() {
                   maxLength={NICKNAME_MAX_LENGTH + 10}
                 />
               </div>
-              {nicknameInvalid && nicknameTrimmed.length > 0 && (
-                <p className={styles.fieldHint}>
-                  昵称需要 {NICKNAME_MIN_LENGTH}-{NICKNAME_MAX_LENGTH} 个字符
-                </p>
-              )}
+              <button className="btn btn-primary" type="submit" disabled={!canSubmitNickname}>
+                {savingNickname ? (
+                  <span className={styles.busyInner}>
+                    <span className="spinner" />
+                    保存中…
+                  </span>
+                ) : (
+                  <>
+                    <IconCheck size={15} />
+                    保存昵称
+                  </>
+                )}
+              </button>
             </div>
-            <button
-              className="btn btn-primary"
-              type="submit"
-              disabled={!canSubmitNickname}
-            >
-              {savingNickname ? (
-                <span className={styles.busyInner}>
-                  <span className="spinner" />
-                  保存中…
-                </span>
-              ) : (
-                <>
-                  <IconCheck size={15} />
-                  保存昵称
-                </>
-              )}
-            </button>
+            {nicknameInvalid && nicknameTrimmed.length > 0 && (
+              <p className={styles.fieldHint}>
+                昵称需要 {NICKNAME_MIN_LENGTH}-{NICKNAME_MAX_LENGTH} 个字符
+              </p>
+            )}
           </form>
+        </section>
 
-          <div className={styles.divider} />
-
-          <h2 className={styles.cardTitle}>修改密码</h2>
-          <form className={styles.form} onSubmit={onSubmitPassword} noValidate>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="profile-current-password">
-                当前密码
-              </label>
-              <div className={styles.control}>
-                <span className={styles.controlIcon}>
-                  <IconLock size={18} />
-                </span>
-                <input
-                  id="profile-current-password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="profile-new-password">
-                新密码
-              </label>
-              <div className={styles.control}>
-                <span className={styles.controlIcon}>
-                  <IconLock size={18} />
-                </span>
-                <input
-                  id="profile-new-password"
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={`${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} 位`}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                />
-              </div>
-              {passwordLengthInvalid && (
-                <p className={styles.fieldHint}>
-                  新密码需要 {PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} 位
-                </p>
-              )}
-            </div>
-
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="profile-confirm-password">
-                再输一次新密码
-              </label>
-              <div className={styles.control}>
-                <span className={styles.controlIcon}>
-                  <IconLock size={18} />
-                </span>
-                <input
-                  id="profile-confirm-password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-              </div>
-              {passwordNotConfirmed && (
-                <p className={styles.fieldHint}>两次输入的新密码不一致</p>
-              )}
-              {passwordUnchanged && (
-                <p className={styles.fieldHint}>新密码不能与当前密码相同</p>
-              )}
-            </div>
-
-            <button className="btn btn-primary" type="submit" disabled={!canSubmitPassword}>
-              {savingPassword ? (
-                <span className={styles.busyInner}>
-                  <span className="spinner" />
-                  提交中…
-                </span>
-              ) : (
-                <>
-                  <IconCheck size={15} />
-                  修改密码
-                </>
-              )}
-            </button>
-            <p className={styles.fieldHint}>
+        {/* 密码：当前密码独占一行，新密码与「再输一次」并排 */}
+        <section className={styles.card}>
+          <div className={styles.cardHead}>
+            <h2 className={styles.cardTitle}>密码</h2>
+            <p className={styles.cardNote}>
               改完其他设备会全部下线，当前这台不用重新登录。
             </p>
-          </form>
-        </div>
-
-        {/* 右侧：预览卡片 */}
-        <div className={styles.card}>
-          <h2 className={styles.cardTitle}>预览</h2>
-          <div className={styles.preview}>
-            <div className={styles.previewAvatarWrap}>
-              <AvatarImage initial={initial} size="lg" />
-            </div>
-            <div className={styles.previewInfo}>
-              <span className={styles.previewName}>{nicknameTrimmed || '未命名'}</span>
-              <span className={styles.previewAccount}>@{profile.account}</span>
-              <div className={styles.previewRoles}>
-                {profile.roles.map((r) => (
-                  <span key={r} className={`chip ${r === 'admin' ? 'chip-accent' : ''}`}>
-                    {r}
+          </div>
+          <form className={styles.form} onSubmit={onSubmitPassword} noValidate>
+            <div className={styles.passwordGrid}>
+              <div className={`${styles.field} ${styles.span2}`}>
+                <label className={styles.label} htmlFor="profile-current-password">
+                  当前密码
+                </label>
+                <div className={styles.control}>
+                  <span className={styles.controlIcon}>
+                    <IconLock size={18} />
                   </span>
-                ))}
+                  <input
+                    id="profile-current-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="profile-new-password">
+                  新密码
+                </label>
+                <div className={styles.control}>
+                  <span className={styles.controlIcon}>
+                    <IconLock size={18} />
+                  </span>
+                  <input
+                    id="profile-new-password"
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={`${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} 位`}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                  />
+                </div>
+                {passwordLengthInvalid && (
+                  <p className={styles.fieldHint}>
+                    新密码需要 {PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} 位
+                  </p>
+                )}
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="profile-confirm-password">
+                  再输一次新密码
+                </label>
+                <div className={styles.control}>
+                  <span className={styles.controlIcon}>
+                    <IconLock size={18} />
+                  </span>
+                  <input
+                    id="profile-confirm-password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                </div>
+                {passwordNotConfirmed && (
+                  <p className={styles.fieldHint}>两次输入的新密码不一致</p>
+                )}
+                {passwordUnchanged && (
+                  <p className={styles.fieldHint}>新密码不能与当前密码相同</p>
+                )}
               </div>
             </div>
-          </div>
-          <p className={styles.previewNote}>
-            其他用户看到的昵称与头像如左图所示。
-          </p>
-        </div>
+
+            <div>
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={!canSubmitPassword}
+              >
+                {savingPassword ? (
+                  <span className={styles.busyInner}>
+                    <span className="spinner" />
+                    提交中…
+                  </span>
+                ) : (
+                  <>
+                    <IconCheck size={15} />
+                    修改密码
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        </section>
       </div>
 
       {confirm === 'nickname' && (

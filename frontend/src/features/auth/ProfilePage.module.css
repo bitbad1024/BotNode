@@ -1,12 +1,21 @@
-/* 个人设置页 */
+/* 个人设置页
+ *
+ * 布局：顶部一条「资料横幅」（头像 + 昵称 + 账号 + 角色，一眼看清自己是谁），下面按主题
+ * 分区（昵称 / 密码），一区一张卡。
+ *
+ * 早先是「左一大卡 + 右预览卡」：预览里的头像与昵称和左边完全重复，左卡又同时塞了头像、
+ * 昵称、密码三块，读起来是一坨。现在把重复的那份删掉，剩下的按主题切开。
+ */
 
 .page {
   display: flex;
   flex-direction: column;
+  gap: 18px; /* 间距统一交给 gap，少散落 margin */
+  max-width: 860px; /* 宽屏上别把表单拉成一整行 */
 }
 
 .head {
-  margin-bottom: 22px;
+  margin: 0;
 }
 .title {
   margin: 0;
@@ -21,6 +30,7 @@
   color: var(--text-3);
 }
 
+/* ------------------------------------------------------------------ 错误条 */
 .errorBar {
   display: flex;
   align-items: flex-start;
@@ -29,7 +39,6 @@
   border-radius: var(--r-md);
   background: var(--danger-bg);
   border: 1px solid var(--danger-line);
-  margin-bottom: 18px;
 }
 .errorIcon {
   flex-shrink: 0;
@@ -53,133 +62,171 @@
   margin-top: 4px;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 320px;
+/* -------------------------------------------------------------- 资料横幅 */
+.hero {
+  display: flex;
+  align-items: center;
   gap: 20px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.card {
-  background: var(--surface);
+  flex-wrap: wrap;
+  padding: 20px 22px;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: 22px 24px;
+  background: var(--surface);
 }
-.cardTitle {
-  margin: 0 0 14px;
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-1);
-}
-
-/* 加载骨架 */
-.skelLines {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-}
-.skelAvatarRow {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  margin-top: 16px;
-}
-
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: 20px 0;
-}
-
-/* 头像区 */
-.avatarSection {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-.avatarWrap {
+.heroAvatarWrap {
   position: relative;
-  flex-shrink: 0;
+  flex: none;
 }
-.avatar {
-  width: 80px;
-  height: 80px;
+.heroAvatar {
+  width: 84px;
+  height: 84px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid var(--border);
 }
-.avatarPlaceholder {
-  width: 80px;
-  height: 80px;
+.heroAvatarPlaceholder {
+  width: 84px;
+  height: 84px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: 30px;
   font-weight: 600;
   background: var(--accent-soft);
   color: var(--accent);
-  border: 2px solid var(--border);
+  border: 2px solid var(--accent-border);
 }
-.avatarEditBtn {
+/* 头像右下角那颗小相机：换头像最常用的入口，贴在头像上比另起一行按钮省地方 */
+.heroEdit {
   position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 26px;
-  height: 26px;
+  right: -2px;
+  bottom: -2px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-2);
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
-.avatarEditBtn:hover {
-  background: var(--accent-soft);
+.heroEdit:hover:not(:disabled) {
   color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
-.avatarEditBtn:disabled {
+.heroEdit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.avatarInfo {
+.heroInfo {
+  flex: 1 1 220px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.avatarHint {
-  margin: 0 0 4px;
+.heroName {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.heroMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.heroAccount {
+  font-family: var(--font-mono);
   font-size: 12.5px;
   color: var(--text-3);
 }
-.avatarMeta {
-  margin: 0 0 10px;
-  font-size: 12px;
+.heroNote {
+  margin: 0;
+  font-size: 12.5px;
   color: var(--text-3);
 }
-.avatarActions {
+.heroActions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
-/* 昵称表单 */
-.form {
+/* -------------------------------------------------------------- 分区卡片 */
+.sections {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px 22px;
+}
+.cardHead {
+  margin-bottom: 14px;
+}
+.cardTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-1);
+}
+.cardNote {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+/* ------------------------------------------------------------------ 表单 */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* 昵称这种「一个输入框 + 一颗按钮」：同一行，窄屏自动换行 */
+.inlineForm {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.inlineForm .control {
+  flex: 1 1 260px;
+}
+/* 密码三格：当前密码独占一行，新密码与「再输一次」并排 */
+.passwordGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.span2 {
+  grid-column: 1 / -1;
+}
+@media (max-width: 640px) {
+  .passwordGrid {
+    grid-template-columns: 1fr;
+  }
+  .span2 {
+    grid-column: auto;
+  }
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -213,6 +260,7 @@
 }
 .control input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: none;
   outline: none;
@@ -229,7 +277,17 @@
   font-size: 12px;
   color: var(--danger);
 }
-
+.formActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.formNote {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
 
 .busyInner {
   display: inline-flex;
@@ -242,68 +300,29 @@
   border-width: 2px;
 }
 
-/* 预览卡片 */
-.preview {
+/* ------------------------------------------------------------------ 骨架屏 */
+.skelHero {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border-radius: var(--r-md);
-  background: var(--surface-2);
+  gap: 20px;
+  padding: 20px 22px;
   border: 1px solid var(--border);
-  margin-bottom: 12px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
-.previewAvatarWrap {
-  flex-shrink: 0;
-}
-.previewAvatar {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 2px solid var(--border);
-}
-.previewAvatarPlaceholder {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  font-weight: 600;
-  background: var(--accent-soft);
-  color: var(--accent);
-  border: 2px solid var(--border);
-}
-.previewInfo {
-  min-width: 0;
+.skelLines {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
 }
-.previewName {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text-1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.previewAccount {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-3);
-}
-.previewRoles {
+.skelCard {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-}
-.previewNote {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--text-3);
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
