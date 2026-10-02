@@ -18,6 +18,6 @@ class UpdateProfileRequest(BaseModel):
     nickname: Nickname = Field(description="昵称（1-32 个字符，展示用）")
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        json_schema_extra={"example": {"nickname": "Nacho"}},
+        json_schema_extra={"example": {"nickname": "BotNode"}},
         frozen=True,
     )

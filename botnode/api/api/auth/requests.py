@@ -58,7 +58,7 @@ class RegisterRequest(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         json_schema_extra={
-            "example": {"account": "botnode", "password": "botnode-1234", "nickname": "Nacho"}
+            "example": {"account": "botnode", "password": "botnode-1234", "nickname": "BotNode"}
         },
         frozen=True,
     )

@@ -56,7 +56,7 @@ class ProfileData(_Frozen):
             "example": {
                 "id": "u-admin",
                 "account": "admin",
-                "nickname": "Nacho",
+                "nickname": "BotNode",
                 "roles": ["admin"],
                 "has_avatar": True,
                 "avatar_mime": "image/png",
