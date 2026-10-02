@@ -25,10 +25,10 @@ DEFAULT_HEARTBEAT_INTERVAL: float = 30.0
 DEFAULT_HEARTBEAT_JITTER: float = 5.0
 #: 默认动作超时（秒）：发出去的动作等这么久还没回应就算失败
 DEFAULT_ACTION_TIMEOUT: float = 30.0
-#: 默认断线重连间隔（秒）：连接断开后等这么久再重连
-DEFAULT_RECONNECT_INTERVAL: float = 3.0
-#: 默认重连退避上限（秒）：指数退避封顶，避免无限拉长
-DEFAULT_RECONNECT_MAX_INTERVAL: float = 30.0
+#: 默认断线重连基准（秒）：官方连接流程的退避就是它 ×2^k —— 2、4（连接）-> 8、16（resume）
+DEFAULT_RECONNECT_INTERVAL: float = 2.0
+#: 默认重连退避上限（秒）：官方——回到「获取 Gateway」那一步后指数退避，最大间隔 60
+DEFAULT_RECONNECT_MAX_INTERVAL: float = 60.0
 #: 默认两次 REST 请求的最小间隔（秒）：限流，别一上来就撞 429
 DEFAULT_REST_MIN_INTERVAL: float = 0.2
 #: 默认 REST 瞬时失败重试次数（429 / 5xx / 网络抖动）

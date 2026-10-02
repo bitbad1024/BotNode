@@ -114,7 +114,8 @@ def test_options_defaults_and_from_mapping() -> None:
     assert options.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
     assert options.token == ""
     assert options.heartbeat_jitter == 5.0  # 官方 30 秒 + rand(-5, +5)
-    assert options.reconnect_max_interval == 30.0
+    assert options.reconnect_interval == 2.0  # 官方退避序列的基准
+    assert options.reconnect_max_interval == 60.0  # 官方：获取 gateway 那一步上限 60
     assert options.rest_min_interval == 0.2
     assert options.rest_max_retries == 3
 
@@ -125,7 +126,7 @@ def test_options_defaults_and_from_mapping() -> None:
     assert options.token == "abc"
     assert options.heartbeat_interval == 10
     assert options.action_timeout == 30.0  # 没给的回默认
-    assert options.reconnect_max_interval == 30.0  # 新字段没给也回默认
+    assert options.reconnect_max_interval == 60.0  # 新字段没给也回默认
 
 
 # --------------------------------------------------------------------------- 事件解析
@@ -507,6 +508,41 @@ class _FakeWs:
     async def close(self) -> None:
         self.closed = True
         self.closed_evt.set()
+
+
+def test_reconnect_delay_matches_official_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认退避就是官方序列：2、4（重连）-> 8、16（resume）-> 32 -> 60 封顶。"""
+    monkeypatch.setattr("nacho.platforms.kook.client._jitter", lambda: 1.0)  # 去掉抖动
+    options = KookOptions()  # reconnect_interval=2.0 / reconnect_max_interval=60.0
+    assert _reconnect_delay(options, 1) == 2.0
+    assert _reconnect_delay(options, 2) == 4.0
+    assert _reconnect_delay(options, 3) == 8.0
+    assert _reconnect_delay(options, 4) == 16.0
+    assert _reconnect_delay(options, 5) == 32.0
+    assert _reconnect_delay(options, 6) == 60.0  # 封顶
+    assert _reconnect_delay(options, 9) == 60.0
+
+
+async def test_run_loop_rediscovers_gateway_after_resume_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """四拍（2、4、8、16）都失败后回到第 1 步：清掉网关地址，下次重新 discover。"""
+    monkeypatch.setattr(
+        "nacho.platforms.kook.client._reconnect_delay", lambda options, attempts: 0.0
+    )
+
+    async def always_fail(self: KookClient) -> bool:
+        raise ConnectionError("连不上")
+
+    monkeypatch.setattr(KookClient, "_connect_once", always_fail)
+    client = KookClient(KookOptions(token="abc"))
+    client._gateway_url = "wss://gw.example/?token=x"  # noqa: SLF001
+
+    await client.start()
+    try:
+        assert await wait_until(lambda: client._gateway_url == "", timeout=2.0)  # noqa: SLF001
+    finally:
+        await client.stop()
 
 
 async def test_reconnect_signal_resets_resume_state_and_closes() -> None:

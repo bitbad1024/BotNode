@@ -87,8 +87,18 @@ def _jitter() -> float:
     return random.uniform(0.8, 1.2)
 
 
+#: 官方连接流程里「重连 + resume」一共就这四拍（2、4 / 8、16）；用完就回到第 1 步
+_RESUME_STEPS: int = 4
+
+
 def _reconnect_delay(options: KookOptions, attempts: int) -> float:
-    """第 ``attempts`` 次重连前的等待：指数退避（基准 * 2^(attempts-1)）封顶 + 抖动。"""
+    """第 ``attempts`` 次重连前的等待：基准 × 2^(attempts-1)，封顶 + 抖动。
+
+    官方连接流程：先两次重连（2、4 秒）、再两次 resume（8、16 秒，地址上带 resume 参数）；
+    四拍用尽回到第 1 步「重新获取 Gateway」无限重试（指数退避，最大间隔 60 秒）。序列是
+    连续的，所以这里就是一条 ``基准 × 2^k`` 的曲线，哪几拍属于哪个阶段由
+    :meth:`KookClient._run_loop` 决定。
+    """
     exponent = max(0, attempts - 1)
     base = min(options.reconnect_interval * (2 ** exponent), options.reconnect_max_interval)
     return base * _jitter()
@@ -250,17 +260,28 @@ class KookClient:
 
     # ------------------------------------------------------------------ 收发循环
     async def _run_loop(self) -> None:
-        """连接 -> 心跳 -> 收报文；断开按指数退避重连（带抖动），直到 ``stop``。"""
+        """连接 -> 心跳 -> 收报文；断开按官方流程分阶段重连，直到 ``stop``。
+
+        官方连接流程：连接失败先退避两次（2、4 秒）-> 再两次 resume（8、16 秒，地址带
+        resume 参数）-> 都不行就回到第 1 步「重新获取 Gateway」无限重试（指数退避，上限
+        60 秒）；握手没成功（hello 失败 / 超时）同样回退到第 1 步。
+        """
         failures = 0
         while not self._stopping:
             try:
-                await self._connect_once()
-                failures = 0  # 正常连过（收报文循环被断开才退出）：重连计数清零
+                greeted = await self._connect_once()
+                if greeted:
+                    failures = 0  # 跑完一整轮（握手成功 + 收过报文）：重新计数
+                else:
+                    failures += 1  # 握手没成：官方——回退到第 1 步
             except Exception as exc:  # noqa: BLE001 — 连不上就退出来等下轮重连
                 failures += 1
                 self._log.warning("kook 连接失败，稍后重连", error=str(exc))
             if self._stopping:
                 return
+            if failures > _RESUME_STEPS:
+                # 四拍用尽：回到第 1 步，下次重新 discover（拿失效地址续传只会被拒）
+                self._gateway_url = ""
             await asyncio.sleep(_reconnect_delay(self._options, failures))
 
     # ------------------------------------------------- REST（限流 + 重试 + 连接复用）
@@ -373,8 +394,8 @@ class KookClient:
             raise ConnectionError("[kook] gateway/index 没返回网关地址")
         return url
 
-    async def _connect_once(self) -> None:
-        """建一条连接并跑它的收报文循环；连接断开 / 出错时返回（由 _run_loop 决定重连）。"""
+    async def _connect_once(self) -> bool:
+        """建一条连接并跑它的收报文循环；返回**握手有没有成功**（由 _run_loop 决定重连）。"""
         token = self._options.token
         # 网关地址只取一次、断线复用：续传必须用同一地址（同 token 才配得上 session_id）；
         # 每次都重新 discover 会拿新 token，resume 必被拒，形成「连上就断、断了又连」的死循环
@@ -428,6 +449,7 @@ class KookClient:
             self._session_id = ""
             self._sn = 0
             self._gateway_url = ""
+        return self._greeted
 
     async def _hello_watchdog(self) -> None:
         """握手表：官方——连上 websocket 后 6 秒内应收到 hello，没收到就是连接超时。

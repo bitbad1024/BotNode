@@ -474,8 +474,8 @@ class KookSettings(_Region):
     #: 心跳抖动（秒）：官方口径 30 秒 + rand(-5, +5)，别让所有机器人同一时刻打心跳
     heartbeat_jitter: float = Field(default=5.0, ge=0, description="不小于 0 的秒数")
     action_timeout: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
-    reconnect_interval: float = Field(default=3.0, gt=0, description="大于 0 的秒数")
-    reconnect_max_interval: float = Field(default=30.0, gt=0, description="大于 0 的秒数")
+    reconnect_interval: float = Field(default=2.0, gt=0, description="大于 0 的秒数")
+    reconnect_max_interval: float = Field(default=60.0, gt=0, description="大于 0 的秒数")
     rest_min_interval: float = Field(default=0.2, gt=0, description="大于 0 的秒数")
     rest_max_retries: int = Field(default=3, ge=0, description="不小于 0 的次数")
 
