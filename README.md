@@ -1,5 +1,10 @@
 # BotNode
 
+[![CI](https://github.com/bitbad1024/BotNode/actions/workflows/ci.yml/badge.svg)](https://github.com/bitbad1024/BotNode/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)
+![Node 20+](https://img.shields.io/badge/Node-20%2B-brightgreen.svg)
+
 BotNode 是一个可以自己部署的机器人框架。它在三件事上做了抽象：
 
 - **流程**：触发（收到消息 / 到了时间点）→ 加工（取字段、正则、算一算、判条件）→ 动作（回消息、调接口），全部在画布上连线完成。
@@ -7,6 +12,8 @@ BotNode 是一个可以自己部署的机器人框架。它在三件事上做了
 - **地基**：异步日志（可检索、可多出口）、缓存（Redis 和进程内一套 API）、定时任务（cron，红黑树排程），开箱即用。
 
 技术栈：后端 Python 3.12+（FastAPI / SQLModel），控制台 React + TypeScript。
+
+![](./docs/workflow.jpg)
 
 ## 启动
 
@@ -19,7 +26,7 @@ cd frontend && npm install && npm run dev          # 控制台 http://127.0.0.1:
 
 Windows 也可以直接双击 `start-all.bat`。
 
-数据库可选：sqlite、mariadb;
+数据库可选：sqlite、mariadb；
 
 缓存可选：redis、内存
 
@@ -81,3 +88,21 @@ cd frontend && npm install && npm run build
 - 文档、bugfix、想法。
 
 架构细节从 [docs/README.md](docs/README.md) , [examples/](examples/) 示例。
+
+## 文档
+
+- [docs/README.md](docs/README.md)：框架总览与文档索引（分层、依赖方向、装配链路、配置、可选依赖）
+- [docs/workflow/workflow.md](docs/workflow/workflow.md)：工作流模块索引、写自己的节点（第 5 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节）
+- 其余模块文档：[logger](docs/logger/logger.md) · [scheduler](docs/scheduler/scheduler.md) · [cache](docs/cache/cache.md) · [bridge](docs/bridge/bridge.md)
+- [examples/](examples/)：可直接运行的最小示例
+
+## 参与
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)：环境准备、目录速览、代码约定、测试与提交规范
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)：社区行为准则
+- [SECURITY.md](SECURITY.md)：漏洞报告渠道与部署注意事项
+- [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)：第三方组件与许可
+
+## 许可证
+
+[MIT](LICENSE) © 2026 BotNode 贡献者

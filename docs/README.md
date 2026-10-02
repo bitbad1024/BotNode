@@ -15,7 +15,7 @@
 | [cache/cache.md](cache/cache.md) | `botnode.core.cache` | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入 |
 | [scheduler/scheduler.md](scheduler/scheduler.md) | `botnode.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
 | [bridge/bridge.md](bridge/bridge.md) | `botnode.platforms.bridge` | 规范化事件 + 适配器协议 + Gateway 总线、OneBot / Kook 两个适配器、怎么写第三个平台 |
-| [workflow/workflow.md](workflow/workflow.md) | `botnode.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节） |
+| [workflow/workflow.md](workflow/workflow.md) | `botnode.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节，含画布截图） |
 
 包内还有一份接口层索引 `botnode/api/MODULES.md`（尚未搬进 `docs/`）。
 

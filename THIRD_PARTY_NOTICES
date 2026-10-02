@@ -1,0 +1,63 @@
+# 第三方组件与许可
+
+BotNode 本体以 [MIT 许可证](LICENSE) 发布，但**它使用的第三方组件各有自己的许可证**。
+下面列的是本项目**直接依赖**（`requirements.txt` 与 `frontend/package.json` 里声明的那一层），
+以及采集当下的实际版本。
+
+> 版本说明：两份依赖声明都**没有钉死版本**，下表是 2026-10-03 采集的安装版本，
+> 你实际装到的版本可能不同 —— 那不影响许可类型，但以你环境里 `METADATA` / `package.json`
+> 的 `license` 字段为准。
+
+## 后端（Python）
+
+| 组件 | 版本 | 许可证 | 主页 |
+|---|---|---|---|
+| fastapi | 0.139.0 | MIT | https://github.com/fastapi/fastapi |
+| uvicorn | 0.49.0 | BSD-3-Clause | https://uvicorn.dev/ |
+| sqlmodel | 0.0.32 | MIT | https://github.com/fastapi/sqlmodel |
+| aiosqlite | 0.22.1 | MIT | https://github.com/omnilib/aiosqlite |
+| websockets | 17.0.1 | BSD-3-Clause | https://github.com/python-websockets/websockets |
+| cryptography | 46.0.4 | Apache-2.0 OR BSD-3-Clause | https://github.com/pyca/cryptography |
+| httpx | 0.28.1 | BSD-3-Clause | https://github.com/encode/httpx |
+| redis（redis-py） | 8.0.1 | MIT | https://github.com/redis/redis-py |
+| aiomysql | 0.3.2 | MIT | https://github.com/aio-libs/aiomysql |
+
+## 前端（JavaScript / TypeScript）
+
+| 组件 | 版本 | 许可证 | 主页 |
+|---|---|---|---|
+| axios | 1.20.0 | MIT | https://github.com/axios/axios |
+| react | 18.3.1 | MIT | https://github.com/facebook/react |
+| react-dom | 18.3.1 | MIT | https://github.com/facebook/react |
+| react-router-dom | 6.30.6 | MIT | https://github.com/remix-run/react-router |
+| typescript | 5.6.3 | Apache-2.0 | https://github.com/microsoft/TypeScript |
+| vite | 6.4.3 | MIT | https://github.com/vitejs/vite |
+| @vitejs/plugin-react | 4.7.0 | MIT | https://github.com/vitejs/vite-plugin-react |
+| @types/react | 18.3.31 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| @types/react-dom | 18.3.7 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |
+
+（TypeScript 以 Apache-2.0 授权，仅在构建期使用，不进入产物。）
+
+## 间接依赖
+
+上面只是**直接**依赖。它们各自还会拉进一堆传递依赖（例如 FastAPI → Starlette / Pydantic，
+SQLModel → SQLAlchemy，Vite → esbuild / Rollup），那些组件同样带自己的许可证。要看全量清单，
+用工具现场生成：
+
+```bash
+# 后端：列出已安装 Python 包及其许可证
+pip install pip-licenses
+pip-licenses --format=markdown --with-urls
+
+# 前端：列出 node_modules 里每个包的许可证
+cd frontend && npx license-checker --summary      # 汇总
+npx license-checker --markdown                    # 明细
+```
+
+分发生成物（二进制 / 打包后的前端）时，把这些组件的许可证原文一并附上即可满足各自条款；
+本项目的 MIT 许可证不改变第三方组件自身的授权条件。
+
+## 更新这份清单
+
+依赖有变动（新增 / 移除 / 升级）时，重跑上面的命令，把上两张表刷新一遍 ——
+表格里的版本号要与「声明文件 + 实际安装」对得上，别手抄。
