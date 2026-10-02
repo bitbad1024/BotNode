@@ -260,7 +260,9 @@ class TestKookRegion:
         assert kook.gateway == ""  # 留空 = 连接前走 gateway/index 动态获取
         assert kook.token == ""  # 没配 = 不接入
         assert kook.heartbeat_interval == 30.0
-        assert kook.reconnect_max_interval == 30.0
+        assert kook.heartbeat_jitter == 5.0  # 官方 30 秒 + rand(-5, +5)
+        assert kook.reconnect_interval == 2.0  # 官方退避序列的基准
+        assert kook.reconnect_max_interval == 60.0  # 官方：获取 gateway 那一步上限 60
         assert kook.rest_min_interval == 0.2
         assert kook.rest_max_retries == 3
 

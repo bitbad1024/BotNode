@@ -21,12 +21,14 @@ DEFAULT_GATEWAY: str = ""
 DEFAULT_TOKEN: str = ""
 #: 默认心跳间隔（秒）：Kook 网关要求客户端定期发心跳，超时会被断开
 DEFAULT_HEARTBEAT_INTERVAL: float = 30.0
+#: 默认心跳抖动（秒）：官方口径是 30 秒 + rand(-5, +5)，别让所有客户端同一时刻打心跳
+DEFAULT_HEARTBEAT_JITTER: float = 5.0
 #: 默认动作超时（秒）：发出去的动作等这么久还没回应就算失败
 DEFAULT_ACTION_TIMEOUT: float = 30.0
-#: 默认断线重连间隔（秒）：连接断开后等这么久再重连
-DEFAULT_RECONNECT_INTERVAL: float = 3.0
-#: 默认重连退避上限（秒）：指数退避封顶，避免无限拉长
-DEFAULT_RECONNECT_MAX_INTERVAL: float = 30.0
+#: 默认断线重连基准（秒）：官方连接流程的退避就是它 ×2^k —— 2、4（连接）-> 8、16（resume）
+DEFAULT_RECONNECT_INTERVAL: float = 2.0
+#: 默认重连退避上限（秒）：官方——回到「获取 Gateway」那一步后指数退避，最大间隔 60
+DEFAULT_RECONNECT_MAX_INTERVAL: float = 60.0
 #: 默认两次 REST 请求的最小间隔（秒）：限流，别一上来就撞 429
 DEFAULT_REST_MIN_INTERVAL: float = 0.2
 #: 默认 REST 瞬时失败重试次数（429 / 5xx / 网络抖动）
@@ -55,6 +57,8 @@ class KookOptions:
     secret_key: str = ""
     #: 心跳间隔（秒）
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL
+    #: 心跳抖动（秒）：实际间隔在 ``heartbeat_interval ± heartbeat_jitter`` 里随机
+    heartbeat_jitter: float = DEFAULT_HEARTBEAT_JITTER
     #: 单个动作等回应的超时（秒）
     action_timeout: float = DEFAULT_ACTION_TIMEOUT
     #: 断线后重连的间隔（秒）
@@ -77,6 +81,9 @@ class KookOptions:
             secret_key=cast(str, picked.get("secret_key", "")),
             heartbeat_interval=cast(
                 float, picked.get("heartbeat_interval", DEFAULT_HEARTBEAT_INTERVAL)
+            ),
+            heartbeat_jitter=cast(
+                float, picked.get("heartbeat_jitter", DEFAULT_HEARTBEAT_JITTER)
             ),
             action_timeout=cast(float, picked.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
             reconnect_interval=cast(
