@@ -911,6 +911,83 @@ async def test_executor_unsupported_node_type_raises() -> None:
         await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
 
 
+@pytest.mark.asyncio
+async def test_executor_stops_downstream_on_node_failure() -> None:
+    """业务失败（NodeFailure）**停止向下传播**：下游整段跳过，别的分支照跑，流程不中断。"""
+    from nacho.workflow.nodes import NodeFailure
+
+    ran: list[str] = []
+
+    @register_node("boom")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        raise NodeFailure("算不出来：左值不是数字")
+
+    @register_node("failure-tail")
+    async def exec_tail(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        ran.append(node.id)
+        return {}
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("b", "boom"),
+                node("t", "failure-tail"),  # 失败节点的下游：不该跑
+                node("side", "log", message="别的分支"),  # 平行分支：照跑
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "b"),
+                edge("b", "t"),
+                edge("t", "e"),
+                edge("s", "side"),
+                edge("side", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不抛：业务失败不是事故
+
+    assert ran == ["b"]  # 失败节点跑了，它的下游一个都没跑
+    assert any("[failed] b:" in line for line in ctx.log)
+    assert any("[skip] t:" in line and "失败" in line for line in ctx.log)  # 写明是被谁带停的
+    assert any("[INFO] side: 别的分支" in line for line in ctx.log)  # 别的分支照常
+
+
+@pytest.mark.asyncio
+async def test_executor_failed_node_produces_nothing_downstream() -> None:
+    """失败节点**不产出**：下游如有其它活入边照常执行，但从失败那条线拿不到值（回落手填）。"""
+    from nacho.workflow.nodes import NodeFailure
+
+    @register_node("boom2")
+    async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+        raise NodeFailure("这一步没做成")
+
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("b", "boom2"),
+                node("l", "log", message="手填兜底"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "b"),
+                edge("s", "l"),
+                edge("b", "l", "value", "message"),  # 失败节点 -> log 的内容入口
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+
+    # log 有另一条活入边（start 的触发边）所以照常执行，但内容入口没被失败节点顶掉
+    assert any("[INFO] l: 手填兜底" in line for line in ctx.log)
+    assert any("[failed] b:" in line for line in ctx.log)
+
+
 # ------------------------------------------------------------- ④-B http 节点（打桩，不走网络）
 class FakeResponse:
     """假的 httpx 响应：http 节点只用到 ``status_code`` / ``text`` 两样。"""
@@ -1026,7 +1103,8 @@ async def test_http_status_reaches_downstream_message_input(
     fake_http: type[FakeAsyncClient],
 ) -> None:
     """http 的 ``http_status`` 出口接到 log 的 ``message`` 入口：值真的沿边走完整条链路。"""
-    fake_http.status = 503
+    fake_http.status = 201  # 成功响应才往下传（4xx / 5xx 现在算业务失败，下游会被带停）
+    fake_http.text = "201"
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
@@ -1045,18 +1123,51 @@ async def test_http_status_reaches_downstream_message_input(
     )
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
-    assert any("[WARNING] l: 503" in line for line in ctx.log)
+    assert any("[WARNING] l: 201" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
-async def test_http_node_keeps_error_status_as_a_result(fake_http: type[FakeAsyncClient]) -> None:
-    """4xx / 5xx 是「对方的回答」：不抛异常，状态码与正文照常交给下游。"""
+async def test_http_error_status_is_a_node_failure(fake_http: type[FakeAsyncClient]) -> None:
+    """4xx / 5xx 是「对方的回答」= **业务失败**：抛 NodeFailure（停止向下传播），不再当正常结果。"""
+    from nacho.workflow.nodes import NodeFailure
+
     fake_http.status = 500
     fake_http.text = "boom"
+    ctx_ = NodeExecutionContext()
 
-    outputs = await exec_http(http_node(), NodeExecutionContext())
+    with pytest.raises(NodeFailure, match="HTTP 500"):
+        await exec_http(http_node(), ctx_)
 
-    assert outputs == {"http_status": 500, "http_body": "boom"}
+    assert any("-> 500" in line for line in ctx_.log)  # 状态码与字节数照旧进日志
+
+
+@pytest.mark.asyncio
+async def test_http_error_status_skips_downstream_in_graph(
+    fake_http: type[FakeAsyncClient],
+) -> None:
+    """图里跑：http 回了 5xx 时下游整段跳过（不再把错误状态码送下去）。"""
+    fake_http.status = 503
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("h", "http", url="https://api.example.com", method="GET"),
+                node("l", "log", message="手填兜底"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "h"),
+                edge("s", "l"),
+                edge("h", "l", "http_status", "message"),
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不抛：业务失败只停自己这条线
+
+    assert any("[failed] h:" in line for line in ctx.log)
+    assert any("[INFO] l: 手填兜底" in line for line in ctx.log)  # 另一条活入边还在，照常执行
 
 
 @pytest.mark.asyncio
@@ -1347,24 +1458,23 @@ async def test_json_extracts_nested_scalar_and_whole_document() -> None:
 
 
 @pytest.mark.asyncio
-async def test_json_soft_fails_yield_empty_string() -> None:
-    """三块「数据不合预期」都记 warning 并送空串（不打断流程）：空文本 / 非法 JSON / 路径不存在。"""
+async def test_json_failure_stops_propagation() -> None:
+    """三块「数据不合预期」都是**业务失败**（抛 NodeFailure，停止向下传播）：空文本 /
+    非法 JSON / 路径不存在 —— 不再送空串。"""
+    from nacho.workflow.nodes import NodeFailure
 
-    async def run(text: str, path: str = "") -> tuple[str, list[str]]:
+    async def failing(text: str, path: str = "") -> str:
         node_ = WorkflowNode(id="j1", type="json", config={"path": path})
         ctx_ = NodeExecutionContext()
         ctx_.inputs = {"json": text}
-        result = await exec_json(node_, ctx_)
-        return result["json_value"], ctx_.log
+        with pytest.raises(NodeFailure) as caught:
+            await exec_json(node_, ctx_)
+        assert any("[json]" in line for line in ctx_.log)  # 痕迹照留
+        return str(caught.value)
 
-    value, log = await run("")  # 上游送了空串
-    assert value == "" and any("没拿到" in line for line in log)
-
-    value, log = await run("<html>502 Bad Gateway</html>")  # 对方回了个错误页
-    assert value == "" and any("解析失败" in line for line in log)
-
-    value, log = await run('{"a": {"b": 1}}', "a.c")  # 字段名拼错 / 对方改了结构
-    assert value == "" and any("取不到" in line for line in log)
+    assert "没拿到" in await failing("")  # 上游送了空串
+    assert "解析失败" in await failing("<html>502 Bad Gateway</html>")  # 对方回了个错误页
+    assert "在文档里不存在" in await failing('{"a": {"b": 1}}', "a.c")  # 字段名拼错 / 对方改了结构
 
 
 def test_json_fields_are_validated() -> None:
@@ -1422,24 +1532,23 @@ async def test_regex_extracts_and_replaces() -> None:
 
 
 @pytest.mark.asyncio
-async def test_regex_soft_fails_yield_empty_string() -> None:
-    """抽不到不算事故：没匹配 / 空文本 / 线上来的非法正则都送空串并记 warning，不打断流程。"""
+async def test_regex_failure_stops_propagation() -> None:
+    """抽不到 = **业务失败**（抛 NodeFailure，停止向下传播）：没匹配 / 空文本 / 线上来的
+    非法正则 —— 不再送空串。"""
+    from nacho.workflow.nodes import NodeFailure
 
-    async def run(text: str, pattern: str) -> tuple[str, list[str]]:
+    async def failing(text: str, pattern: str) -> str:
         node_ = WorkflowNode(id="r1", type="regex", config={})
         ctx_ = NodeExecutionContext()
         ctx_.inputs = {"text": text, "pattern": pattern}
-        result = await exec_regex(node_, ctx_)
-        return result["regex_value"], ctx_.log
+        with pytest.raises(NodeFailure) as caught:
+            await exec_regex(node_, ctx_)
+        assert any("[regex]" in line for line in ctx_.log)  # 痕迹照留
+        return str(caught.value)
 
-    value, log = await run("没有数字的句子", r"\d+")
-    assert value == "" and any("没有匹配" in line for line in log)
-
-    value, log = await run("", r"\d+")
-    assert value == "" and any("没拿到文本" in line for line in log)
-
-    value, log = await run("abc", "(abc")  # 线上来的正则不合法（手填的会被校验拦住）
-    assert value == "" and any("不合法" in line for line in log)
+    assert "没有匹配" in await failing("没有数字的句子", r"\d+")
+    assert "没拿到文本" in await failing("", r"\d+")
+    assert "编译失败" in await failing("abc", "(abc")  # 线上来的正则不合法（手填的会被校验拦住）
 
 
 def test_regex_fields_are_validated() -> None:
@@ -1720,8 +1829,11 @@ async def test_onebot_without_target_skips_and_requires_gateway() -> None:
 
 
 @pytest.mark.asyncio
-async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
-    """对方收下了但回执不成功（status / retcode 非成功）：不抛，回执原样送下游自己判断。"""
+async def test_onebot_failed_receipt_is_a_node_failure() -> None:
+    """对方收下了但回执不成功（status / retcode 非成功）= **业务失败**：抛 NodeFailure（停止
+    向下传播），不再把「没发出去」当结果往下送。"""
+    from nacho.workflow.nodes import NodeFailure
+
     gateway = _FakeGateway(
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"})
     )
@@ -1731,10 +1843,10 @@ async def test_onebot_failed_receipt_warns_but_flows_on() -> None:
         "target": gateway.make_target("onebot", chat="group", chat_id="1"),
         "message": "hi",
     }
-    result = await exec_onebot(node_, ctx_)  # 不抛
+    with pytest.raises(NodeFailure, match="发送失败"):
+        await exec_onebot(node_, ctx_)
 
-    assert result["onebot_retcode"] == 1200  # retcode 从回执 raw 下探出来
-    assert "账号被禁言" in result["onebot_data"]
+    # 痕迹照留：retcode 进日志（看得出对方回了什么）
     assert any("[onebot] ob1: reply -> retcode 1200" in line for line in ctx_.log)
 
 
@@ -1936,9 +2048,10 @@ async def test_onebot_empty_message_skips() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_failed_receipt_warns_but_flows_on() -> None:
-    """对方收下但回执不成功（ok=False）：不抛，send_ok=False + send_data 送下游自己判断。"""
-    from nacho.workflow.nodes import exec_send
+async def test_send_failed_receipt_is_a_node_failure() -> None:
+    """对方收下但回执不成功（ok=False）= **业务失败**：抛 NodeFailure（停止向下传播），
+    不再把「没发出去」当结果往下送。"""
+    from nacho.workflow.nodes import NodeFailure, exec_send
 
     gateway = _FakeGateway(
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "被禁言"})
@@ -1949,8 +2062,11 @@ async def test_send_failed_receipt_warns_but_flows_on() -> None:
         "target": gateway.make_target("onebot", chat="group", chat_id="1"),
         "message": "hi",
     }
-    result = await exec_send(node_, ctx_)  # 不抛
-    assert result == {"send_ok": False, "send_data": '{"msg":"被禁言"}'}
+
+    with pytest.raises(NodeFailure, match="发送失败"):
+        await exec_send(node_, ctx_)
+
+    assert any("[send] snd1: reply -> failed" in line for line in ctx_.log)  # 痕迹照留
 
 
 def test_send_requires_a_target_source() -> None:
@@ -2026,29 +2142,52 @@ async def test_operator_takes_operands_from_wire_with_hand_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_operator_soft_fails_to_empty_string() -> None:
-    """算不出来不算事故（warning + 空串，不打断流程）：空值 / 非数字 / 除数为 0 / 运算符不合法。"""
+async def test_operator_failure_stops_propagation() -> None:
+    """算不出来 = **业务失败**（抛 NodeFailure，引擎停止向下传播）：空值 / 非数字 / 除数为 0 /
+    运算符不合法 —— 不再送空串，免得下游拿着「没算出来」的结果继续跑。"""
+    from nacho.workflow.nodes import NodeFailure
 
-    async def run(symbol: str, left: str, right: str) -> tuple[str, list[str]]:
+    async def failing(symbol: str, left: str, right: str) -> str:
         node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
         ctx_ = NodeExecutionContext()
         ctx_.inputs = {"left": left, "right": right}
-        result = await exec_operator(node_, ctx_)
-        return str(result["operator_result"]), ctx_.log
+        with pytest.raises(NodeFailure) as caught:
+            await exec_operator(node_, ctx_)
+        assert any("算不出来" in line for line in ctx_.log)  # 痕迹照留
+        return str(caught.value)
 
-    value, log = await run("+", "", "1")  # 左值空
-    assert value == "" and any("左值为空" in line for line in log)
+    assert "左值为空" in await failing("+", "", "1")
+    assert "不是数字" in await failing("*", "一会儿", "2")
+    assert "除数为 0" in await failing("/", "1", "0")
+    assert "除数为 0" in await failing("%", "1", "0")  # 取余同管
+    assert "不合法" in await failing("≈", "1", "2")  # 没走过校验的图：非法运算符也走这条
 
-    value, log = await run("*", "一会儿", "2")  # 非数字
-    assert value == "" and any("不是数字" in line for line in log)
 
-    value, log = await run("/", "1", "0")  # 除数为 0
-    assert value == "" and any("除数为 0" in line for line in log)
-    value, log = await run("%", "1", "0")  # 取余同管
-    assert value == "" and any("除数为 0" in line for line in log)
+@pytest.mark.asyncio
+async def test_operator_failure_in_graph_skips_downstream() -> None:
+    """图里跑：operator 算不出来时下游整段跳过（不是拿空串继续跑）。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("m", "operator", operator="+", left="当前时间为：", right="1"),
+                node("l", "log", message="手填兜底"),  # 内容入口接了 operator（算不出来）
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "m"),
+                edge("s", "l"),
+                edge("m", "l", "operator_result", "message"),
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)  # 不抛：业务失败只停自己这条线
 
-    value, log = await run("≈", "1", "2")  # 没走过校验的图：非法运算符也走这条
-    assert value == "" and any("不合法" in line for line in log)
+    assert any("[failed] m:" in line for line in ctx.log)
+    # log 的另一条活入边（start）还在，所以照常执行；内容入口没被失败节点顶掉
+    assert any("[INFO] l: 手填兜底" in line for line in ctx.log)
 
 
 def test_operator_symbol_is_validated() -> None:

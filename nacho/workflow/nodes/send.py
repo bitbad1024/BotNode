@@ -24,9 +24,9 @@ send 前面。
 
 * 环境 / 配置问题 —— 没接总线（``ctx.gateway`` 是 None）—— 当场抛出去，整条流程
   停在这里，看得出是没配好；
-* 对方收下了但回执不成功（``ActionResult.ok`` 为 False）—— 记一条 warning 照常往下
-  走，回执从 ``send_ok`` / ``send_data`` 送下去（要不要处理交给下游，比如接
-  ``condition`` 按 ``send_ok`` 分流）。
+* 对方收下了但回执不成功（``ActionResult.ok`` 为 False）—— **业务失败**：记一条 warning
+  后抛 :class:`~nacho.workflow.nodes.base.NodeFailure`，引擎**停止它向下传播**（下游整段
+  跳过），不再把「没发出去」当结果往下送。
 
 小抄::
 
@@ -40,7 +40,14 @@ import json
 from typing import Any
 
 from ..models import WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
+from .base import (
+    TRIGGER_PORT,
+    ConfigField,
+    NodeExecutionContext,
+    NodeFailure,
+    PortSpec,
+    input_value,
+)
 from .registry import register_node
 
 
@@ -118,4 +125,7 @@ async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
         fields["message_preview"] = _clip(message)
     report(f"[send:{node.id}] reply -> {'ok' if ok else 'failed'}", **fields)
     ctx.log.append(f"[send] {node.id}: reply -> {'ok' if ok else 'failed'}")
-    return {"send_ok": ok, "send_data": data}
+    if not ok:
+        # 回执不成功是「对方的回答」= 业务失败：停止向下传播（见模块文档）
+        raise NodeFailure(f"发送失败：{response.message or '回执不成功'}（{data}）")
+    return {"send_ok": True, "send_data": data}

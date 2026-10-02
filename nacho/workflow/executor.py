@@ -3,7 +3,9 @@
 **节点执行函数不在这里**：一类节点一个文件，都在 :mod:`nacho.workflow.nodes`。本模块只管
 「怎么按顺序跑、值怎么沿边流」：只跑 **start 可达的主流程节点**（孤儿永不执行），按入边把
 上游产出投递到入口、按输出端口名记下产出，**分流节点按选中出口剪枝**并级联下游，同步执行
-（不并发）。触发是**开始节点**自己的事（``trigger=time`` 登记到调度器）。图算法在
+（不并发）。**业务失败停止向下传播**：节点抛 ``NodeFailure``（算不出来 / 对方回了错这类
+「没做成」）时本节点不产出、出边置死，下游整段跳过，别的分支照跑；环境问题抛普通异常才
+中断整条。触发是**开始节点**自己的事（``trigger=time`` 登记到调度器）。图算法在
 :mod:`nacho.workflow.graph`。运行语义的完整清单见 ``docs/workflow/workflow.md`` 第 7.3 节。
 
 这里只再导出 ``SimpleWorkflowRunner`` / ``NodeExecutionContext`` / ``get_executor`` 三个：
@@ -25,6 +27,7 @@ from .graph import (
 )
 from .models import WorkflowEdge, WorkflowGraph
 from .nodes import NodeExecutionContext, get_executor, get_spec
+from .nodes.base import NodeFailure
 
 __all__ = [
     # 老 import 路径留的门（新代码从 nacho.workflow 取）
@@ -76,6 +79,8 @@ class SimpleWorkflowRunner:
         ran: set[str] = set()
         #: 被剪枝跳过的节点：不执行，出边同样置死（级联到它的下游）
         skipped: set[str] = set()
+        #: 节点 ID -> 它被跳过的**原因**（上游失败还是分支未选中），skip 日志用
+        skip_reasons: dict[str, str] = {}
         #: 节点 ID -> 它的产出（键 = 输出端口名）；下游按边从这里取
         produced: dict[str, dict[str, Any]] = {}
         while queue:
@@ -83,11 +88,20 @@ class SimpleWorkflowRunner:
             if current_id in ran or current_id in skipped:
                 continue
             if in_total[current_id] > 0 and live_in[current_id] == 0:
-                # 入边全被剪死（分流节点没走这边）：整段跳过，跳过也留痕可查
+                # 入边全被剪死（分流节点没走这边 / 上游业务失败）：整段跳过，跳过也留痕可查
                 skipped.add(current_id)
-                ctx.log.append(f"[skip] {current_id}: 分支未选中，未执行")
+                reason = skip_reasons.get(current_id, "分支未选中")
+                ctx.log.append(f"[skip] {current_id}: {reason}，未执行")
                 self._release(
-                    current_id, out_edges, runnable, in_degree, live_in, queue, dead=True
+                    current_id,
+                    out_edges,
+                    runnable,
+                    in_degree,
+                    live_in,
+                    queue,
+                    dead=True,
+                    skip_reasons=skip_reasons,
+                    reason=reason,
                 )
                 continue
             node = by_id[current_id]
@@ -95,7 +109,26 @@ class SimpleWorkflowRunner:
             if executor is None:
                 raise NotImplementedError(f"节点类型 {node.type!r} 暂无执行器（节点 {current_id}）")
             ctx.inputs = self._inputs_of(current_id, in_edges, produced)
-            output = await executor(node, ctx)
+            try:
+                output = await executor(node, ctx)
+            except NodeFailure as exc:
+                # 业务失败：不算事故，只**停止向下传播** —— 本节点不产出值（下游取不到，
+                # 回落到手填值），出边全部置死让下游整段跳过；别的分支照常跑
+                ctx.logger.warning(f"[{node.type}:{current_id}] {exc}")
+                ctx.log.append(f"[failed] {current_id}: {exc}")
+                ran.add(current_id)
+                self._release(
+                    current_id,
+                    out_edges,
+                    runnable,
+                    in_degree,
+                    live_in,
+                    queue,
+                    dead=True,
+                    skip_reasons=skip_reasons,
+                    reason=f"上游 {node.type}:{current_id} 失败",
+                )
+                continue
             produced[current_id] = output
             ran.add(current_id)
             spec = get_spec(node.type)
@@ -124,17 +157,22 @@ class SimpleWorkflowRunner:
         queue: deque[str],
         *,
         dead: bool,
+        skip_reasons: dict[str, str] | None = None,
+        reason: str = "",
     ) -> None:
         """节点处理完（执行 / 跳过）后放行下游：结构入度减 1，减到 0 的进拓扑队列。
 
-        ``dead=True``（整个节点被剪枝跳过）时出边全部置死：下游的「活入边」跟着减，
-        死路就这样一级一级传下去，直到和别的活分支汇合。
+        ``dead=True``（整个节点被剪枝跳过 / 上游业务失败）时出边全部置死：下游的「活入边」
+        跟着减，死路就这样一级一级传下去，直到和别的活分支汇合。``reason`` 会顺着死路
+        往下传，所以下下游的 ``[skip]`` 也写得出是被谁带停的。
         """
         for target in out_edges[node_id]:
             if target not in runnable:
                 continue
             if dead:
                 live_in[target] -= 1
+                if skip_reasons is not None and reason:
+                    skip_reasons[target] = reason
             in_degree[target] -= 1
             if in_degree[target] == 0:
                 queue.append(target)
