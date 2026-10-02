@@ -19,9 +19,11 @@ import {
   type IssuedBot,
   type Bot,
 } from './botsApi'
+import { fetchOwners, type Owner } from '../../lib/ownersApi'
 import { ApiRequestError } from '../../lib/http'
 import { copyText } from '../../lib/clipboard'
 import { useToast } from '../../common/Toast'
+import OwnerFilter from '../../common/OwnerFilter'
 import { ConfirmDialog } from '../../common/ConfirmDialog'
 import { CardGridSkeleton } from '../../common/Skeleton'
 import { Modal } from '../../common/Modal'
@@ -75,6 +77,10 @@ export default function TokensPage() {
   const [failure, setFailure] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
   const [busy, setBusy] = useState(false)
+  /** 可选归属：筛选下拉用它（普通用户只会拿到自己那一条，下拉随之不显示） */
+  const [owners, setOwners] = useState<Owner[]>([])
+  /** 筛选中的归属 id；空串 = 全部 */
+  const [ownerFilter, setOwnerFilter] = useState('')
 
   const [platform, setPlatform] = useState('onebot')
   const [account, setAccount] = useState('')
@@ -92,14 +98,16 @@ export default function TokensPage() {
     setLoading(true)
     setFailure('')
     try {
-      const { data } = await fetchBots()
-      setTokens(data)
+      // 归属清单与列表一起取：管理员按归属筛（普通用户只会拿到自己）
+      const [list, ownerList] = await Promise.all([fetchBots(ownerFilter), fetchOwners()])
+      setTokens(list.data)
+      setOwners(ownerList.data)
     } catch (err) {
       setFailure(describe(err))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [ownerFilter])
 
   useEffect(() => {
     void load()
@@ -196,6 +204,7 @@ export default function TokensPage() {
       <section className={`card ${styles.panel}`}>
         <div className={styles.panelHead}>
           <h3 className={styles.panelTitle}>令牌列表</h3>
+          <OwnerFilter owners={owners} value={ownerFilter} onChange={setOwnerFilter} />
         </div>
         {loading ? (
           <CardGridSkeleton />

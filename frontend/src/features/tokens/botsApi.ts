@@ -44,9 +44,13 @@ export interface IssuedBot {
   token: string
 }
 
-/** GET /bots：机器人列表（不含明文，带归属昵称）。 */
-export function fetchBots() {
-  return http.get<Bot[]>('/bots')
+/**
+ * GET /bots：机器人列表（不含明文，带归属昵称）。
+ *
+ * `ownerId` 只对管理员有意义（普通用户传了也只看得见自己的）：按归属筛时传它。
+ */
+export function fetchBots(ownerId = '') {
+  return http.get<Bot[]>('/bots', { params: ownerId ? { owner_id: ownerId } : undefined })
 }
 
 /**
