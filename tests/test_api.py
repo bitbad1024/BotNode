@@ -271,7 +271,8 @@ class TestRegister:
         assert body["success"] is True
         assert body["data"]["account"] == "newbie"
         assert body["data"]["nickname"] == "新来的"
-        assert body["data"]["roles"] == []
+        # 注册出来的是**普通用户**：默认就带 user 角色（原先这里落库是空的，账号成了「谁也不是」）
+        assert body["data"]["roles"] == ["user"]
         # 注册不发令牌、也不种 Cookie：令牌与会话只有登录一个出口
         assert "token" not in body["data"]
         assert SESSION_COOKIE not in response.headers.get("set-cookie", "")

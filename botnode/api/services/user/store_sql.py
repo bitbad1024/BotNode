@@ -32,7 +32,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ...common.errors import AccountAlreadyExistsError
 from .demo import DEMO_USERS
-from .models import UserRecord
+from .models import USER_ROLE, UserRecord
 from .protocols import PasswordHasher
 from .security import Pbkdf2PasswordHasher
 
@@ -132,7 +132,12 @@ class SqlUserStore:
 
     # ------------------------------------------------------------------ 新增
     async def add(
-        self, *, account: str, password_hash: str, nickname: str = ""
+        self,
+        *,
+        account: str,
+        password_hash: str,
+        nickname: str = "",
+        roles: Iterable[str] = (USER_ROLE,),
     ) -> UserRecord:
         """新增一个账号（注册那一笔写入）；账号已被占用抛 :class:`AccountAlreadyExistsError`。
 
@@ -140,6 +145,10 @@ class SqlUserStore:
         密码只进哈希 —— 明文到不了这一层。写库撞上 ``account`` 的唯一约束（并发下两个请求同时
         注册同一个账号）时，把数据库的 ``IntegrityError`` 翻成那个 409 的异常：调用方不必先查
         一遍再写，查了也拦不住并发。
+
+        ``roles`` 默认 ``(USER_ROLE,)``：注册出来的是普通用户，与 :meth:`seed_demo` 那份口径
+        一致（演示账号是 ``("admin", "user")``）。以前这里没写 roles，落库就是表默认的 ``[]``
+        —— 账号成了「谁也不是」。
         """
         async with self._sessions() as session:
             row = UserTable(
@@ -147,6 +156,7 @@ class SqlUserStore:
                 account=account,
                 password_hash=password_hash,
                 nickname=nickname,
+                roles=json.dumps(list(roles), ensure_ascii=False),
             )
             session.add(row)
             try:
