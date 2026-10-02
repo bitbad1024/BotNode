@@ -16,13 +16,13 @@
 ## 1. 一键打包
 
 ```bat
-build-all.bat                  :: Windows：前端 + 后端产物 + 单镜像 botnode:latest
-build-all.bat v0.1.0           :: 换个镜像标签
-build-all.bat --no-docker      :: 只打包前后端产物，不碰 Docker
+scripts\build-all.bat              :: Windows：前端 + 后端产物 + 单镜像 botnode:latest
+scripts\build-all.bat v0.1.0       :: 换个镜像标签
+scripts\build-all.bat --no-docker  :: 只打包前后端产物，不碰 Docker
 ```
 
 ```bash
-./build-all.sh                 # Linux / macOS，参数同上
+./scripts/build-all.sh         # Linux / macOS，参数同上
 ```
 
 产物：
@@ -163,7 +163,7 @@ docker compose up -d --build          # 重新构建并滚动替换
 ```
 
 卷不动，数据与日志都还在。回滚就是把代码切回旧提交再 `up -d --build`（镜像标签也可以带版本号，
-用 `build-all.bat v0.1.0` 打出 `botnode:v0.1.0` 之类长期留着）。
+用 `scripts\build-all.bat v0.1.0` 打出 `botnode:v0.1.0` 之类长期留着）。
 
 ## 7. 常见问题
 

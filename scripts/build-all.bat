@@ -1,11 +1,29 @@
 @echo off
+rem (ASCII on purpose: this part runs before the code page is switched)
+rem cmd parses a batch file with whatever code page the console has at that moment. This file is
+rem UTF-8, so switching the code page halfway through makes cmd resume reading at a wrong byte
+rem offset and run half a Chinese line as a command ("'xxx' is not recognized ..."). So: switch the
+rem code page first, then re-run this very file once - the second pass is decoded as UTF-8 from its
+rem first byte on, and nothing is ever switched again.
+if not defined BOTNODE_UTF8 (
+    chcp 65001 >nul
+    set "BOTNODE_UTF8=1"
+    call "%~f0" %*
+    exit /b %errorlevel%
+)
+rem 上面那次「自我重启」已经把代码页切好（现在这一遍全程 UTF-8），所以下面可以放心写中文。
+rem 另一条一样会崩的老毛病是换行符 —— 本文件必须是 CRLF（.gitattributes 钉住 *.bat 用 CRLF），
+rem 被编辑器另存成 LF 时括号块 / 标签 / if 都半行半行地崩，报错长得跟上面一模一样。
+rem 脚本住在 scripts/ 下、项目根是它的上一级：先切过去，从哪儿调用都跑得对
+rem （下面用的都是相对项目根的路径：frontend / botnode / app.py …）
+cd /d "%~dp0.."
 rem ============================================================================
 rem  BotNode 一键打包（Windows）
 rem
-rem    build-all.bat                  前端 + 后端产物 + 单镜像 botnode:latest
-rem    build-all.bat v0.1.0           镜像标签换成 botnode:v0.1.0
-rem    build-all.bat --no-docker      只打包前后端产物，不碰 Docker
-rem    build-all.bat --clean          先清空 node_modules 再装（可复现，但更慢）
+rem    scripts\build-all.bat              前端 + 后端产物 + 单镜像 botnode:latest
+rem    scripts\build-all.bat v0.1.0       镜像标签换成 botnode:v0.1.0
+rem    scripts\build-all.bat --no-docker  只打包前后端产物，不碰 Docker
+rem    scripts\build-all.bat --clean      先清空 node_modules 再装（可复现，但更慢）
 rem
 rem  产物：
 rem    frontend\dist      控制台静态产物（交给任意静态服务器即可）
@@ -13,7 +31,6 @@ rem    build\backend      后端源码包（cd 进去 pip install -r requirement
 rem    botnode:<标签>     单镜像（nginx 托管前端 + 反代 /api 给后端）
 rem ============================================================================
 setlocal enabledelayedexpansion
-chcp 65001 >nul
 
 set "TAG=latest"
 set "SKIP_DOCKER=0"
@@ -97,9 +114,13 @@ echo     -v "%CD%\config.toml:/app/config.toml:ro"
 echo     -v botnode-logs:/app/logs -v botnode-data:/app/data
 echo     botnode:%TAG%
 echo 或者：docker compose up -d --build
+echo.
+pause
 exit /b 0
 
 :fail
 echo.
 echo 打包失败，请看上面的报错。
+echo.
+pause
 exit /b 1
