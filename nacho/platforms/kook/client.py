@@ -68,6 +68,9 @@ _DEFAULT_API_HOST: str = cast(str, urlsplit(_DEFAULT_API).hostname)
 #: REST 瞬时失败值得重试的状态码：429（限流）与常见 5xx（服务端抖动）
 _REST_RETRYABLE_STATUS: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
+#: 心跳超时（秒）：官方——发出 ping 后 6 秒内没收到 pong 就进入超时状态
+_PONG_TIMEOUT: float = 6.0
+
 
 class _RestRetryable(Exception):
     """REST 瞬时失败（429 / 5xx / 连接错误）：值得按退避重试。"""
@@ -137,6 +140,8 @@ class KookClient:
         self._inbox: asyncio.Queue[KookEvent] = asyncio.Queue()
         #: 按序消费 inbox 的 worker；连上时起、断开时收
         self._consume_task: asyncio.Task[None] | None = None
+        #: 收到 pong 的通知（心跳等它；等不到 = 超时）
+        self._pong: asyncio.Event = asyncio.Event()
         self._stopping: bool = False
         #: 停下来的通知事件（serve_forever / _wait_until_stopped 等它，不再轮询）
         self._stopped: asyncio.Event = asyncio.Event()
@@ -405,17 +410,29 @@ class KookClient:
             self._gateway_url = ""
 
     async def _heartbeat(self) -> None:
-        """定期发 signal 2（ping，带最近 sn），保活连接。"""
+        """定期发 signal 2（ping，带最近 sn）并等 pong。
+
+        官方口径：发出 ping 后**6 秒内没收到 pong 就是超时**。连接假死（对端不发也不关）
+        只能靠这一条发现，所以超时要主动断开、交给 :meth:`_run_loop` 重连，而不是一直往
+        一条死连接上发心跳。
+        """
         interval = self._options.heartbeat_interval
         while True:
             await asyncio.sleep(interval)
             ws = self._ws
             if ws is None:
                 continue
+            self._pong.clear()
             try:
                 await cast(object, ws).send(json.dumps({"s": 2, "sn": self._sn}))  # type: ignore[attr-defined]
-            except Exception as exc:  # noqa: BLE001 — 心跳失败由收报文循环兜底
+            except Exception as exc:  # noqa: BLE001 — 发不出去由下面的超时 / 收报文循环兜底
                 self._log.debug("kook 心跳发送失败", error=str(exc))
+                continue
+            try:
+                await asyncio.wait_for(self._pong.wait(), timeout=_PONG_TIMEOUT)
+            except TimeoutError:
+                self._log.warning("kook 心跳超时，主动断开重连", timeout=_PONG_TIMEOUT)
+                await self._close_current()
 
     async def _handle_raw(self, raw: str | bytes) -> None:
         """一条原始报文：解 JSON -> hello 记 session_id、事件按顶层 sn 推进并去重。"""
@@ -457,7 +474,8 @@ class KookClient:
             self._drain_inbox()
             await self._close_current()
             return
-        if signal == 3:  # pong：心跳回应，不推进 sn
+        if signal == 3:  # pong：心跳回应，不推进 sn（但要把心跳那条腿放行）
+            self._pong.set()
             return
         if signal != 0 or not isinstance(data, dict):
             return

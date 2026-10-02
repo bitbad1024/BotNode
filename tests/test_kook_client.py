@@ -8,18 +8,27 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from nacho.core.logger import default_core
 from nacho.platforms.kook import KookClient, KookEvent, KookOptions
+from nacho.platforms.kook import client as kook_client
 
 
 class _FakeWs:
-    """假的 WS 连接：只记有没有被关。"""
+    """假的 WS 连接：记下发出去的报文与有没有被关（``closed_evt`` 让测试不用睡等）。"""
 
     def __init__(self) -> None:
         self.closed = False
+        self.closed_evt = asyncio.Event()
+        self.sent: list[str] = []
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(payload)
 
     async def close(self) -> None:
         self.closed = True
+        self.closed_evt.set()
 
 
 def _client() -> KookClient:
@@ -62,3 +71,33 @@ async def test_reconnect_signal_without_connection_is_safe() -> None:
     await client._handle_raw(json.dumps({"s": 5, "d": {"code": 40107}}))  # noqa: SLF001
 
     assert client._session_id == "" and client._sn == 0  # noqa: SLF001
+
+
+async def test_pong_signal_releases_heartbeat() -> None:
+    """signal 3（pong）：放行正在等它的那条心跳腿。"""
+    client = _client()
+
+    await client._handle_raw(json.dumps({"s": 3}))  # noqa: SLF001
+
+    assert client._pong.is_set() is True  # noqa: SLF001
+
+
+async def test_heartbeat_closes_connection_when_pong_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """心跳发出后没等到 pong（官方 6 秒，测试里调短）：主动断开，交给重连循环。"""
+    monkeypatch.setattr(kook_client, "_PONG_TIMEOUT", 0.05)
+    client = KookClient(
+        KookOptions(token="tok", heartbeat_interval=0.01),
+        logger=default_core().child("test"),
+    )
+    ws = _FakeWs()
+    client._ws = ws  # noqa: SLF001
+    task = asyncio.create_task(client._heartbeat())  # noqa: SLF001
+    try:
+        await asyncio.wait_for(ws.closed_evt.wait(), timeout=2.0)
+    finally:
+        task.cancel()
+
+    assert ws.closed is True  # 不再往死连接上发心跳
+    assert json.loads(ws.sent[0]) == {"s": 2, "sn": 0}  # 先发了 ping（带最新 sn）
