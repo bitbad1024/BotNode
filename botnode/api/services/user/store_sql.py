@@ -169,6 +169,21 @@ class SqlUserStore:
             await session.commit()
             return _to_record(row)
 
+    async def set_password(self, user_id: str, password_hash: str) -> UserRecord | None:
+        """换密码（只改 ``password_hash`` 一列）；用户不存在返回 ``None``。
+
+        旧密码验没验、新哈希怎么算，是业务层的事（见
+        :meth:`~botnode.api.services.auth.service.AuthService.change_password`）；这一层
+        只管落库，跟 :meth:`set_nickname` 一个做法。
+        """
+        async with self._sessions() as session:
+            row = await session.get(UserTable, user_id)
+            if row is None:
+                return None
+            row.password_hash = password_hash
+            await session.commit()
+            return _to_record(row)
+
     # ------------------------------------------------------------------ 查询
     async def get_by_account(self, account: str) -> UserRecord | None:
         """按账号取用户；没有就返回 ``None``。"""

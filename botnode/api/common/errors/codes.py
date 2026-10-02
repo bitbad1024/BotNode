@@ -22,6 +22,8 @@ class ErrorCode(StrEnum):
     ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
     #: 注册时这个账号已被占用（账号唯一，同账号只能注册一次）
     ACCOUNT_ALREADY_EXISTS = "ACCOUNT_ALREADY_EXISTS"
+    #: 改密码时「当前密码」填错了（身份没问题，是这一次的旧密码不对）
+    PASSWORD_MISMATCH = "PASSWORD_MISMATCH"
     #: 上传的头像超过大小上限
     AVATAR_TOO_LARGE = "AVATAR_TOO_LARGE"
     #: 上传的不是认得的图片类型（按文件头认，SVG 这类 XML 不收）

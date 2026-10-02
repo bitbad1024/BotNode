@@ -57,6 +57,19 @@ export function register(account: string, password: string, nickname: string) {
   >('/auth/register', { account, password, nickname })
 }
 
+/**
+ * PUT /auth/password：改密码（当前密码 + 新密码）。
+ *
+ * 改完**其他设备全部下线**（当前这台保留）：密码变了，别处手里的令牌不该还能用。
+ * 当前密码不对时后端回 403（code = PASSWORD_MISMATCH）。
+ */
+export function changePassword(currentPassword: string, newPassword: string) {
+  return http.put<
+    { revoked_sessions: number },
+    { current_password: string; new_password: string }
+  >('/auth/password', { current_password: currentPassword, new_password: newPassword })
+}
+
 /** GET /auth/me：用当前令牌换取用户资料（含头像信息）。 */
 export function fetchProfile() {
   return http.get<UserProfile>('/auth/me')

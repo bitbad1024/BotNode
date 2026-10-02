@@ -62,6 +62,15 @@ class UserStore(Protocol):
         """
         ...
 
+    async def set_password(self, user_id: str, password_hash: str) -> UserRecord | None:
+        """换密码（改密码那一笔），返回改完的记录；用户不存在返回 ``None``。
+
+        ``password_hash`` 是**已经算好**的哈希（明文不进这一层）—— 与 :meth:`add` 一个口径：
+        「旧密码对不对」由业务层（``services.auth.AuthService``）用
+        :class:`PasswordHasher` 验，这里只负责把新哈希写进去。
+        """
+        ...
+
     async def set_nickname(self, user_id: str, nickname: str) -> UserRecord | None:
         """改昵称（个人设置那一笔），返回改完的记录；用户不存在返回 ``None``。
 

@@ -110,6 +110,20 @@ class AccountAlreadyExistsError(ApiError):
         )
 
 
+class PasswordMismatchError(ApiError):
+    """改密码时「当前密码」不对（403）。
+
+    与 :class:`InvalidCredentialsError` 的区别值得写下来：那一个是**登录**时凭据不对外
+    （401，且故意不区分「账号不存在」与「密码错」）；这里调用方**已经登录**了，身份没问题，
+    只是这次的旧密码填错 —— 明确告诉他，别让人以为是登录状态出了岔子。
+    """
+
+    def __init__(self, message: str = "当前密码不对") -> None:
+        super().__init__(
+            ErrorCode.PASSWORD_MISMATCH, message, status_code=status.HTTP_403_FORBIDDEN
+        )
+
+
 def _size_text(size: int) -> str:
     """把字节数写成给人看的量级（1 KB = 1024 字节，够用就行）。"""
     if size >= 1024 * 1024:

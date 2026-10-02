@@ -17,14 +17,22 @@ import {
   uploadAvatar,
   deleteAvatar,
 } from './profileApi'
+import { changePassword } from './authApi'
 import {
   IconAlert,
   IconCamera,
   IconCheck,
+  IconLock,
   IconTrash,
   IconUser,
 } from '../../common/icons'
-import { FIELD_LABELS, NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH } from './formRules'
+import {
+  FIELD_LABELS,
+  NICKNAME_MAX_LENGTH,
+  NICKNAME_MIN_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+} from './formRules'
 import styles from './ProfilePage.module.css'
 
 /** 头像最大体积（2 MiB，与后端默认对齐）。 */
@@ -53,9 +61,14 @@ export default function ProfilePage() {
   const [savingNickname, setSavingNickname] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [removing, setRemoving] = useState(false)
+  // 改密码：三个输入框分开存，成功后一起清掉（明文不在组件状态里留着）
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [savingPassword, setSavingPassword] = useState(false)
   const [error, setError] = useState<{ title: string; detail: string; traceId: string } | null>(null)
   /** 待确认的动作：改昵称 / 删头像（都要动数据，先问一声） */
-  const [confirm, setConfirm] = useState<'nickname' | 'avatar' | null>(null)
+  const [confirm, setConfirm] = useState<'nickname' | 'avatar' | 'password' | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   /** 从接口拉最新资料（头像信息可能变了）。 */
@@ -130,6 +143,63 @@ export default function ProfilePage() {
       }
     } finally {
       setSavingNickname(false)
+      setConfirm(null)
+    }
+  }
+
+  /**
+   * 新密码的即时提示：长度、两次一致、与当前密码相同。
+   *
+   * 这些只是输入时的反馈 —— 后端还会再判一遍（长度不合规 422、当前密码不对 403），
+   * 以它为准。
+   */
+  const passwordLengthInvalid =
+    newPassword.length > 0 &&
+    (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH)
+  const passwordNotConfirmed = confirmPassword.length > 0 && confirmPassword !== newPassword
+  const passwordUnchanged =
+    newPassword.length > 0 &&
+    currentPassword.length > 0 &&
+    newPassword === currentPassword
+  const canSubmitPassword =
+    !savingPassword &&
+    currentPassword.length > 0 &&
+    newPassword.length >= PASSWORD_MIN_LENGTH &&
+    newPassword.length <= PASSWORD_MAX_LENGTH &&
+    confirmPassword === newPassword &&
+    !passwordUnchanged
+
+  /** 提交：先弹确认（改完别的设备会下线），确认后才真的打接口。 */
+  function onSubmitPassword(e: FormEvent) {
+    e.preventDefault()
+    if (!canSubmitPassword) return
+    setConfirm('password')
+  }
+
+  /** 真的改密码：成功后清空三个框，并提示其他设备下线了几台。 */
+  async function savePassword() {
+    if (!canSubmitPassword) return
+    setSavingPassword(true)
+    setError(null)
+    try {
+      const { data } = await changePassword(currentPassword, newPassword)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      pushToast(
+        'success',
+        data.revoked_sessions > 0
+          ? `密码已修改，其他 ${data.revoked_sessions} 台设备已下线`
+          : '密码已修改',
+      )
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError({ title: '修改失败', detail: err.message, traceId: err.traceId })
+      } else {
+        setError({ title: '修改失败', detail: '未知错误，请稍后再试', traceId: '-' })
+      }
+    } finally {
+      setSavingPassword(false)
       setConfirm(null)
     }
   }
@@ -395,6 +465,94 @@ export default function ProfilePage() {
               )}
             </button>
           </form>
+
+          <div className={styles.divider} />
+
+          <h2 className={styles.cardTitle}>修改密码</h2>
+          <form className={styles.form} onSubmit={onSubmitPassword} noValidate>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="profile-current-password">
+                当前密码
+              </label>
+              <div className={styles.control}>
+                <span className={styles.controlIcon}>
+                  <IconLock size={18} />
+                </span>
+                <input
+                  id="profile-current-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="profile-new-password">
+                新密码
+              </label>
+              <div className={styles.control}>
+                <span className={styles.controlIcon}>
+                  <IconLock size={18} />
+                </span>
+                <input
+                  id="profile-new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={`${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} 位`}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </div>
+              {passwordLengthInvalid && (
+                <p className={styles.fieldHint}>
+                  新密码需要 {PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} 位
+                </p>
+              )}
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="profile-confirm-password">
+                再输一次新密码
+              </label>
+              <div className={styles.control}>
+                <span className={styles.controlIcon}>
+                  <IconLock size={18} />
+                </span>
+                <input
+                  id="profile-confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
+              </div>
+              {passwordNotConfirmed && (
+                <p className={styles.fieldHint}>两次输入的新密码不一致</p>
+              )}
+              {passwordUnchanged && (
+                <p className={styles.fieldHint}>新密码不能与当前密码相同</p>
+              )}
+            </div>
+
+            <button className="btn btn-primary" type="submit" disabled={!canSubmitPassword}>
+              {savingPassword ? (
+                <span className={styles.busyInner}>
+                  <span className="spinner" />
+                  提交中…
+                </span>
+              ) : (
+                <>
+                  <IconCheck size={15} />
+                  修改密码
+                </>
+              )}
+            </button>
+            <p className={styles.fieldHint}>
+              改完其他设备会全部下线，当前这台不用重新登录。
+            </p>
+          </form>
         </div>
 
         {/* 右侧：预览卡片 */}
@@ -436,6 +594,23 @@ export default function ProfilePage() {
           busy={savingNickname}
           onCancel={() => setConfirm(null)}
           onConfirm={() => void saveNickname()}
+        />
+      )}
+
+      {confirm === 'password' && (
+        <ConfirmDialog
+          title="修改密码？"
+          body={
+            <>
+              登录密码会被换掉，<b>其他设备全部下线</b>（当前这台不受影响）。
+              下次登录请用新密码。
+            </>
+          }
+          confirmText="修改密码"
+          danger
+          busy={savingPassword}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => void savePassword()}
         />
       )}
 
