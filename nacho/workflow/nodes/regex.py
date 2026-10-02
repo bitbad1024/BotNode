@@ -18,9 +18,11 @@ config:
     ``regex_value`` 处理结果（出口）：``extract`` = 第一个匹配（**有捕获组取第 1 组**，
                     组没参与匹配时回落整体匹配）；``replace`` = 替换后的完整文本。
 
-**抽不到不算事故**（与 ``json`` 节点同一口径，不打断流程）：
+**抽不到 = 业务失败**（与 ``json`` 节点同一口径）：
 
-* 文本 / 正则为空、正则语法错（线上来的）、一个都没匹配上 → warning + 送空串。
+* 文本 / 正则为空、正则语法错（线上来的）、一个都没匹配上 → 抛
+  :class:`~nacho.workflow.nodes.base.NodeFailure`：引擎**停止它向下传播**（下游整段跳过），
+  不再送空串。每条失败都写进日志与 ``ctx.log``。
 
 小抄：
 
@@ -33,10 +35,17 @@ config:
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, NoReturn
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
+from .base import (
+    TRIGGER_PORT,
+    ConfigField,
+    NodeExecutionContext,
+    NodeFailure,
+    PortSpec,
+    input_value,
+)
 from .registry import register_node
 
 #: 允许的动作，**顺序即画布下拉顺序**
@@ -51,6 +60,13 @@ REGEX_FLAG_LETTERS: dict[str, int] = {
 
 #: 日志 / ctx.log 里展示结果时的截断长度（长文本不刷屏）
 CLIP_CHARS: int = 120
+
+
+def _fail(ctx: NodeExecutionContext, node_id: str, reason: str) -> NoReturn:
+    """抽不到：抛业务失败（引擎停止它向下传播，见 :class:`NodeFailure`）。"""
+    ctx.logger.warning(f"[regex:{node_id}] {reason}")
+    ctx.log.append(f"[regex] {node_id}: {reason}")
+    raise NodeFailure(reason)
 
 
 def validate_regex_node(node: WorkflowNode) -> list[ValidationIssue]:
@@ -136,13 +152,9 @@ async def exec_regex(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     flags_text = str(node.config.get("flags") or "").strip()
 
     if not text:
-        ctx.logger.warning(f"[regex:{node.id}] 没拿到文本（上游没送值或送了空串）")
-        ctx.log.append(f"[regex] {node.id}: 没拿到文本，输出空串")
-        return {"regex_value": ""}
+        _fail(ctx, node.id, "没拿到文本（上游没送值或送了空串）")
     if not pattern:
-        ctx.logger.warning(f"[regex:{node.id}] 正则为空（入口没接线、config 里也没填）")
-        ctx.log.append(f"[regex] {node.id}: 正则为空，输出空串")
-        return {"regex_value": ""}
+        _fail(ctx, node.id, "正则为空（入口没接线、config 里也没填）")
 
     flags = 0
     for letter in flags_text:
@@ -150,9 +162,7 @@ async def exec_regex(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     try:
         compiled = re.compile(pattern, flags)
     except re.error as exc:
-        ctx.logger.warning(f"[regex:{node.id}] 正则编译失败：{exc}")
-        ctx.log.append(f"[regex] {node.id}: 正则不合法（{exc}），输出空串")
-        return {"regex_value": ""}
+        _fail(ctx, node.id, f"正则编译失败：{exc}")
 
     if action == "replace":
         out = compiled.sub(replace_text, text)
@@ -163,9 +173,7 @@ async def exec_regex(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
 
     match = compiled.search(text)
     if match is None:
-        ctx.logger.warning(f"[regex:{node.id}] 文本里没有匹配 {pattern!r}")
-        ctx.log.append(f"[regex] {node.id}: 没有匹配，输出空串")
-        return {"regex_value": ""}
+        _fail(ctx, node.id, f"文本里没有匹配 {pattern!r}")
 
     # 有捕获组取第 1 组；组没参与匹配（可选组）时回落整体匹配
     groups = match.groups()

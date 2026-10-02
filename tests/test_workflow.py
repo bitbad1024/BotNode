@@ -1424,24 +1424,23 @@ async def test_json_extracts_nested_scalar_and_whole_document() -> None:
 
 
 @pytest.mark.asyncio
-async def test_json_soft_fails_yield_empty_string() -> None:
-    """三块「数据不合预期」都记 warning 并送空串（不打断流程）：空文本 / 非法 JSON / 路径不存在。"""
+async def test_json_failure_stops_propagation() -> None:
+    """三块「数据不合预期」都是**业务失败**（抛 NodeFailure，停止向下传播）：空文本 /
+    非法 JSON / 路径不存在 —— 不再送空串。"""
+    from nacho.workflow.nodes import NodeFailure
 
-    async def run(text: str, path: str = "") -> tuple[str, list[str]]:
+    async def failing(text: str, path: str = "") -> str:
         node_ = WorkflowNode(id="j1", type="json", config={"path": path})
         ctx_ = NodeExecutionContext()
         ctx_.inputs = {"json": text}
-        result = await exec_json(node_, ctx_)
-        return result["json_value"], ctx_.log
+        with pytest.raises(NodeFailure) as caught:
+            await exec_json(node_, ctx_)
+        assert any("[json]" in line for line in ctx_.log)  # 痕迹照留
+        return str(caught.value)
 
-    value, log = await run("")  # 上游送了空串
-    assert value == "" and any("没拿到" in line for line in log)
-
-    value, log = await run("<html>502 Bad Gateway</html>")  # 对方回了个错误页
-    assert value == "" and any("解析失败" in line for line in log)
-
-    value, log = await run('{"a": {"b": 1}}', "a.c")  # 字段名拼错 / 对方改了结构
-    assert value == "" and any("取不到" in line for line in log)
+    assert "没拿到" in await failing("")  # 上游送了空串
+    assert "解析失败" in await failing("<html>502 Bad Gateway</html>")  # 对方回了个错误页
+    assert "在文档里不存在" in await failing('{"a": {"b": 1}}', "a.c")  # 字段名拼错 / 对方改了结构
 
 
 def test_json_fields_are_validated() -> None:
@@ -1499,24 +1498,23 @@ async def test_regex_extracts_and_replaces() -> None:
 
 
 @pytest.mark.asyncio
-async def test_regex_soft_fails_yield_empty_string() -> None:
-    """抽不到不算事故：没匹配 / 空文本 / 线上来的非法正则都送空串并记 warning，不打断流程。"""
+async def test_regex_failure_stops_propagation() -> None:
+    """抽不到 = **业务失败**（抛 NodeFailure，停止向下传播）：没匹配 / 空文本 / 线上来的
+    非法正则 —— 不再送空串。"""
+    from nacho.workflow.nodes import NodeFailure
 
-    async def run(text: str, pattern: str) -> tuple[str, list[str]]:
+    async def failing(text: str, pattern: str) -> str:
         node_ = WorkflowNode(id="r1", type="regex", config={})
         ctx_ = NodeExecutionContext()
         ctx_.inputs = {"text": text, "pattern": pattern}
-        result = await exec_regex(node_, ctx_)
-        return result["regex_value"], ctx_.log
+        with pytest.raises(NodeFailure) as caught:
+            await exec_regex(node_, ctx_)
+        assert any("[regex]" in line for line in ctx_.log)  # 痕迹照留
+        return str(caught.value)
 
-    value, log = await run("没有数字的句子", r"\d+")
-    assert value == "" and any("没有匹配" in line for line in log)
-
-    value, log = await run("", r"\d+")
-    assert value == "" and any("没拿到文本" in line for line in log)
-
-    value, log = await run("abc", "(abc")  # 线上来的正则不合法（手填的会被校验拦住）
-    assert value == "" and any("不合法" in line for line in log)
+    assert "没有匹配" in await failing("没有数字的句子", r"\d+")
+    assert "没拿到文本" in await failing("", r"\d+")
+    assert "编译失败" in await failing("abc", "(abc")  # 线上来的正则不合法（手填的会被校验拦住）
 
 
 def test_regex_fields_are_validated() -> None:

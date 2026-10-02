@@ -14,14 +14,14 @@ config:
     ``json_value`` 提取结果（出口）：**字符串化**——字符串原样、标量走 JSON 字面量
                    （``true`` / ``3`` / ``null``）、对象 / 数组紧凑序列化（中文不转义）。
 
-**取不到不算事故**（与 ``http`` 的 4xx / 5xx 同类：是「数据的样子」，不是环境问题）：
+**取不到 = 业务失败**（与 ``operator`` 同一口径，不是环境问题）：
 
-* 文本为空（上游没送值 / 送了空串）→ warning + ``json_value`` 送空串，流程继续；
-* 文本不是合法 JSON → warning + 空串（比如对方回了一个错误页）；
-* 路径在文档里不存在 → warning + 空串（拼错字段名、对方改了结构）。
+* 文本为空（上游没送值 / 送了空串）、不是合法 JSON（比如对方回了个错误页）、路径在文档
+  里不存在（拼错字段名、对方改了结构）→ 抛 :class:`~nacho.workflow.nodes.base.NodeFailure`：
+  引擎**停止它向下传播**（下游整段跳过），不再送空串 —— 空串会让下游拿着「没取到」的
+  结果继续跑。
 
-想「拿不到就失败」的话，把 ``json_value`` 接到日志先看；这个节点选择不打断流程，
-每条警告都写进日志，排查时先看它。
+每条失败都写进日志与 ``ctx.log``，排查时先看它。
 
 小抄（``{"code":0,"data":{"users":[{"name":"小明"}]}}``）：
 
@@ -32,10 +32,17 @@ config:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, NoReturn
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
+from .base import (
+    TRIGGER_PORT,
+    ConfigField,
+    NodeExecutionContext,
+    NodeFailure,
+    PortSpec,
+    input_value,
+)
 from .registry import register_node
 
 #: 日志 / ctx.log 里展示结果时的截断长度（长 JSON 不刷屏）
@@ -50,6 +57,13 @@ def _stringify(value: object) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _fail(ctx: NodeExecutionContext, node_id: str, reason: str) -> NoReturn:
+    """取不到：抛业务失败（引擎停止它向下传播，见 :class:`NodeFailure`）。"""
+    ctx.logger.warning(f"[json:{node_id}] {reason}")
+    ctx.log.append(f"[json] {node_id}: {reason}")
+    raise NodeFailure(reason)
 
 
 def _dig(data: object, path: str) -> object:
@@ -141,22 +155,16 @@ async def exec_json(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
     path = str(input_value(node, ctx, "path", default="")).strip()
 
     if not text:
-        ctx.logger.warning(f"[json:{node.id}] 没拿到 JSON 文本（上游没送值或送了空串）")
-        ctx.log.append(f"[json] {node.id}: 没拿到 JSON 文本，输出空串")
-        return {"json_value": ""}
+        _fail(ctx, node.id, "没拿到 JSON 文本（上游没送值或送了空串）")
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
-        ctx.logger.warning(f"[json:{node.id}] JSON 解析失败：{exc}（{len(text)} 字符）")
-        ctx.log.append(f"[json] {node.id}: JSON 解析失败（{exc.msg}），输出空串")
-        return {"json_value": ""}
+        _fail(ctx, node.id, f"JSON 解析失败：{exc}（{len(text)} 字符）")
 
     value = _dig(data, path) if path else data
     if value is _MISSING:
-        ctx.logger.warning(f"[json:{node.id}] 路径 {path!r} 在文档里不存在")
-        ctx.log.append(f"[json] {node.id}: 路径 {path!r} 取不到，输出空串")
-        return {"json_value": ""}
+        _fail(ctx, node.id, f"路径 {path!r} 在文档里不存在")
 
     out = _stringify(value)
     shown = out if len(out) <= CLIP_CHARS else out[:CLIP_CHARS] + "…"
