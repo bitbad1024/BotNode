@@ -669,8 +669,9 @@ async def test_hello_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch) 
 async def test_heartbeat_closes_connection_when_pong_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """心跳发出后没等到 pong（官方 6 秒，测试里调短）：主动断开，交给重连循环。"""
+    """心跳发出后没等到 pong（官方 6 秒，测试里调短）：探活也不回才主动断开。"""
     monkeypatch.setattr("nacho.platforms.kook.client._PONG_TIMEOUT", 0.05)
+    monkeypatch.setattr("nacho.platforms.kook.client._PROBE_GAPS", (0.05, 0.05))
     client = KookClient(KookOptions(token="abc", heartbeat_interval=0.01))
     ws = _FakeWs()
     client._ws = ws  # noqa: SLF001
@@ -682,6 +683,26 @@ async def test_heartbeat_closes_connection_when_pong_missing(
 
     assert ws.closed is True  # 不再往死连接上发心跳
     assert json.loads(ws.sent[0]) == {"s": 2, "sn": 0}  # 先发了 ping（带最新 sn）
+
+
+async def test_heartbeat_probe_keeps_connection_when_pong_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """心跳超时先探活：补发的 ping 收到 pong 就算连接还在，不打断。"""
+    monkeypatch.setattr("nacho.platforms.kook.client._PONG_TIMEOUT", 0.05)
+    monkeypatch.setattr("nacho.platforms.kook.client._PROBE_GAPS", (0.3, 0.3))
+    client = KookClient(KookOptions(token="abc", heartbeat_interval=0.01))
+    ws = _FakeWs()
+    client._ws = ws  # noqa: SLF001
+    task = asyncio.create_task(client._heartbeat())  # noqa: SLF001
+    try:
+        await asyncio.sleep(0.15)  # 让心跳先超时并进入探活
+        await client._handle_raw(json.dumps({"s": 3}))  # 探活期间 pong 到达  # noqa: SLF001
+        await asyncio.sleep(0.3)
+    finally:
+        task.cancel()
+
+    assert ws.closed is False  # 探活成功 -> 连接保住
 
 
 async def test_client_resume_rejected_falls_back_to_fresh_connection() -> None:

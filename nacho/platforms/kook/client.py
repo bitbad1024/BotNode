@@ -76,6 +76,8 @@ _REST_RETRYABLE_STATUS: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 _PONG_TIMEOUT: float = 6.0
 #: 握手超时（秒）：官方——连上 websocket 后 6 秒内应收到 hello，否则算连接超时
 _HELLO_TIMEOUT: float = 6.0
+#: 心跳超时后的探活间隔（秒）：官方——先补发两次 ping（间隔 2、4），判断连接是否还活着
+_PROBE_GAPS: tuple[float, float] = (2.0, 4.0)
 
 
 class _RestRetryable(Exception):
@@ -472,12 +474,31 @@ class KookClient:
         jitter = min(self._options.heartbeat_jitter, interval / 2)
         return max(0.01, interval + random.uniform(-jitter, jitter))
 
+    async def _probe_connection(self) -> bool:
+        """心跳超时后的探活：官方——再补发两次 ping（间隔 2、4），收到 pong 就算连接还在。
+
+        网络抖一下就可能丢一轮 pong，直接断连太激进；补两次还不回才算这条连接真死了。
+        """
+        for gap in _PROBE_GAPS:
+            ws = self._ws
+            if ws is None:
+                return False
+            self._pong.clear()
+            with suppress(Exception):
+                await cast(object, ws).send(json.dumps({"s": 2, "sn": self._sn}))  # type: ignore[attr-defined]
+            try:
+                await asyncio.wait_for(self._pong.wait(), timeout=gap)
+            except TimeoutError:
+                continue
+            return True
+        return False
+
     async def _heartbeat(self) -> None:
         """定期发 signal 2（ping，带最近 sn）并等 pong。
 
-        官方口径：发出 ping 后**6 秒内没收到 pong 就是超时**。连接假死（对端不发也不关）
-        只能靠这一条发现，所以超时要主动断开、交给 :meth:`_run_loop` 重连，而不是一直往
-        一条死连接上发心跳。
+        官方口径：发出 ping 后**6 秒内没收到 pong 就是超时**；超时先按官方补两次探活 ping
+        （间隔 2、4），探活也不回才主动断开、交给 :meth:`_run_loop` 重连 —— 连接假死
+        （对端不发也不关）只能靠这一条发现。
         """
         while True:
             await asyncio.sleep(self._heartbeat_interval())
@@ -493,7 +514,10 @@ class KookClient:
             try:
                 await asyncio.wait_for(self._pong.wait(), timeout=_PONG_TIMEOUT)
             except TimeoutError:
-                self._log.warning("kook 心跳超时，主动断开重连", timeout=_PONG_TIMEOUT)
+                self._log.warning("kook 心跳超时，先探活再决定重连", timeout=_PONG_TIMEOUT)
+            else:
+                continue
+            if not await self._probe_connection():
                 await self._close_current()
 
     async def _handle_raw(self, raw: str | bytes) -> None:
