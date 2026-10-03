@@ -138,7 +138,7 @@ class TestCacheRegion:
         settings = Settings.load(write(tmp_path, ""))
         cache = settings.cache
         assert cache.backend == "memory"
-        assert cache.namespace == "botnode"
+        assert cache.namespace == "tickneko"
         assert (cache.default_ttl, cache.fallback_to_memory) == (0.0, False)  # 默认不降级
         assert cache.redis.port == 6379
 
@@ -209,7 +209,7 @@ class TestLegacyKeys:
     @pytest.mark.parametrize(
         ("text", "prefix", "replacement"),
         [
-            ('[logging.file]\npath = "logs/botnode.log"\n', "logging.file.path", "dir"),
+            ('[logging.file]\npath = "logs/tickneko.log"\n', "logging.file.path", "dir"),
             ("[logging.file]\nbackup_count = 3\n", "logging.file.backup_count", "keep_days"),
         ],
     )
@@ -231,7 +231,7 @@ class TestLegacyKeys:
                     """\
                     [logging.file]
                     dir = "logs/here"
-                    prefix = "botnode-web"
+                    prefix = "tickneko-web"
                     keep_days = 3
                     search_days = 0
                     """
@@ -240,7 +240,7 @@ class TestLegacyKeys:
         )
         file_log = settings.logging.file
         assert file_log.dir == BASE_DIR / "logs" / "here"
-        assert file_log.prefix == "botnode-web"
+        assert file_log.prefix == "tickneko-web"
         assert (file_log.keep_days, file_log.search_days) == (3, 0)
 
 

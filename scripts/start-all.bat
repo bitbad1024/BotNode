@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal
 
 rem ============================================================
-rem  BotNode 一键启动脚本（前后端同时起）
+rem  TickNeko 一键启动脚本（前后端同时起）
 rem  后端 FastAPI : http://127.0.0.1:18080
 rem  前端 Vite    : http://127.0.0.1:15173
 rem  两个窗口各跑一边；关掉对应窗口即停止对应服务
@@ -44,8 +44,8 @@ echo 关闭对应窗口即可停止对应服务。
 echo.
 
 rem 分别起两个窗口：后端跑 app.py，前端跑 npm run dev
-start "BotNode 后端" cmd /k "cd /d ""%~dp0.."" && python app.py"
-start "BotNode 前端" cmd /k "cd /d ""%~dp0..\frontend"" && npm run dev"
+start "TickNeko 后端" cmd /k "cd /d ""%~dp0.."" && python app.py"
+start "TickNeko 前端" cmd /k "cd /d ""%~dp0..\frontend"" && npm run dev"
 
 echo 前后端已在两个新窗口启动。
 exit /b 0

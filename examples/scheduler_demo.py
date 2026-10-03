@@ -8,7 +8,7 @@
 
 调度器只有三样东西：表达式（``CronExpr``）说「什么时候跑」，任务（``Task``）说「跑什么」，
 管理器（``TaskManager``）负责登记、启停、改定义。业务代码只碰管理器：
-``botnode.core.scheduler`` 里的 ``scheduler`` 就是 ``TaskManager()`` 的进程级单例
+``tickneko.core.scheduler`` 里的 ``scheduler`` 就是 ``TaskManager()`` 的进程级单例
 （和 ``app.py`` 里用的是同一个），执行循环和它背后的红黑树时间线都不用管。
 
 按顺序演示这几件事：
@@ -42,9 +42,9 @@ from unicodedata import east_asian_width
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from botnode.core.logger import BaseLogger, LogCore, configure, default_core  # noqa: E402
-from botnode.core.logger import manager as log_manager  # noqa: E402
-from botnode.core.scheduler import CronError, TaskManager, scheduler  # noqa: E402
+from tickneko.core.logger import BaseLogger, LogCore, configure, default_core  # noqa: E402
+from tickneko.core.logger import manager as log_manager  # noqa: E402
+from tickneko.core.scheduler import CronError, TaskManager, scheduler  # noqa: E402
 
 #: 业务日志实例：main 里先 configure() 建进程默认核心，再取它（见 main 开头的说明）
 log: BaseLogger
@@ -172,7 +172,7 @@ async def main() -> None:
     enable_line_buffering()
     # 先建进程默认核心再取日志实例：调度器自己记的 warning / error 也进这个核心，
     # 所以它的提示和业务日志会出现在同一个控制台上（app.py 里是按配置 config 来建这个核心）
-    core: LogCore = configure("botnode", console_color=True, dispatch_timeout=0.05)
+    core: LogCore = configure("tickneko", console_color=True, dispatch_timeout=0.05)
     await core.start()
     log = default_core().child("demo.scheduler")
 

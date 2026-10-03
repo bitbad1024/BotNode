@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  BotNode 一键打包（Linux / macOS，与 build-all.bat 同款）
+#  TickNeko 一键打包（Linux / macOS，与 build-all.bat 同款）
 #
-#    ./scripts/build-all.sh               前端 + 后端产物 + 单镜像 botnode:latest
-#    ./scripts/build-all.sh v0.1.0        镜像标签换成 botnode:v0.1.0
+#    ./scripts/build-all.sh               前端 + 后端产物 + 单镜像 tickneko:latest
+#    ./scripts/build-all.sh v0.1.0        镜像标签换成 tickneko:v0.1.0
 #    ./scripts/build-all.sh --no-docker   只打包前后端产物，不碰 Docker
 #    ./scripts/build-all.sh --clean       先清空 node_modules 再装（可复现，但更慢）
 #
 #  产物：
 #    frontend/dist      控制台静态产物
 #    build/backend      后端源码包（cd 进去 pip install -r requirements.txt，再 python app.py）
-#    botnode:<标签>     单镜像（nginx 托管前端 + 反代 /api 给后端）
+#    tickneko:<标签>     单镜像（nginx 托管前端 + 反代 /api 给后端）
 # ============================================================================
 set -euo pipefail
 
@@ -29,7 +29,7 @@ for arg in "$@"; do
 done
 
 echo "============================================================"
-echo " BotNode 一键打包   （镜像标签：$TAG）"
+echo " TickNeko 一键打包   （镜像标签：$TAG）"
 echo "============================================================"
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -51,9 +51,9 @@ echo "  前端产物：frontend/dist"
 echo
 echo "[2/3] 收集后端源码 ..."
 rm -rf build
-mkdir -p build/backend/botnode
+mkdir -p build/backend/tickneko
 # tar 过一遍是为了不带 __pycache__（rsync 不一定装）
-(cd botnode && tar cf - --exclude='__pycache__' .) | (cd build/backend/botnode && tar xf -)
+(cd tickneko && tar cf - --exclude='__pycache__' .) | (cd build/backend/tickneko && tar xf -)
 cp app.py config.py requirements.txt config.toml.example build/backend/
 echo "  后端产物：build/backend"
 
@@ -62,8 +62,8 @@ if [ "$SKIP_DOCKER" = "1" ]; then
     echo "[3/3] 跳过镜像构建（--no-docker）"
 elif command -v docker >/dev/null 2>&1; then
     echo
-    echo "[3/3] 构建单镜像 botnode:$TAG ..."
-    docker build -t "botnode:$TAG" .
+    echo "[3/3] 构建单镜像 tickneko:$TAG ..."
+    docker build -t "tickneko:$TAG" .
 else
     echo
     echo "[3/3] 找不到 docker，跳过镜像构建"
@@ -74,12 +74,12 @@ echo "打包完成："
 echo "  前端产物  frontend/dist"
 echo "  后端产物  build/backend"
 if [ "$SKIP_DOCKER" != "1" ]; then
-    echo "  镜像      botnode:$TAG"
+    echo "  镜像      tickneko:$TAG"
     echo
     echo "镜像怎么跑："
-    echo "  docker run -d --name botnode -p 8080:80 -p 16700:16700 \\"
+    echo "  docker run -d --name tickneko -p 8080:80 -p 16700:16700 \\"
     echo "    -v \"\$PWD/data:/app/data\" \\"
-    echo "    -v botnode-logs:/app/logs botnode:$TAG"
+    echo "    -v tickneko-logs:/app/logs tickneko:$TAG"
     echo "  配置不用先准备：第一次启动会照模板生成 data/config.toml，改完重启容器即生效"
     echo "  或者：docker compose up -d --build"
 fi

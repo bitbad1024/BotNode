@@ -1,11 +1,11 @@
-# BotNode
+# TickNeko
 
-[![CI](https://github.com/bitbad1024/BotNode/actions/workflows/ci.yml/badge.svg)](https://github.com/bitbad1024/BotNode/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/haloneko/TickNeko/actions/workflows/ci.yml/badge.svg)](https://github.com/haloneko/TickNeko/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-brightgreen.svg)
 
-BotNode 是一个可以自己部署的机器人框架。它在三件事上做了抽象：
+TickNeko 是一个可以自己部署的机器人框架。它在三件事上做了抽象：
 
 - **流程**：触发（收到消息 / 到了时间点）→ 加工（取字段、正则、算一算、判条件）→ 动作（回消息、调接口），全部在画布上连线完成。
 - **平台**：OneBot、Kook 的差别被抹平成同一套「规范化事件 + 能力协议」。
@@ -46,7 +46,7 @@ docker compose up -d --build              # 控制台 http://127.0.0.1:8080
 一键打包（前端产物 + 后端源码包 + 单镜像）：
 
 ```bat
-scripts\build-all.bat              :: Windows：前端 + 后端 + botnode:latest
+scripts\build-all.bat              :: Windows：前端 + 后端 + tickneko:latest
 scripts\build-all.bat --no-docker  :: 只打包产物，不碰 Docker
 ```
 
@@ -71,11 +71,11 @@ cd frontend && npm install && npm run build
 
 ## 本地账号
 
-本地试用账号只有一个（由 `botnode/api/services/user/demo.py` 写入，**部署到公网前务必改密码**）：
+本地试用账号只有一个（由 `tickneko/api/services/user/demo.py` 写入，**部署到公网前务必改密码**）：
 
 | 账号 | 密码 | 角色 |
 |---|---|---|
-| `admin` | `botnode-admin` | 管理员 |
+| `admin` | `tickneko-admin` | 管理员 |
 
 要别的账号不必改代码：在登录页注册（`POST /api/auth/register`）即可，新账号是普通用户。
 
@@ -131,7 +131,10 @@ cd frontend && npm install && npm run build
 - [.github/CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md)：社区行为准则
 - [.github/SECURITY.md](.github/SECURITY.md)：漏洞报告渠道与部署注意事项
 - [docs/THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES)：第三方组件与许可
+- [`NOTICE`](NOTICE)：本项目的署名声明（分发派生作品时要一起带上）
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 BotNode 贡献者
+[Apache License 2.0](LICENSE) © 2026 TickNeko
+
+商用、闭源、改了自己发都行。条件只有两条 —— 分发时带上 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)（保留版权与署名），以及第 6 条：不得用 TickNeko 的名字或商标给派生作品背书。

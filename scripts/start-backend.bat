@@ -3,9 +3,9 @@ chcp 65001 >nul
 setlocal
 
 rem ============================================================
-rem  BotNode 后端启动脚本
+rem  TickNeko 后端启动脚本
 rem  启动 FastAPI 接口层（默认 http://127.0.0.1:18080）
-rem  依赖：python 3.12+，以及 botnode[api] / botnode[onebot] 等依赖
+rem  依赖：python 3.12+，以及 tickneko[api] / tickneko[onebot] 等依赖
 rem ============================================================
 
 rem 脚本住在 scripts/ 下，项目根是它的上一级
@@ -18,7 +18,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo 正在启动 BotNode 后端（http://127.0.0.1:18080）...
+echo 正在启动 TickNeko 后端（http://127.0.0.1:18080）...
 echo 按 Ctrl+C 停止。
 echo.
 

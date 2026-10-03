@@ -12,9 +12,9 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from botnode.bots import SqlBotStore
-from botnode.platforms.bridge.manager import BotManager
-from botnode.platforms.bridge.models import BotClient
+from tickneko.bots import SqlBotStore
+from tickneko.platforms.bridge.manager import BotManager
+from tickneko.platforms.bridge.models import BotClient
 
 
 @pytest.fixture
@@ -170,6 +170,6 @@ async def test_no_adapter_falls_back_to_store_only(store: SqlBotStore) -> None:
 
 def _temp_record(bot_id: str) -> Any:
     """造一条内存里的假记录：online_clients 只读 platform，不落库。"""
-    from botnode.bots import BotCredential
+    from tickneko.bots import BotCredential
 
     return BotCredential(platform="kook", owner_id="u-admin", bot_id=bot_id)

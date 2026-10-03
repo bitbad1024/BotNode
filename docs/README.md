@@ -1,9 +1,9 @@
-# BotNode 文档总目录
+# TickNeko 文档总目录
 
 > 这里是 `docs/` 的总入口：**按模块查文档见「文档索引」，想先看清整个框架见「框架总览」**。
 > 每个模块的「为什么」都收在对应文档里，代码里的模块 docstring 只留一句话定位并指回这里。
 >
-> 项目名 **BotNode**，Python 包名 `botnode`（文档里写路径 / import 时用小写包名）。
+> 项目名 **TickNeko**，Python 包名 `tickneko`（文档里写路径 / import 时用小写包名）。
 
 ---
 
@@ -12,14 +12,14 @@
 | 文档 | 覆盖的模块 | 主要内容 |
 |---|---|---|
 | [app/app.md](app/app.md) | 根目录 `app.py` / `config.py` | 启动顺序与停机收尾、数据库探测、配置区域与三层覆盖、报错口径、Kook 密钥的派生规则 |
-| [logger/logger.md](logger/logger.md) | `botnode.core.logger` | 异步日志：root + child / bind / route、目标与过滤器、检索与刷新、进程门面 |
-| [cache/cache.md](cache/cache.md) | `botnode.core.cache` | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入 |
-| [scheduler/scheduler.md](scheduler/scheduler.md) | `botnode.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
-| [bridge/bridge.md](bridge/bridge.md) | `botnode.platforms.bridge` | 规范化事件 + 适配器协议 + Gateway 总线、OneBot / Kook 两个适配器、怎么写第三个平台 |
-| [workflow/workflow.md](workflow/workflow.md) | `botnode.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节，含画布截图） |
+| [logger/logger.md](logger/logger.md) | `tickneko.core.logger` | 异步日志：root + child / bind / route、目标与过滤器、检索与刷新、进程门面 |
+| [cache/cache.md](cache/cache.md) | `tickneko.core.cache` | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入 |
+| [scheduler/scheduler.md](scheduler/scheduler.md) | `tickneko.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
+| [bridge/bridge.md](bridge/bridge.md) | `tickneko.platforms.bridge` | 规范化事件 + 适配器协议 + Gateway 总线、OneBot / Kook 两个适配器、怎么写第三个平台 |
+| [workflow/workflow.md](workflow/workflow.md) | `tickneko.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节，含画布截图） |
 | [deploy.md](deploy.md) | 打包与部署 | Docker 单镜像 / compose、一键打包脚本（`scripts\build-all.bat` / `.sh`）、不用 Docker 的跑法、容器里的配置与卷、上线前检查 |
 
-包内还有一份接口层索引 `botnode/api/MODULES.md`（尚未搬进 `docs/`）。
+包内还有一份接口层索引 `tickneko/api/MODULES.md`（尚未搬进 `docs/`）。
 
 跟代码无关的项目文档在根与 `.github/` 下 —— GitHub 认这两个位置，放那儿不影响仓库页的展示：
 
@@ -28,7 +28,7 @@
 | 贡献指南 | [`.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md) | 环境准备、目录速览、代码约定、测试、提交规范 |
 | 安全策略 | [`.github/SECURITY.md`](../.github/SECURITY.md) | 漏洞报告渠道、部署必关的门、已知设计取舍 |
 | 行为准则 | [`.github/CODE_OF_CONDUCT.md`](../.github/CODE_OF_CONDUCT.md) | 社区行为准则 |
-| 许可证 | [`LICENSE`](../LICENSE) · [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | MIT 与第三方组件许可 |
+| 许可证 | [`LICENSE`](../LICENSE) · [`NOTICE`](../NOTICE) · [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | Apache-2.0 与第三方组件许可 |
 
 
 ---
@@ -38,10 +38,10 @@
 ### 2.1 分层
 
 ```
-根目录  app.py / config.py        读 TOML、建引擎、起服务（不在 botnode 包内）
+根目录  app.py / config.py        读 TOML、建引擎、起服务（不在 tickneko 包内）
           │  传映射（from_mapping）
           ▼
-botnode    bootstrap.py / wiring.py  组合根：装配各块 + 派发日志核心
+tickneko    bootstrap.py / wiring.py  组合根：装配各块 + 派发日志核心
           │
           ├── api/        接口层：6 组路由 + 业务服务（唯一认识 FastAPI 的层）
           ├── workflow/   编排层：图校验 → 落库 → 节点执行器（不 import FastAPI）
@@ -71,14 +71,14 @@ api ──► core / workflow          （api 不 import platforms / db，靠协
 workflow ──► core（logger、scheduler）
 bridge ──► core（logger）+ bots  （只有适配器实现 import 平台包）
 core ──► 自身
-db ──► core.logger 的模型        bots ──► 无 botnode 依赖
+db ──► core.logger 的模型        bots ──► 无 tickneko 依赖
 ```
 
 - **core 只依赖自身**（`redis` 是函数内惰性 import，不装也能用）；
 - **bridge 的协议 / 总线层不 import 平台包** —— 只有 `bridge/onebot.py` / `bridge/kook.py` 两个适配器 import；
 - **platforms 运行时不 import api**（`TokenRegistry` 只在 `TYPE_CHECKING` 下引用，否则会被迫带上 fastapi）；
 - **api 不 import platforms / db**：按 `OneBotLike` / `BotsService` / `WorkflowStoreLike` 协议收实现，缺了回 503；
-- **workflow 不 import FastAPI**；**bots 不 import 任何 botnode 包**。
+- **workflow 不 import FastAPI**；**bots 不 import 任何 tickneko 包**。
 
 ### 2.3 装配链路（`bootstrap.run()`）
 
@@ -105,7 +105,7 @@ db ──► core.logger 的模型        bots ──► 无 botnode 依赖
 
 ### 2.4 配置
 
-- **读 TOML 的只有根目录 `config.py` 与 `app.py`**（不在 `botnode` 包内）；`botnode` 包内**没有任何模块读配置文件** —— 一律由上层用 `from_mapping(映射)` 注入（`ApiOptions` / `OneBotOptions` / `KookOptions` / `CacheOptions`）；
+- **读 TOML 的只有根目录 `config.py` 与 `app.py`**（不在 `tickneko` 包内）；`tickneko` 包内**没有任何模块读配置文件** —— 一律由上层用 `from_mapping(映射)` 注入（`ApiOptions` / `OneBotOptions` / `KookOptions` / `CacheOptions`）；
 - **配置位置**：`data/config.toml`（模板 `config.toml.example`）—— 跟 sqlite / Kook 密钥 / 头像同住 `data/`，备份 / 搬迁 / 容器挂载只搬一个目录；容器里首次启动会照模板生成；
 - 配置区域（`config.toml.example`）：`[app]`、`[database]`、`[logging]`（含 `[logging.file]` / `[logging.database]` / `[logging.queue]`）、`[cache]`（含 `[cache.redis]`）、`[api]`、`[onebot]`、`[kook]`；没有 `[scheduler]` —— 调度由工作流的 `start` 节点按 cron 登记；
 - 容错口径：文件不存在 / 缺项按默认值补齐，只有**值写错**才抛 `ConfigError`；废弃键直接报错而不是静默忽略。

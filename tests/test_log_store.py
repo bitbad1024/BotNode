@@ -1,23 +1,23 @@
-"""日志落库：:class:`~botnode.db.SqlLogStore`（``logs`` 表）与数据库处理机的接线。
+"""日志落库：:class:`~tickneko.db.SqlLogStore`（``logs`` 表）与数据库处理机的接线。
 
 处理机自己不拼 SQL——建表、写入、检索都归 store 管，所以这里两头都测：store 的
 写入 / 检索 / 清理，以及处理机确实把缓冲里的日志交给了 store、并把检索原样转出去。
 
-需要 ``sqlmodel`` + ``aiosqlite``（``pip install "botnode[api]"``），没装就整文件跳过。
+需要 ``sqlmodel`` + ``aiosqlite``（``pip install "tickneko[api]"``），没装就整文件跳过。
 """
 import time
 from collections.abc import AsyncIterator
 
 import pytest
 
-pytest.importorskip("sqlmodel", reason="数据库层要装 sqlmodel：pip install \"botnode[api]\"")
-pytest.importorskip("aiosqlite", reason="sqlite 的异步驱动：pip install \"botnode[api]\"")
+pytest.importorskip("sqlmodel", reason="数据库层要装 sqlmodel：pip install \"tickneko[api]\"")
+pytest.importorskip("aiosqlite", reason="sqlite 的异步驱动：pip install \"tickneko[api]\"")
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from botnode.core.logger import DatabaseLogProcessor, LogLevel, LogRecord  # noqa: E402
-from botnode.db import LogTable, SqlLogStore  # noqa: E402
+from tickneko.core.logger import DatabaseLogProcessor, LogLevel, LogRecord  # noqa: E402
+from tickneko.db import LogTable, SqlLogStore  # noqa: E402
 
 #: 本文件用到的内存引擎：每个用例一份，用例结束由下面的 fixture 统一 dispose
 _MEMORY_ENGINES: list[AsyncEngine] = []
@@ -44,7 +44,7 @@ def record(
     message: str,
     *,
     level: LogLevel = LogLevel.INFO,
-    logger_name: str = "botnode",
+    logger_name: str = "tickneko",
     moment: float | None = None,
     extra: dict[str, object] | None = None,
     owner_id: str = "",
@@ -81,7 +81,7 @@ async def test_add_and_search_roundtrip() -> None:
     assert len(found) == 1
     assert found[0].message == "hello"
     assert found[0].level is LogLevel.INFO
-    assert found[0].logger_name == "botnode"
+    assert found[0].logger_name == "tickneko"
     assert found[0].extra == {"robot": "r-1"}
     assert found[0].exc_text is None
     assert found[0].seq > 0  # 自增序号由库分配，跟着记录一起回来
@@ -118,14 +118,14 @@ async def test_search_filters_and_order() -> None:
     base = time.time()
     await store.add(
         [
-            record("robot 执行第 1 步", logger_name="botnode.robot", moment=base - 10),
+            record("robot 执行第 1 步", logger_name="tickneko.robot", moment=base - 10),
             record(
                 "robot 执行第 2 步",
-                logger_name="botnode.robot",
+                logger_name="tickneko.robot",
                 moment=base - 5,
                 level=LogLevel.ERROR,
             ),
-            record("别的模块", logger_name="botnode.api", moment=base),
+            record("别的模块", logger_name="tickneko.api", moment=base),
         ]
     )
 
@@ -137,7 +137,7 @@ async def test_search_filters_and_order() -> None:
     assert [r.message for r in (await store.search(level="error")).records] == [
         "robot 执行第 2 步"
     ]
-    assert len((await store.search(logger_name="botnode.robot")).records) == 2
+    assert len((await store.search(logger_name="tickneko.robot")).records) == 2
     assert len((await store.search(query="robot 执行")).records) == 2
     assert [r.message for r in (await store.search(start=base - 6, end=base - 4)).records] == [
         "robot 执行第 2 步"
@@ -153,20 +153,20 @@ async def test_search_returns_total_with_same_filters() -> None:
     base = time.time()
     await store.add(
         [
-            record("robot 执行第 1 步", logger_name="botnode.robot", moment=base - 10),
+            record("robot 执行第 1 步", logger_name="tickneko.robot", moment=base - 10),
             record(
                 "robot 执行第 2 步",
-                logger_name="botnode.robot",
+                logger_name="tickneko.robot",
                 moment=base - 5,
                 level=LogLevel.ERROR,
             ),
-            record("别的模块", logger_name="botnode.api", moment=base),
+            record("别的模块", logger_name="tickneko.api", moment=base),
         ]
     )
 
     assert (await store.search()).total == 3
     assert (await store.search(level="error")).total == 1
-    assert (await store.search(logger_name="botnode.robot")).total == 2
+    assert (await store.search(logger_name="tickneko.robot")).total == 2
     assert (await store.search(query="robot 执行")).total == 2
     assert (await store.search(start=base - 6, end=base - 4)).total == 1
     # 分页只裁本页条目，total 始终是命中总数（翻页要靠它算总页数）
@@ -211,7 +211,7 @@ async def test_broken_extra_does_not_break_search() -> None:
                 record_id="r-broken",
                 timestamp=time.time(),
                 level="INFO",
-                logger_name="botnode",
+                logger_name="tickneko",
                 message="坏数据",
                 extra="{不是 JSON",
             )

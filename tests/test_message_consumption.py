@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from botnode.api import create_app
-from botnode.workflow import NodeExecutionContext, SimpleWorkflowRunner, WorkflowGraph, validate_graph
-from botnode.workflow.runtime import MessageRouter
-from botnode.workflow.models import WorkflowNode
-from botnode.workflow.nodes.consume import exec_consume
+from tickneko.api import create_app
+from tickneko.workflow import NodeExecutionContext, SimpleWorkflowRunner, WorkflowGraph, validate_graph
+from tickneko.workflow.runtime import MessageRouter
+from tickneko.workflow.models import WorkflowNode
+from tickneko.workflow.nodes.consume import exec_consume
 
 
 def message(**overrides):

@@ -1,11 +1,11 @@
-# 缓存层（`botnode.core.cache`）
+# 缓存层（`tickneko.core.cache`）
 
 ## 设计要点
 
 - **一套 API，两种后端**：`backend = "redis"` 走 Redis（redis-py 异步客户端），
   `"memory"`（默认）走进程内存；两者实现同一个协议（`CacheBackend`），键是字符串、
   值分字符串 / 列表 / 哈希三种结构、TTL 按秒，语义一致 —— 换后端不用改上层代码；
-- **业务代码只碰进程级单例** `cache`（`from botnode.core.cache import cache`）；要一份
+- **业务代码只碰进程级单例** `cache`（`from tickneko.core.cache import cache`）；要一份
   独立的缓存就自己 `Cache()`（比如测试里）；
 - **不隐式启动**：没 `start()` 就调数据接口会抛 `CacheError` —— 连不连得上应该在启动
   阶段就见分晓，而不是等到哪一次 `get` 才炸；
@@ -25,7 +25,7 @@
 | `core.Cache` | 缓存门面：抹平后端差异，定下「`ttl=None` 用哪个 TTL」 |
 | `interfaces.CacheBackend` | 后端协议，两个实现都符合它 |
 | `memory.MemoryCache` | 进程内存实现，也是 Redis 连不上时的降级兜底 |
-| `redis.RedisCache` | Redis 实现（可选依赖 `pip install "botnode[redis]"`） |
+| `redis.RedisCache` | Redis 实现（可选依赖 `pip install "tickneko[redis]"`） |
 | `models` | `CacheOptions` / `RedisOptions` / `CacheError` |
 | `manager.cache` | 进程级单例 |
 | `logging` | 本层的日志接入点 |
@@ -33,7 +33,7 @@
 ## 快速开始
 
 ```python
-from botnode.core.cache import CacheOptions, cache
+from tickneko.core.cache import CacheOptions, cache
 
 await cache.start()                     # 默认就是本地内存版：不启用 Redis 也能用
 await cache.set("k", "v", ttl=60)
@@ -43,7 +43,7 @@ await cache.list_push("queue", "a", "b")            # 列表
 await cache.hash_set("user:1", {"name": "阿一"})    # 哈希
 await cache.set_json("profile", {"tags": ["a"]})    # 嵌套结构走 JSON
 
-cache.configure(CacheOptions(backend="redis", namespace="botnode"))   # 要用 Redis
+cache.configure(CacheOptions(backend="redis", namespace="tickneko"))   # 要用 Redis
 await cache.start()
 ```
 
@@ -89,9 +89,9 @@ await cache.start()
 
 ## 日志接入
 
-本层接的是 `botnode.core.logger` 的进程门面，名为 `cache`（相对核心 `botnode` ->
-`botnode.cache`）。**业务模块一律不直接 `default_core()`**：要日志实例就调
+本层接的是 `tickneko.core.logger` 的进程门面，名为 `cache`（相对核心 `tickneko` ->
+`tickneko.cache`）。**业务模块一律不直接 `default_core()`**：要日志实例就调
 `cache_logger()`；装配层也可把实例经 `Cache(..., logger=)` 传入。核心由装配层
-（`botnode.bootstrap` 或 `botnode.wiring.wire_loggers`）经 `set_core()` 存进本模块槽位；
+（`tickneko.bootstrap` 或 `tickneko.wiring.wire_loggers`）经 `set_core()` 存进本模块槽位；
 `import` 本模块**零副作用**，没装配就调 `cache_logger()` 会当场抛错（fail fast），
 不会默默按默认参数建一份把配置定死的核心。

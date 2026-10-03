@@ -154,7 +154,7 @@ export default function DashboardPage() {
           你好，{user.nickname || user.account}
         </h2>
         <p className={styles.greetSub}>
-          欢迎使用 BotNode 机器人框架控制台，令牌有效，接口层随时听调。
+          欢迎使用 TickNeko 机器人框架控制台，令牌有效，接口层随时听调。
         </p>
       </header>
 

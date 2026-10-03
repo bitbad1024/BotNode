@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from botnode.bots import BotCredential, SqlBotStore, hash_token
+from tickneko.bots import BotCredential, SqlBotStore, hash_token
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def test_derive_key_scrypt_uses_salt() -> None:
 
     带盐派生两个不同 salt 出来的密钥互不相同；无盐（v1 老密文）保持向后兼容。
     """
-    from botnode.bots.crypto import derive_key
+    from tickneko.bots.crypto import derive_key
 
     key_a = derive_key("弱口令", salt=b"salt-a")
     key_b = derive_key("弱口令", salt=b"salt-b")
@@ -94,7 +94,7 @@ def test_derive_key_scrypt_uses_salt() -> None:
 
 def test_decrypt_v1_legacy_ciphertext_still_works() -> None:
     """老 v1 密文（裸 sha256、无盐）用新 decrypt 仍能解：升级不丢老数据。"""
-    from botnode.bots.crypto import decrypt_token, derive_key, encrypt_token
+    from tickneko.bots.crypto import decrypt_token, derive_key, encrypt_token
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     import base64, os
 

@@ -1,12 +1,12 @@
 # =============================================================================
-# BotNode 应用配置模板
+# TickNeko 应用配置模板
 # =============================================================================
 # 用法：复制成 data/config.toml 再按自己环境改（那份已写进 .gitignore —— 整个 data/ 都不入库；
 # 这个文件才是入库的模板，改它也改不了实际生效的配置）。
 #     Windows:  copy config.toml.example data\config.toml
 #     Linux:    cp   config.toml.example data/config.toml
 #
-# 为什么住 data/：配置是运行时数据，跟 sqlite（data/botnode.db）、Kook 密钥、上传的头像同处一个
+# 为什么住 data/：配置是运行时数据，跟 sqlite（data/tickneko.db）、Kook 密钥、上传的头像同处一个
 # 目录 —— 备份 / 搬迁 / 容器挂载都只搬 data/ 一个目录，不会漏掉某一项；容器里 data/ 是按目录挂的，
 # 容器才写得进去，「首次启动照这份模板自动生成配置」才有可能（Docker 镜像里用的就是本文件）。
 #
@@ -37,8 +37,8 @@
 # 区域 1/11：[app] —— 进程自己
 # =============================================================================
 [app]
-# 进程名，同时作为日志核心名（子实例都以它为前缀，如 botnode.app）
-name = "botnode"
+# 进程名，同时作为日志核心名（子实例都以它为前缀，如 tickneko.app）
+name = "tickneko"
 # 调试模式：置 true 时忽略 [logging] 的 level，直接把级别开到 DEBUG
 debug = false
 
@@ -53,17 +53,17 @@ driver = "sqlite"
 
 # ---- 只有 driver = "sqlite" 时才看这几项 ----
 # 数据库文件路径；相对路径相对项目根目录（数据文件与头像同在 data/ 下）
-path = "data/botnode.db"
+path = "data/tickneko.db"
 
 # ---- 只有 driver = "mariadb" 时才看这几项 ----
 # 服务地址与端口
 host = "127.0.0.1"
 port = 3306
 # 登录用户 / 密码（config.toml 不入库，密码写在这里不会进 git）
-user = "botnode"
+user = "tickneko"
 password = ""
-# 库名（要事先建好：CREATE DATABASE botnode CHARACTER SET utf8mb4;）
-database = "botnode"
+# 库名（要事先建好：CREATE DATABASE tickneko CHARACTER SET utf8mb4;）
+database = "tickneko"
 
 
 # =============================================================================
@@ -88,7 +88,7 @@ console_level = ""
 enabled = true
 # 放日志片的目录；相对路径相对项目根目录（app.py 所在目录）
 dir = "logs"
-# 片名前缀；留空 = 用 [app].name，于是片名与进程名一致（botnode-2026-09-28.log）
+# 片名前缀；留空 = 用 [app].name，于是片名与进程名一致（tickneko-2026-09-28.log）
 prefix = ""
 # 一片最多写多久（分钟）；0 = 只按天分片。片名 = <前缀>-<日期>[.<序号>].log
 rotate_minutes = 60
@@ -122,12 +122,12 @@ flush_interval = 5.0
 #
 # 要给日志单独连另一个库，就在这一节里按需覆盖，覆盖是逐项的（没写的继续继承）：
 # driver = "mariadb"
-# path = "logs/botnode-log.db"      # sqlite 用
+# path = "logs/tickneko-log.db"      # sqlite 用
 # host = "10.0.0.5"               # mariadb 用
 # port = 3306
-# user = "botnode_log"
+# user = "tickneko_log"
 # password = ""
-# database = "botnode_log"
+# database = "tickneko_log"
 
 
 # =============================================================================
@@ -147,10 +147,10 @@ dispatch_timeout = 0.2
 # 这一节不写也能用：默认走进程内存（本地缓存），不启用 Redis 也不用装它
 # =============================================================================
 [cache]
-# 用哪个后端：memory（进程内存，默认）/ redis（Redis 服务，需 pip install "botnode[redis]"）
+# 用哪个后端：memory（进程内存，默认）/ redis（Redis 服务，需 pip install "tickneko[redis]"）
 backend = "memory"
 # Redis 上的键前缀；多个应用共用一个 Redis 实例时用它隔离（memory 后端不看这项）
-namespace = "botnode"
+namespace = "tickneko"
 # set() 没给 ttl 时用几秒过期；0 表示永不过期
 default_ttl = 0.0
 # Redis 连不上时是否退回本地缓存：默认 false = 启动阶段就报错（并提示检查 [cache.redis] 配置），
