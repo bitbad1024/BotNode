@@ -42,6 +42,7 @@ from tickneko.core.scheduler import TaskManager
 
 from ..logging import workflow_logger
 from ..models import ValidationIssue, WorkflowNode
+from .port_types import PortType
 
 #: 节点执行函数：(节点, 上下文) -> 本节点产出（键 = 已声明的输出端口名）
 NodeExecutor = Callable[[WorkflowNode, "NodeExecutionContext"], Awaitable[dict[str, Any]]]
@@ -74,25 +75,27 @@ class EnvironmentFailure(ConnectionError):
 #: 节点在图中的拓扑角色：start=唯一入口 / end=终点 / normal=普通节点
 NodeRole = Literal["start", "end", "normal"]
 
-#: 节点的语义分类：画布面板按它分组（前端目录只按 ``order`` 排）。各节点标类，
-#: 新增类型不在这里白名单化 —— 前端认不出时照原样显示，不影响图能存能跑。
-NodeCategory = Literal[
-    "trigger",   # 触发：流程入口（start）
-    "target",    # 目标：产出「发到哪」的会话定位值
-    "constant",  # 常量：产出固定值
-    "action",    # 动作：对外副作用（发消息 / 发请求 / 写日志）
-    "control",   # 控制：分支 / 等待
-    "data",      # 数据：加工 / 提取 / 运算 / 存取
-    "end",       # 结束：流程终点
-]
+
+#: 节点的语义分类：画布面板按它分组。**分类集合不在这里维护** —— 目录接口从节点注册里
+#: 自动收集（见 ``NodeCatalogData.from_registry``）：哪个节点标了什么类，分类清单就是什么，
+#: 加平台 / 加扩展分类只改「标分类的那个节点」，不用再动白名单或面板分组。
+NodeCategory = str
+
+#: 分类的显示名映射（机器名 -> 中文名）。这是**唯一**要维护的地方：目录接口把它随
+#: ``categories`` 下发，画布面板按下发结果分组 —— 查不到名字的分类原样显示机器名。
+CATEGORY_LABELS: dict[str, str] = {
+    "trigger": "触发",
+    "constant": "常量",
+    "action": "动作",
+    "control": "控制",
+    "data": "数据",
+    "onebot": "OneBot 平台",
+    "kook": "Kook 平台",
+    "end": "结束",
+}
 
 #: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
 NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
-
-#: 端口类型：trigger（控制流）决定「什么时候执行下一个节点」/ message（数据流）传内容 /
-#: target（数据流）传「发到哪」的会话定位值（:class:`~tickneko.platforms.bridge.models.ChatTarget`
-#: 或平台特化 target；workflow 本身不 import bridge，值由装配层放进 ``trigger_data``）
-PortType = Literal["trigger", "message", "target"]
 
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()
@@ -142,13 +145,31 @@ class PortSpec:
     :param id: 端口名（edge 两端引用的就是它；数据输出端口同时是产出值的键名）；
     :param type: 端口类型，连线两端必须同类；
     :param label: 显示名（缺省用 id）；
-    :param required: 仅输入端口有效：必须接线（或同名字段手填了值）。
+    :param required: 仅输入端口有效：必须接线（或同名字段手填了值）；
+    :param tie: **透传对**（可选）：指向**同一节点另一侧**的端口 id，表示「输入输出是
+        同一种类型」—— 输入端口的生效类型决定输出，反之亦然（placeholder 的透传口用它
+        声明配对；泛型端口接什么类型，对端就跟着显示什么类型）。只有泛型端口有意义：
+        非泛型端口带 ``tie`` 当场报错（见 :meth:`__post_init__`），对侧有没有这个端口由
+        :class:`NodeSpec` 在注册时查。
     """
 
     id: str
     type: PortType = "trigger"
     label: str = ""
     required: bool = False
+    tie: str = ""
+
+    def __post_init__(self) -> None:
+        """``tie`` 只对泛型端口有意义 —— 别的类型带上它说明写错了，声明时当场炸掉。
+
+        指错端口 id 是**静默失效**（画布上只是两端颜色对不上，看不出原因），能在注册这一
+        步拦住就别留到画布上猜。
+        """
+        if self.tie and self.type != "generic":
+            raise ValueError(
+                f"端口 {self.id!r} 声明了透传对 tie={self.tie!r}，"
+                f"但它的类型不是 generic（{self.type!r}）—— 只有泛型端口能配对"
+            )
 
 
 #: 各节点通用的触发端口（出入口都叫「触发」）
@@ -170,10 +191,16 @@ class NodeSpec:
     :param branching: 分流节点（如 condition）：执行后只让**选中端口的出边**保持活着，
         其余出口的边整段剪枝（对岸节点不执行，级联到它的下游）；普通节点永远 False；
     :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
+    :param color: 画布配色（CSS 颜色值，如 ``"#3b82f6"``）；空串 = 没配，前端用兜底色。
+        加节点类型**不需要改前端** —— 颜色跟其他展示信息一起从目录接口下发；
     :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
     :param category: 语义分类（画布面板分组用，见 :data:`NodeCategory`）；
     :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
     :param outputs: 输出端口（画布右侧圆点；执行函数返回值的键必须是这里的 id）。
+
+    端口上声明的 ``tie``（透传对）在**注册这一步**就查对侧有没有那个端口（见
+    :meth:`__post_init__`）：三个注册入口（``register_node`` / ``register_executor`` /
+    ``declare_node_type``）都经过这里，不用各写一遍。
     """
 
     node_type: str
@@ -186,10 +213,26 @@ class NodeSpec:
     expression_field: str | None = None
     branching: bool = False
     label: str = ""
+    color: str = ""
     order: int = 100
     category: NodeCategory = "data"
     inputs: tuple[PortSpec, ...] = ()
     outputs: tuple[PortSpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        """透传对 ``tie`` 必须**指向另一侧的某个真实端口** —— 写错 id 是静默失效
+        （画布上表现为两端颜色对不上），注册时当场报错更好排查。"""
+        for port, others, side in (
+            *((p, self.outputs, "输出") for p in self.inputs),
+            *((p, self.inputs, "输入") for p in self.outputs),
+        ):
+            if not port.tie:
+                continue
+            if not any(other.id == port.tie for other in others):
+                raise ValueError(
+                    f"{self.node_type} 的输入 / 输出端口 {port.id!r} 声明了透传对 "
+                    f"tie={port.tie!r}，但{side}端口里没有这个 id"
+                )
 
 def input_value(
     node: WorkflowNode, ctx: NodeExecutionContext, name: str, default: Any = ""
@@ -211,7 +254,7 @@ def input_value(
 
 
 class NodeExecutionContext:
-    """节点运行时上下文：本节点的入口值 + 日志 + 调度器 + 可用的服务（OneBot / 缓存）。
+    """节点运行时上下文：本节点的入口值 + 日志 + 调度器 + 可用的服务（平台总线 / 缓存）。
 
     ``inputs`` 是**属性**不是入参：引擎每跑一个节点前，按指向它的边把上游产出投递进来
     （键 = 目标端口名）。要预置入口值（测试 / 手动跑）直接写 ``ctx.inputs["x"] = ...``。
@@ -231,18 +274,15 @@ class NodeExecutionContext:
     :param multi_instance: 这条工作流的**实例策略**（工作流设置里的「单实例 / 多实例」，来自
         定义表，与图无关）：``False``（缺省，单实例）上一次还没跑完就跳过本次；``True``（多实例）
         到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）；
-    :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：``onebot`` 节点按它挑
-        「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间）；离线跑是空串；
+    :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：历史 onebot 节点按它挑
+        「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间），日志按它认主人；离线跑是空串；
     :param user_id: 这一趟**面向哪个用户**（消息触发时就是发消息那个人）：用来把「同一个
         工作流在不同人身上的那一份」区分开（按人记状态、按人回复、按人打日志）。它与
         ``owner_id`` 是两回事——``owner_id`` 是**工作流的主人**（账号），``user_id`` 是
         **被服务的对象**；定时触发没有「这个人」，是 :data:`NO_USER_ID`（空串）；
-    :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
-        ``connected_at`` / ``call()`` —— 即 ``tickneko.platforms.onebot.server.OneBotServer``）。
-        装配层注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
     :param gateway: 平台总线（鸭子形状：``async send(platform, owner_id, action, **params)``
         —— 即 ``tickneko.platforms.bridge.gateway.Gateway``）。装配层注入，没接时是 ``None``；
-        ``send`` 节点靠它按平台路由发动作（``onebot`` 节点泛化后的路）。
+        ``send`` 节点靠它按平台路由发动作。
     :param cache: 缓存门面（鸭子形状：``async get(key) -> str | None`` /
         ``async set(key, value, ttl=None)`` —— 即 ``tickneko.core.cache.Cache``）。
         **缺省就是进程级那一个**（``tickneko.core.cache.cache``，主程序启动时已 ``start()``），
@@ -260,7 +300,6 @@ class NodeExecutionContext:
         multi_instance: bool = False,
         owner_id: str = "",
         user_id: str = NO_USER_ID,
-        onebot: Any | None = None,
         gateway: Any | None = None,
         cache: Any | None = None,
     ) -> None:
@@ -268,7 +307,7 @@ class NodeExecutionContext:
         self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
         self.log: list[str] = []  # 节点产出的文字日志（供测试 / 前端回显）
         self.workflow_id: str = workflow_id
-        #: 这条工作流属于谁（OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
+        #: 这条工作流属于谁（历史 OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
         self.owner_id: str = owner_id
         #: 这一趟面向哪个用户（消息触发时是发消息的人）；定时触发 / 离线跑是 NO_USER_ID
         self.user_id: str = user_id
@@ -276,8 +315,6 @@ class NodeExecutionContext:
         self.register_triggers: bool = register_triggers
         #: 实例策略：多实例时到点就开新实例（见类文档）
         self.multi_instance: bool = multi_instance
-        #: OneBot 服务端（鸭子形状见类文档）；装配层没注入时是 ``None``
-        self.onebot: Any | None = onebot
         #: 平台总线（鸭子形状见类文档）；装配层没注入时是 ``None``，``send`` 节点靠它发动作
         self.gateway: Any | None = gateway
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）

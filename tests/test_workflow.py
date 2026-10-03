@@ -39,6 +39,7 @@ from tickneko.wiring import wire_loggers  # noqa: E402
 from tickneko.workflow import (  # noqa: E402
     ConfigField,
     NodeExecutionContext,
+    NodeSpec,
     PortSpec,
     SimpleWorkflowRunner,
     SqlWorkflowStore,
@@ -64,8 +65,8 @@ from tickneko.workflow.nodes import (  # noqa: E402
     exec_http,
     exec_json,
     exec_now,
-    exec_onebot,
     exec_operator,
+    exec_placeholder,
     exec_regex,
 )
 from tickneko.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
@@ -358,6 +359,59 @@ def test_semantic_checks_edge_ports() -> None:
     assert "PORT_TYPE_MISMATCH" in codes
 
 
+def test_semantic_generic_port_connects_any_data_port_not_trigger() -> None:
+    """泛型端口（placeholder 透传口）：接任意数据流端口都放行、接触发端口报错。"""
+    # 泛型 -> 会话定位（send 的 target 入口）：透传口接数据流端口，放行
+    ok = {
+        "nodes": [
+            node("s", "start"),
+            node("p", "placeholder"),
+            node("d", "send", message="hi"),  # target 接线、message 手填，都不缺
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "p"),
+            edge("p", "d", "value", "target"),  # generic -> target
+            edge("d", "e"),
+        ],
+    }
+    report = validate_graph(ok)
+    assert report.valid, report.errors
+
+    # 泛型 -> 触发：泛型只走数据流，接触发端口报 PORT_TYPE_MISMATCH
+    bad = {
+        "nodes": [
+            node("s", "start"),
+            node("p", "placeholder"),
+            node("l", "log"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "p"),
+            edge("p", "l", "value", "trigger"),  # generic -> trigger
+            edge("l", "e"),
+        ],
+    }
+    codes = {issue.code for issue in validate_graph(bad).errors}
+    assert "PORT_TYPE_MISMATCH" in codes
+
+    # 泛型 -> 泛型（占位 -> 占位）：同为数据流，放行
+    through = {
+        "nodes": [
+            node("s", "start"),
+            node("p1", "placeholder"),
+            node("p2", "placeholder"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "p1"),
+            edge("p1", "p2", "value", "value"),  # generic -> generic
+            edge("p2", "e"),
+        ],
+    }
+    assert validate_graph(through).valid
+
+
 def test_semantic_one_data_input_takes_one_edge() -> None:
     """一个数据入口只允许接一条线（要合并就先汇到一个节点再往下送）。"""
     graph = {
@@ -376,6 +430,30 @@ def test_semantic_one_data_input_takes_one_edge() -> None:
     }
     codes = {issue.code for issue in validate_graph(graph).errors}
     assert "DUPLICATE_INPUT_EDGE" in codes
+
+
+def test_port_tie_must_be_generic_and_point_to_a_real_port() -> None:
+    """透传对 ``tie`` 写错是静默失效（画布上只表现为两端颜色对不上）—— 声明时当场报错。
+
+    * 非泛型端口带 ``tie``：没意义（只有泛型「输入什么输出什么」才谈得上配对）；
+    * ``tie`` 指向另一侧不存在的端口 id：查不到就当没配对，比报错更难查。
+    """
+    with pytest.raises(ValueError, match="generic"):
+        PortSpec("text", "message", "文本", tie="text")
+
+    with pytest.raises(ValueError, match="没有这个 id"):
+        NodeSpec(
+            node_type="bad-tie",
+            inputs=[PortSpec("value", "generic", "透传值", tie="value")],
+            outputs=[PortSpec("other", "generic", "别的出口")],  # 没有叫 value 的出口
+        )
+
+    # 正常配对：输入输出互相指认（placeholder 那样）不报错
+    NodeSpec(
+        node_type="ok-tie",
+        inputs=[PortSpec("value", "generic", "透传值", tie="value")],
+        outputs=[PortSpec("value", "generic", "透传结果", tie="value")],
+    )
 
 
 def test_semantic_trigger_ports_allow_convergence() -> None:
@@ -632,6 +710,39 @@ async def test_executor_start_end_log_test_run() -> None:
     assert any("[INFO] l: hello tickneko" in line for line in ctx.log)
     # 最后一个节点（end）没接线的入口：触发边不送值
     assert ctx.inputs == {}
+
+
+@pytest.mark.asyncio
+async def test_executor_placeholder_passes_through_without_side_effects() -> None:
+    """占位节点：入口的值**原样透传**到出口，不写日志、不留运行痕迹（仿佛不存在）。"""
+    node = WorkflowNode(id="p1", type="placeholder", config={})
+    ctx = NodeExecutionContext()
+    ctx.inputs = {"value": "来自上游"}
+    assert await exec_placeholder(node, ctx) == {"value": "来自上游"}
+    assert ctx.log == []  # 不留痕迹
+
+
+@pytest.mark.asyncio
+async def test_executor_placeholder_relays_value_along_the_edge() -> None:
+    """start -> 占位 -> log：占位把值沿边原样透传，下游 log 收到的是线上来的值。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("p", "placeholder", value="透传我"),
+                node("l", "log", level="INFO"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "p"),
+                edge("p", "l", "value", "message"),  # 占位的透传 -> log 的日志内容
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("[INFO] l: 透传我" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
@@ -1922,7 +2033,7 @@ def test_condition_fields_are_validated() -> None:
     assert [issue.code for issue in report.errors] == ["GATEWAY_NEEDS_BRANCHES"]
 
 
-# ------------------------------------------------------------- ④-E OneBot 节点
+# ------------------------------------------------------------- ④-E 假平台总线（send / target 测试共用）
 class _FakeActionResponse:
     """假的动作回应（形状对齐 ``tickneko.platforms.onebot.models.ActionResponse``：``ok`` = status/retcode 都成功）。"""
 
@@ -1978,130 +2089,17 @@ class _FakeGateway:
     def make_target(self, platform: str, **fields: object) -> Any:
         from types import SimpleNamespace
 
-        self.target_calls.append((platform, fields))
-        return SimpleNamespace(platform=platform, **fields)
-
-
-@pytest.mark.asyncio
-async def test_onebot_replies_via_gateway_to_target() -> None:
-    """onebot 别名与 send 同款输入：把 message 发到 target 指向的会话，回执转老端口名。"""
-    gateway = _FakeGateway(response=_FakeActionResponse(data={"message_id": 7}))
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="ob1", type="onebot")
-    target = gateway.make_target("onebot", chat="group", chat_id="123456")
-    ctx_.inputs = {"target": target, "message": "开播了"}
-    result = await exec_onebot(node_, ctx_)
-
-    assert gateway.reply_calls == [(target, "开播了")]
-    assert result["onebot_retcode"] == 0
-    assert result["onebot_data"] == '{"message_id":7}'  # 回执数据：紧凑 JSON
-    assert any("[onebot] ob1: reply -> retcode 0" in line for line in ctx_.log)
-
-
-@pytest.mark.asyncio
-async def test_onebot_without_target_skips_and_requires_gateway() -> None:
-    """没有会话定位就不发（retcode 记 1 送下游，不碰网关）；有 target 但没接总线是环境问题，当场抛。"""
-    gateway = _FakeGateway()
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="ob1", type="onebot")
-
-    # 没有 target：不发
-    ctx_.inputs = {"message": "hi"}
-    result = await exec_onebot(node_, ctx_)
-    assert result == {"onebot_retcode": 1, "onebot_data": ""}
-    assert gateway.reply_calls == []
-
-    # 有 target 但没接总线：环境问题当场抛
-    no_gateway = NodeExecutionContext(owner_id="u-admin")
-    no_gateway.inputs = {
-        "target": gateway.make_target("onebot", chat="group", chat_id="7"),
-        "message": "hi",
-    }
-    with pytest.raises(ConnectionError, match="需要平台总线"):
-        await exec_onebot(node_, no_gateway)
-
-
-@pytest.mark.asyncio
-async def test_onebot_failed_receipt_is_a_node_failure() -> None:
-    """对方收下了但回执不成功（status / retcode 非成功）= **业务失败**：抛 NodeFailure（停止
-    向下传播），不再把「没发出去」当结果往下送。"""
-    from tickneko.workflow.nodes import NodeFailure
-
-    gateway = _FakeGateway(
-        response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"})
-    )
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="ob1", type="onebot")
-    ctx_.inputs = {
-        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
-        "message": "hi",
-    }
-    with pytest.raises(NodeFailure, match="发送失败"):
-        await exec_onebot(node_, ctx_)
-
-    # 痕迹照留：retcode 进日志（看得出对方回了什么）
-    assert any("[onebot] ob1: reply -> retcode 1200" in line for line in ctx_.log)
-
-
-def test_onebot_requires_a_target_source() -> None:
-    """target 是 onebot 的必填入口（与 send 同款）：没接线也没手填，语义阶段报 INPUT_NOT_CONNECTED。"""
-
-    def graph_with(**config: object) -> dict[str, object]:
-        return {
-            "nodes": [
-                node("s", "start"),
-                node("ob", "onebot", **config),
-                node("e", "end"),
-            ],
-            "edges": [edge("s", "ob"), edge("ob", "e")],
-        }
-
-    report = validate_graph(graph_with(message="hi"))
-    assert not report.valid and report.stage == STAGE_SEMANTIC
-    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+        self.target_calls.append((platform, dict(fields)))
+        # 与真实适配器同一口径：私聊没给「对方号」时用 chat_id 兜底（生产里 pack 只给 chat_id，
+        # 两个适配器的 make_target 都是 ``user_id or chat_id``）—— 假网关不兜底的话，
+        # 测出来的 target 跟生产不一致（回复私聊会缺对方号）
+        resolved = dict(fields)
+        if resolved.get("chat") == "private" and not resolved.get("user_id"):
+            resolved["user_id"] = resolved.get("chat_id", "")
+        return SimpleNamespace(platform=platform, **resolved)
 
 
 # ------------------------------------------------------------- ④-F send 节点（P3 泛化）
-@pytest.mark.asyncio
-async def test_target_node_takes_trigger_session_when_platform_empty() -> None:
-    """target 节点：platform 留空 = 自动取触发消息的会话定位（原样透出，没有则 None）。"""
-    from tickneko.workflow.nodes import exec_target
-
-    ctx_ = NodeExecutionContext()
-    ctx_.trigger_data = {"target": object()}  # 鸭子形状：透出同一个对象
-    node_ = WorkflowNode(id="tg1", type="target", config={"platform": ""})
-    result = await exec_target(node_, ctx_)
-    assert result["target"] is ctx_.trigger_data["target"]
-
-    # 没有会话定位（定时触发 / 离线跑）：None，不炸
-    ctx_.trigger_data = {}
-    assert (await exec_target(node_, ctx_))["target"] is None
-
-
-@pytest.mark.asyncio
-async def test_target_node_builds_manual_target_via_gateway() -> None:
-    """target 节点：platform 填了 = 手动构造，走 ctx.gateway.make_target 按平台路由。"""
-    from tickneko.workflow.nodes import exec_target
-
-    gateway = _FakeGateway()
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(
-        id="tg1",
-        type="target",
-        config={"platform": "onebot", "chat": "group", "chat_id": "70001"},
-    )
-    result = await exec_target(node_, ctx_)
-    assert gateway.target_calls == [
-        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001", "user_id": "", "message_id": ""})
-    ]
-    assert result["target"].platform == "onebot"  # 鸭子形状：有 platform 的东西
-
-    # 手动填但没接总线（gateway=None）：环境问题当场抛
-    bare = NodeExecutionContext(owner_id="u-admin")
-    with pytest.raises(RuntimeError, match="gateway"):
-        await exec_target(node_, bare)
-
-
 @pytest.mark.asyncio
 async def test_send_replies_via_gateway_to_target() -> None:
     """send 节点把 message 发到 target 指向的会话：走 ``ctx.gateway.reply(target, message)``，回执从 send_ok / send_data 送下去。"""
@@ -2225,23 +2223,6 @@ async def test_send_empty_message_skips() -> None:
 
 
 @pytest.mark.asyncio
-async def test_onebot_empty_message_skips() -> None:
-    """onebot 别名同款：内容为空时不发，retcode 记 1（没发出去）、data 空串送下游。"""
-    from tickneko.workflow.nodes import exec_onebot
-
-    gateway = _FakeGateway()
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="ob1", type="onebot")
-    ctx_.inputs = {
-        "target": gateway.make_target("onebot", chat="group", chat_id="1"),
-        "message": "",
-    }
-    result = await exec_onebot(node_, ctx_)
-    assert result == {"onebot_retcode": 1, "onebot_data": ""}
-    assert gateway.reply_calls == []
-
-
-@pytest.mark.asyncio
 async def test_send_failed_receipt_is_a_node_failure() -> None:
     """对方收下但回执不成功（ok=False）= **业务失败**：抛 NodeFailure（停止向下传播），
     不再把「没发出去」当结果往下送。"""
@@ -2294,6 +2275,168 @@ async def test_send_passes_target_through_untranslated() -> None:
     ctx_.inputs = {"target": target, "message": "hi"}
     await exec_send(node_, ctx_)
     assert gateway.reply_calls == [(target, "hi")]
+
+
+# ------------------------------------------------------------- ④-F' 会话解包 / 封装（unpack / pack 节点）
+def _fake_onebot_target(**overrides: object):
+    """OneBot 形状的会话定位（号是整数；形状对齐 ``OneBotTarget``）。"""
+    from types import SimpleNamespace
+
+    base: dict[str, object] = {
+        "platform": "onebot",
+        "owner_id": "u-admin",
+        "chat": "group",
+        "group_id": 70001,
+        "user_id": 123456,
+        "message_id": 999,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.asyncio
+async def test_unpack_onebot_splits_target_into_strings() -> None:
+    """unpack-onebot：把 OneBot 的整数号**字符串化**拆出（群号读 ``group_id``），缺的字段给空串。"""
+    from tickneko.workflow.nodes import exec_unpack_onebot
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": _fake_onebot_target()}
+    result = await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+    assert result == {
+        "platform": "onebot",
+        "chat": "group",
+        "chat_id": "70001",    # 群号（group_id，整数 -> 字符串）
+        "user_id": "123456",   # 发送者
+        "message_id": "999",
+        "owner_id": "u-admin",
+    }
+
+    # 私聊没有群号：chat_id 给空串，对方号在 user_id
+    ctx_.inputs = {"target": _fake_onebot_target(chat="private", group_id=None)}
+    result = await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+    assert result["chat"] == "private"
+    assert result["chat_id"] == ""
+    assert result["user_id"] == "123456"
+
+
+@pytest.mark.asyncio
+async def test_unpack_kook_splits_target_into_strings() -> None:
+    """unpack-kook：Kook 的字符串 id 原样拆出（频道号读 ``chat_id``）。"""
+    from types import SimpleNamespace
+
+    from tickneko.workflow.nodes import exec_unpack_kook
+
+    target = SimpleNamespace(
+        platform="kook",
+        owner_id="u-admin",
+        chat="group",
+        chat_id="ch-70001",
+        user_id="u-123456",
+        message_id="m-999",
+    )
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": target}
+    result = await exec_unpack_kook(WorkflowNode(id="u2", type="unpack-kook"), ctx_)
+    assert result == {
+        "platform": "kook",
+        "chat": "group",
+        "chat_id": "ch-70001",
+        "user_id": "u-123456",
+        "message_id": "m-999",
+        "owner_id": "u-admin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unpack_without_target_yields_empty_strings() -> None:
+    """没有会话定位（运行值是 None，定时触发时 ``start.target`` 透下来的就是 None）：
+    全空串照常送下游，不打断流程。"""
+    from tickneko.workflow.nodes import exec_unpack_onebot
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": None}
+    result = await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+    assert result == {
+        key: "" for key in ("platform", "chat", "chat_id", "user_id", "message_id", "owner_id")
+    }
+
+
+@pytest.mark.asyncio
+async def test_unpack_rejects_other_platform_target() -> None:
+    """装配错位看得见：解包某平台的节点收到别平台的 target，当场 ValueError。"""
+    from tickneko.workflow.nodes import exec_unpack_onebot
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": _fake_onebot_target(platform="kook")}
+    with pytest.raises(ValueError, match="生产与消费必须同平台"):
+        await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+
+
+def test_unpack_requires_a_target_source() -> None:
+    """target 是 unpack 的必填入口：没接线也没手填，语义阶段报 INPUT_NOT_CONNECTED。"""
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("u", "unpack-onebot"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "u"), edge("u", "e")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
+@pytest.mark.asyncio
+async def test_pack_nodes_build_target_via_gateway() -> None:
+    """pack 节点把字符串字段交给 ``gateway.make_target`` 拼回会话定位（platform 写死在节点上）。"""
+    from tickneko.workflow.nodes import exec_pack_kook, exec_pack_onebot
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "group", "chat_id": "70001"})
+    result = await exec_pack_onebot(node_, ctx_)
+    # 只带「会话类型 + 一个号」：消息号、对方号都不归封装管（私聊的号写在 chat_id 里）
+    assert gateway.target_calls == [
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001"})
+    ]
+    assert result["target"].platform == "onebot"
+
+    # kook 同款：platform 写死 kook；私聊的对方号填在 chat_id
+    gateway.target_calls.clear()
+    node_k = WorkflowNode(id="p2", type="pack-kook", config={"chat": "private", "chat_id": "u-9"})
+    result = await exec_pack_kook(node_k, ctx_)
+    assert gateway.target_calls == [
+        ("kook", {"owner_id": "u-admin", "chat": "private", "chat_id": "u-9"})
+    ]
+    assert result["target"].platform == "kook"
+
+
+@pytest.mark.asyncio
+async def test_pack_wire_values_override_hand_fill() -> None:
+    """封装节点的字段可接线：线上的值优先，覆盖手填（与其它数据入口同一口径）。"""
+    from tickneko.workflow.nodes import exec_pack_onebot
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "private", "chat_id": "hand"})
+    ctx_.inputs = {"chat": "group", "chat_id": "wired-70001"}
+    await exec_pack_onebot(node_, ctx_)
+    assert gateway.target_calls == [
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "wired-70001"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pack_requires_gateway() -> None:
+    """封装需要平台总线：没接（gateway=None）是环境问题，当场抛（与 target 手动填同口径）。"""
+    from tickneko.workflow.nodes import exec_pack_onebot
+
+    ctx_ = NodeExecutionContext(owner_id="u-admin")
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "group", "chat_id": "7"})
+    with pytest.raises(RuntimeError, match="gateway"):
+        await exec_pack_onebot(node_, ctx_)
 
 
 # ------------------------------------------------------------- ④-G 运算节点
@@ -2557,12 +2700,12 @@ def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in (
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "onebot", "operator", "cache",
+        "json", "regex", "now", "condition", "operator", "cache", "placeholder",
     ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "onebot", "operator", "cache",
+        "json", "regex", "now", "condition", "operator", "cache", "placeholder",
     }
 
 
@@ -2617,19 +2760,13 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "end": (20, "结束", ["trigger"], []),
         "constant": (30, "常量", ["trigger"], ["trigger", "value"]),
         "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
-        "test": (50, "测试", ["trigger", "message"], ["trigger", "message"]),
+        "test": (50, "调试", ["trigger", "message"], ["trigger", "message"]),
         "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
         "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
         "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),
         "regex": (90, "正则", ["trigger", "text", "pattern", "replace"], ["trigger", "regex_value"]),
         "now": (100, "当前时间", ["trigger", "format"], ["trigger", "now_text", "now_ts"]),
         "condition": (110, "条件", ["trigger", "left", "right"], ["true", "false"]),
-        "onebot": (
-            120,
-            "OneBot",
-            ["trigger", "target", "message"],
-            ["trigger", "onebot_retcode", "onebot_data"],
-        ),
         "operator": (130, "运算", ["trigger", "left", "right"], ["trigger", "operator_result"]),
         "cache": (140, "缓存", ["trigger", "key", "value", "default"], ["trigger", "cache_value"]),
     }
@@ -2654,6 +2791,12 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     assert log.inputs[0].label == "触发"  # 显示名同样来自后端
     assert log.inputs[1].required is True  # 必填入口：接线或手填同名字段
     assert log.inputs[0].required is False  # 触发端口不谈必填
+
+    # 占位节点是泛型透传口：输入接什么类型、输出就是什么类型（泛型只走数据流、不接触发）
+    placeholder = get_spec("placeholder")
+    assert placeholder is not None
+    assert [(p.id, p.type) for p in placeholder.inputs] == [("trigger", "trigger"), ("value", "generic")]
+    assert [(p.id, p.type) for p in placeholder.outputs] == [("trigger", "trigger"), ("value", "generic")]
 
     http = get_spec("http")
     assert http is not None
@@ -2708,17 +2851,6 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     ]
     assert condition.branching is True  # 分流节点：引擎按选中出口剪枝
     assert condition.min_outgoing == 1  # 至少接一个出口才谈得上分支
-
-    onebot = get_spec("onebot")
-    assert onebot is not None
-    onebot_inputs = {p.id: p for p in onebot.inputs}
-    assert onebot_inputs["target"].required is True  # 去向：与 send 同款，只能接线
-    assert onebot_inputs["message"].required is True  # 内容：接线或手填
-    assert [(p.id, p.type) for p in onebot.outputs] == [
-        ("trigger", "trigger"),
-        ("onebot_retcode", "message"),
-        ("onebot_data", "message"),
-    ]
 
     operator = get_spec("operator")
     assert operator is not None
@@ -3217,8 +3349,26 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     nodes = {item["type"]: item for item in payload["nodes"]}
     assert set(nodes) == set(registered_types())  # 注册了什么就有什么
 
+    # 端口类型也随目录下发：画布的端口配色 / 图例 / 数据流语义都从这儿来，前端不再抄一份
+    port_types = {item["type"]: item for item in payload["port_types"]}
+    assert [item["type"] for item in payload["port_types"]] == [
+        "trigger",
+        "message",
+        "target",
+        "list",
+        "dict",
+        "set",
+        "generic",
+    ]
+    assert port_types["trigger"]["data"] is False  # 控制流：只表达先后
+    assert port_types["trigger"]["label"] == "触发（控制流）"
+    for port_type in ("message", "target", "list", "dict", "set", "generic"):
+        assert port_types[port_type]["data"] is True  # 数据流：沿边送值
+        assert port_types[port_type]["color"]  # 每种类型都带配色
+
     http = nodes["http"]
     assert http["label"] == "HTTP"
+    assert http["color"] == "#0ea5e9"  # 节点配色也随目录下发：加类型只改后端，前端不再抄一份
     assert http["role"] == "normal"
     assert http["has_executor"] is True
     assert [port["id"] for port in http["outputs"]] == ["trigger", "http_status", "http_body"]
@@ -3237,20 +3387,40 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     # url 的「必填」落在入口上：字段本身没默认值，接线或手填都行
     assert url["required"] is False and url["has_default"] is False and url["default"] is None
 
+    # 透传对：placeholder 的泛型入口 / 出口用 tie 互相指认（指向同一节点另一侧的端口 id）——
+    # 画布据此让输入输出显示同一种类型（两端同色表示对应）
+    ph = nodes["placeholder"]
+    assert [(port["id"], port["type"], port["tie"]) for port in ph["inputs"]] == [
+        ("trigger", "trigger", ""),
+        ("value", "generic", "value"),
+    ]
+    assert [(port["id"], port["type"], port["tie"]) for port in ph["outputs"]] == [
+        ("trigger", "trigger", ""),
+        ("value", "generic", "value"),
+    ]
+
     end = nodes["end"]
     assert end["max_outgoing"] == 0 and end["outputs"] == []
     orders = [item["order"] for item in payload["nodes"]]
     assert orders == sorted(orders)  # 面板顺序：接口给的就已经排好
-    # 语义分类：画布面板按它分组（触发 / 目标 / 常量 / 动作 / 控制 / 数据 / 结束）
+    # 语义分类：画布面板按它分组 —— 目录的 categories 从节点注册**自动收集**：
+    # 集合 = 所有节点的分类，顺序 = 面板顺序（按 order 排序后首次出现的顺序去重），
+    # 显示名来自后端 CATEGORY_LABELS（查不到用机器名兜底）。面板不再维护白名单。
     assert nodes["start"]["category"] == "trigger"
     assert nodes["end"]["category"] == "end"
     assert nodes["constant"]["category"] == "constant"
     assert nodes["send"]["category"] == "action"
     assert nodes["condition"]["category"] == "control"
     assert nodes["json"]["category"] == "data"
-    assert {item["category"] for item in payload["nodes"]} <= {
-        "trigger", "target", "constant", "action", "control", "data", "end",
-    }
+    # 平台专属节点按平台分类：会话解包 / 封装，onebot 归 onebot、kook 归 kook
+    assert nodes["unpack-onebot"]["category"] == "onebot"
+    assert nodes["unpack-kook"]["category"] == "kook"
+    assert nodes["pack-onebot"]["category"] == "onebot"
+    assert nodes["pack-kook"]["category"] == "kook"
+    # 自动收集口径：categories 与「节点分类按面板顺序去重」完全一致，且都有显示名
+    expected = list(dict.fromkeys(item["category"] for item in payload["nodes"]))
+    assert [c["name"] for c in payload["categories"]] == expected
+    assert all(c["label"] for c in payload["categories"])
 
 
 async def test_api_trace_id_is_filled_in_every_workflow_response() -> None:
@@ -3911,7 +4081,7 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
     graph = {
         "nodes": [
             node("s", "start"),
-            node("t", "target", platform="onebot", chat="private", user_id="10001"),
+            node("t", "pack-onebot", chat="private", chat_id="10001"),
             node("snd", "send", message="到点提醒"),
             node("e", "end"),
         ],
@@ -3960,7 +4130,7 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
     graph = {
         "nodes": [
             node("s", "start", trigger="time", cron="*/5 * * * *"),
-            node("t", "target", platform="onebot", chat="group", chat_id="9"),
+            node("t", "pack-onebot", chat="group", chat_id="9"),
             node("snd", "send", message="到点了"),
             node("e", "end"),
         ],
@@ -4127,7 +4297,7 @@ async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None
 async def test_start_node_passes_target_through_to_downstream() -> None:
     """start 把装配层放进 trigger_data 的会话定位（ChatTarget）原样透出 target 出口。
 
-    target 出口是**数据流**：start 把它送下去，下游节点（target 节点 / send 节点）拿到同一个
+    target 出口是**数据流**：start 把它送下去，下游节点（send 节点）拿到同一个
     对象直接可用。没装配（定时触发 / 离线跑 / 没造事件）就 None，由下游自己处理分支。
     """
     from tickneko.workflow import WorkflowNode

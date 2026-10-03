@@ -119,6 +119,7 @@ def validate_delay_node(node: WorkflowNode) -> list[ValidationIssue]:
 @register_node(
     "delay",
     label="等待",
+    color="#14b8a6",
     order=70,
     category="control",
     # seconds 既是字段名也是数据入口：上游把值接到这个端口就覆盖 config 里手填的秒数。

@@ -759,6 +759,26 @@ async def test_bots_add_kook() -> None:
         assert "token" not in rows[0]  # 只有 record，拿不回明文
 
 
+async def test_bots_add_duplicate_token_conflicts() -> None:
+    """同一个 Bot Token 再添加一次：回 409 说清楚，不是 500 的裸 IntegrityError。"""
+    registry = await memory_registry()
+    app = bots_app(registry, secret_key="test-secret")
+    async with api_client(app) as client:
+        headers = {"Authorization": f"Bearer {await login(client)}"}
+        payload = {"platform": "kook", "account": "kook-bot", "token": "dup-bot-token"}
+
+        first = await client.post("/api/bots", headers=headers, json=payload)
+        assert first.status_code == 200, first.text
+
+        again = await client.post("/api/bots", headers=headers, json=payload)
+        assert again.status_code == 409, again.text
+        assert "只能添加一次" in again.text  # 说人话，不是数据库报错
+
+        # 列表里仍只有一条（失败那条没留下半截行）
+        rows = (await client.get("/api/bots", headers=headers)).json()["data"]
+        assert len(rows) == 1
+
+
 async def test_bots_add_kook_requires_token() -> None:
     """platform=kook 没填 Bot Token：入口层直接挡掉（422）。"""
     registry = await memory_registry()

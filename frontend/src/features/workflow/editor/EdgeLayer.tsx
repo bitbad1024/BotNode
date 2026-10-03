@@ -27,6 +27,9 @@ export interface EdgeLayerProps {
   faint?: boolean
   /** 正在拉的临时连线：起点 -> 鼠标（虚线） */
   pending?: { path: string; color: string } | null
+  /** 端口生效类型表（见 ``catalog.effectivePortTypes``）：泛型输出接什么线就画什么色；
+   * 不传（粘贴虚影）退回声明类型 */
+  effTypes?: Map<string, string>
 }
 
 export function EdgeLayer({
@@ -36,6 +39,7 @@ export function EdgeLayer({
   onDelete,
   faint = false,
   pending = null,
+  effTypes,
 }: EdgeLayerProps) {
   return (
     <svg className={styles.edges} style={{ pointerEvents: faint ? 'none' : undefined }}>
@@ -47,7 +51,7 @@ export function EdgeLayer({
             <path
               d={edgeCurve(c.x1, c.y1, c.x2, c.y2)}
               fill="none"
-              stroke={edgeColor(edge, nodeById)}
+              stroke={edgeColor(edge, nodeById, effTypes)}
               strokeWidth="2"
               strokeLinecap="round"
               strokeOpacity={faint ? '0.6' : undefined}

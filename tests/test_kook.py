@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from typing import cast
@@ -349,7 +350,12 @@ async def test_client_rest_reuses_connection(monkeypatch: pytest.MonkeyPatch) ->
 
 
 async def test_client_rest_rebuilds_connection_after_idle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """连接空闲超过 rest_idle_timeout：主动重建，不等请求时才撞上已关的连接白试一次。"""
+    """连接空闲超过 rest_idle_timeout：主动重建，不等请求时才撞上已关的连接白试一次。
+
+    「空闲」是**把上次请求的时刻往前拨**造出来的，不靠 ``asyncio.sleep`` 卡阈值 ——
+    Windows 定时器粒度 15.625ms，睡 60ms 跟阈值 50ms 只差 10ms，会偶发判成「还没超时」
+    （同 test_workflow 里 delay 那条注释）。
+    """
     client = KookClient(
         KookOptions(token="abc", rest_min_interval=0.0, rest_idle_timeout=0.05)
     )
@@ -365,7 +371,8 @@ async def test_client_rest_rebuilds_connection_after_idle(monkeypatch: pytest.Mo
 
     monkeypatch.setattr("http.client.HTTPSConnection", fake_conn)
     await client.call("send_channel_msg", target_id="ch-1", content="a")
-    await asyncio.sleep(0.06)  # 空闲超过阈值
+    # 假装这条连接已经闲置了 1 秒（远超 0.05 的阈值）—— 判定走的是真实代码，只是时间可控
+    client._last_rest = time.monotonic() - 1.0  # noqa: SLF001
     await client.call("send_channel_msg", target_id="ch-1", content="b")
 
     assert created["n"] == 2  # 空闲超时 -> 重建（与上面「连着发就复用」互补）

@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from tickneko.bots import BotCredential, SqlBotStore, hash_token
+from tickneko.bots import BotCredential, BotTokenConflict, SqlBotStore, hash_token
 
 
 @pytest.fixture
@@ -146,6 +146,21 @@ async def test_remove_and_set_enabled(store: SqlBotStore) -> None:
     assert await store.remove_by_id(issued.record.bot_id) is True
     assert await store.get_by_id(issued.record.bot_id) is None
     assert await store.remove_by_id(issued.record.bot_id) is False
+
+
+async def test_issue_rejects_duplicate_token(store: SqlBotStore) -> None:
+    """同一个令牌再签发一次撞 ``UNIQUE(token_hash)``：抛领域异常说人话，不是裸 IntegrityError。
+
+    令牌摘要是**全局唯一**的（``resolve`` 靠它认机器人），所以换个人再添加也会撞。
+    """
+    await store.issue("u-admin", platform="kook", token="same-bot-token", secret_key="k")
+    with pytest.raises(BotTokenConflict, match="只能添加一次"):
+        await store.issue("u-admin", platform="kook", token="same-bot-token", secret_key="k")
+    # 换个人也不行：令牌不是「谁的」私产，全表唯一
+    with pytest.raises(BotTokenConflict, match="只能添加一次"):
+        await store.issue("u-other", platform="kook", token="same-bot-token", secret_key="k")
+    # 只有一条落库（失败那条不会留下半截行）
+    assert len(await store.list_records()) == 1
 
 
 async def test_issue_rejects_empty_token(store: SqlBotStore) -> None:

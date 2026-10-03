@@ -52,8 +52,8 @@ import { Palette } from './editor/Palette'
 import { Toolbar } from './editor/Toolbar'
 import {
   NODE_W,
-  PORT_COLORS,
   edgeCurve,
+  effectivePortTypes,
   emptyGraph,
   installCatalog,
   isEditingTarget,
@@ -62,6 +62,9 @@ import {
   nodeHeight,
   normalizeGraph,
   portAbsPos,
+  portColor,
+  portCompatible,
+  portEffKey,
   uid,
   wiredPortsByNode,
   type Point,
@@ -193,6 +196,24 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [graph.nodes],
   )
   const wiredByNode = useMemo(() => wiredPortsByNode(graph.edges), [graph.edges])
+  const effTypes = useMemo(() => effectivePortTypes(nodeById, graph.edges), [nodeById, graph.edges])
+  // 每个节点的「端口生效类型签名」：一个按值比较的字符串（'|' 分隔，前 inputs 后 outputs）。
+  // 直接把 effTypes 这个 Map 传给卡片的话，它的引用随 graph.nodes 变（改一下 config 就算），
+  // memo 化的卡片会整片重渲染 —— 传签名则只有自己端口类型真变了的卡片才重渲染。
+  const effSigByNode = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const node of graph.nodes) {
+      const def = nodeDef(node.type, node.config)
+      map.set(
+        node.id,
+        [
+          ...def.inputs.map((p) => effTypes.get(portEffKey(node.id, 'in', p.id)) ?? p.type),
+          ...def.outputs.map((p) => effTypes.get(portEffKey(node.id, 'out', p.id)) ?? p.type),
+        ].join('|'),
+      )
+    }
+    return map
+  }, [graph.nodes, effTypes])
   const errorByNode = useMemo(() => issuesByNode(report), [report])
 
   // 回调里要读最新值又不换身份（换身份会让 memo 化的卡片白重渲染），统一走 ref
@@ -244,7 +265,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     setCatalogFailed(false)
     try {
       const { data } = await fetchNodeCatalog()
-      setPalette(installCatalog(data.nodes))
+      setPalette(installCatalog(data))
     } catch {
       setCatalogFailed(true)
     }
@@ -617,8 +638,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       if (pending.nodeId === nodeId) return clear()
       // 方向必须一进一出
       if (pending.direction === direction) return clear()
-      // 类型必须匹配
-      if (pending.portType !== portType) {
+      // 类型必须兼容（同类；泛型端口可接任意数据流端口）
+      if (!portCompatible(pending.portType, portType)) {
         pushToast('error', `端口类型不匹配：${pending.portType} ≠ ${portType}`)
         return clear()
       }
@@ -881,9 +902,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (!start) return null
     return {
       path: edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y),
-      color: PORT_COLORS[conn.portType],
+      // 泛型端口拖线也按生效类型显色（placeholder 输出接会话定位就是橙色预览线）
+      color: portColor(
+        effTypes.get(portEffKey(conn.nodeId, conn.direction, conn.portId)) ?? conn.portType,
+      ),
     }
-  }, [connectCursor, nodeById, positions])
+  }, [connectCursor, nodeById, positions, effTypes])
 
   /** 加载中 / 目录拉不回来：画布位置显示它 */
   const placeholder =
@@ -960,6 +984,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             posOf={posOf}
             onDelete={deleteEdge}
             pending={pendingEdge}
+            effTypes={effTypes}
           />
 
           {graph.nodes.map((node) => {
@@ -974,6 +999,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 boxSelected={selectedIds.has(node.id)}
                 issues={errorByNode.get(node.id) ?? null}
                 wired={wiredByNode.get(node.id) ?? NO_WIRED}
+                effSig={effSigByNode.get(node.id) ?? ''}
                 onMouseDown={onNodeMouseDown}
                 onClick={onNodeClick}
                 onContextMenu={onNodeContextMenu}
@@ -1028,6 +1054,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             node={selectedNode}
             def={selectedDef}
             wired={selectedWired}
+            effTypes={effTypes}
             report={report}
             versions={versions}
             onUpdate={updateConfig}

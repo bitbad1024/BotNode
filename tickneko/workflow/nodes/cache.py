@@ -32,6 +32,8 @@ config:
   （没填就是空串），流程继续；
 * ``set`` 空值 = 把变量清成空串（「清空」是合法操作，不是错误）；
 * ``key`` 为空（没接线也没手填）当场抛（同 ``http.url``：不知道操作哪个键）；
+* **键名不允许冒号**（``key`` 手填 / 接线 / 账号级归属 id 都拦）—— 冒号是键的分段分隔符，
+  带进去会把键从中间劈开、造成歧义；账号 id 正常由 ``u-<账号>`` 生成，天然没有冒号；
 * 缓存后端不可用（没 ``start()`` / Redis 掉了且没降级）会抛 ``CacheError``：环境问题
   不吞不掩 —— 正式跑由主程序启动缓存（``bootstrap`` 已经做了），离线测试给 ctx 注入
   自己的门面即可（见 ``NodeExecutionContext.cache``）。
@@ -62,7 +64,7 @@ CLIP_CHARS: int = 80
 
 
 def validate_cache_node(node: WorkflowNode) -> list[ValidationIssue]:
-    """两块枚举的防呆：动作 / 作用域；``key`` 的「必填」由入口（PortSpec.required）管。"""
+    """防呆：动作 / 作用域枚举、手填变量名不带冒号；``key`` 的「必填」由入口管。"""
     issues: list[ValidationIssue] = []
 
     action = node.config.get("action")
@@ -84,6 +86,18 @@ def validate_cache_node(node: WorkflowNode) -> list[ValidationIssue]:
                 code="INVALID_CACHE_SCOPE",
                 message=f"cache 节点 {node.id} 的作用域 {scope!r} 不合法",
                 suggestion=f"可选：{' / '.join(CACHE_SCOPE_ORDER)}",
+            )
+        )
+
+    # 手填变量名带冒号 = 保存时就能拦住（接线的值运行时再兜一道，见 exec_cache）
+    key = node.config.get("key")
+    if isinstance(key, str) and ":" in key:
+        issues.append(
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_CACHE_KEY",
+                message=f"cache 节点 {node.id} 的变量名 {key!r} 不能包含冒号",
+                suggestion="变量名不允许有:",
             )
         )
 
@@ -114,6 +128,7 @@ def _clip(raw: str) -> str:
 @register_node(
     "cache",
     label="缓存",
+    color="#06b6d4",
     order=140,
     category="data",
     # key 既是字段名也是数据入口（同 http.url）：接线或手填都行，两个都没有才报错
@@ -150,6 +165,11 @@ async def exec_cache(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     key = str(input_value(node, ctx, "key", default="")).strip()
     if not key:
         raise ValueError(f"节点 {node.id} 的 key 为空（入口没接线，config 里也没填）")
+    if ":" in key:
+        raise ValueError(
+            f"节点 {node.id} 的变量名 {key!r} 不能包含冒号"
+            "手填或上游送来的都不行）"
+        )
 
     cache_key = _cache_key(node, ctx, scope, key)
 

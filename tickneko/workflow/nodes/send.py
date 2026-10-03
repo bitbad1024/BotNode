@@ -12,8 +12,8 @@
 字符串号）由各平台适配器翻译，节点不再逐平台认字段。
 
 **没有 target 就不发**：``target`` 端口接了线但运行值是 None / 空串（定时触发没有
-会话指向、事件没有会话定位、target 节点自动分支产出 None）时，不发 —— ``send_ok``
-照常送 ``False`` 到下游，不抛。要「到点固定播报」就把 target 节点（手动填）接在
+会话指向、事件没有会话定位、``start.target`` 透下来的是 None）时，不发 —— ``send_ok``
+照常送 ``False`` 到下游，不抛。要「到点固定播报」就把 ``pack`` 节点（手动填会话号）接在
 send 前面。
 
 **内容为空也不发**：``message`` 是空串 / 纯空白时不发 —— ``send_ok`` 送 ``False`` 到
@@ -31,7 +31,7 @@ send 前面。
 小抄::
 
     回复触发消息: start.target -> send.target, start.message -> send.message
-    群播报:      target 节点（platform="onebot" chat="group" chat_id="123456"）-> send.target,
+    群播报:      pack-onebot（chat="group" chat_id="123456"）-> send.target,
                  message 手填或接常量
 """
 from __future__ import annotations
@@ -68,6 +68,7 @@ def _dump(data: object) -> str:
 @register_node(
     "send",
     label="发送",
+    color="#d946ef",
     order=120,
     category="action",
     # 去向（target）与内容（message）都要有来源：接线或手填（message 可手填，target 只能接线）
@@ -89,7 +90,7 @@ async def exec_send(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, 
     """把 ``message`` 发到 ``target`` 指向的会话；没有会话定位就不发，回执照常送下游。"""
     target = input_value(node, ctx, "target", default=None)
     if not target:
-        # 没有会话定位：不发（target 节点文档口径：没有 target 就不发），send_ok=False 照常送下游
+        # 没有会话定位：不发（本模块文档口径：没有 target 就不发），send_ok=False 照常送下游
         ctx.logger.info(f"[send:{node.id}] 没有会话定位，跳过发送", node_id=node.id)
         ctx.log.append(f"[send] {node.id}: 没有会话定位，跳过")
         return {"send_ok": False, "send_data": ""}

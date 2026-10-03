@@ -22,6 +22,7 @@ from .registry import register_node
 @register_node(
     "constant",
     label="常量",
+    color="#eab308",
     order=30,
     category="constant",
     inputs=[TRIGGER_PORT],

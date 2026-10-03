@@ -97,8 +97,7 @@ await gateway.send("kook", owner_id, "send_channel_msg", target_id=..., content=
 不动，适配器做三件事：事件翻译（`OneBotEvent` -> `PlatformEvent`，心跳不用滤，服务端
 `_emit` 调 handler 前已经滤掉）、能力转述（`clients()` / `send()`）、兼容面（roster /
 kick / revoke_by_id / set_token_enabled / tokens / connections 原样透传给被包的服务端，
-接口层的 `OneBotLike` 协议与工作流的 `ctx.onebot` 鸭子形状由它**结构化满足**，装配时
-注到原来的注入点上即可，下游零改动）。
+接口层的 `OneBotLike` 协议由它**结构化满足**，装配时注到原来的注入点上即可，下游零改动）。
 
 **Kook**（正向 WS，框架当客户端）：与 OneBot 方向相反，用来验证协议对「方向相反」的平台
 同样通用。差异有三：

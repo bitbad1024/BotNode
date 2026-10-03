@@ -26,12 +26,28 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from sqlalchemy import Connection, inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from .crypto import decrypt_token, encrypt_token
 from .models import BotCredential, BotPlatform
+
+
+class BotError(Exception):
+    """机器人凭证存储层错误的基类（消息直接给人看）。"""
+
+
+class BotTokenConflict(BotError):
+    """这个令牌 / Bot Token 已经添加过了（``UNIQUE(token_hash)`` 撞了）。
+
+    令牌摘要**全局唯一**：:meth:`SqlBotStore.resolve` 靠它唯一定位一行（握手认机器人），
+    所以同一个 Token 不能挂在两个机器人上 —— 换个人再添加也会撞，不是「同一个用户才拦」。
+    """
+
+    def __init__(self) -> None:
+        super().__init__("这个机器人已经添加过了：同一个令牌 / Bot Token 只能添加一次")
 
 
 def hash_token(token: str) -> str:
@@ -156,6 +172,7 @@ class SqlBotStore:
         不加密、不用 ``secret_key``。
 
         :raises ValueError: ``token`` 为空串；或 kook 平台没给 ``secret_key``。
+        :raises BotTokenConflict: 这个令牌 / Bot Token 已经有一条凭证了（见该类文档）。
         """
         if token is None:
             token = "nbo_" + secrets.token_urlsafe(32)
@@ -175,9 +192,15 @@ class SqlBotStore:
             account=account,
             remark=remark,
         )
-        async with self._sessions() as session:
-            session.add(row)
-            await session.commit()
+        try:
+            async with self._sessions() as session:
+                session.add(row)
+                await session.commit()
+        except IntegrityError as exc:
+            # UNIQUE(token_hash) 撞了：同一个令牌已经有一条凭证。这里翻成领域异常，
+            # 让接口层报 409 说人话，而不是把裸 IntegrityError 一路滑到 500（与工作流
+            # 同名冲突同一套做法，见 workflow/store.py 的 WorkflowNameConflict）。
+            raise BotTokenConflict() from exc
         return IssuedBotCredential(record=_to_record(row), token=token)
 
     async def list_records(self, *, owner_id: str | None = None) -> list[BotCredential]:

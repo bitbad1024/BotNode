@@ -7,7 +7,9 @@ from pydantic import Field
 
 from ...common.models import _Frozen
 from tickneko.workflow import (
+    CATEGORY_LABELS,
     MISSING_DEFAULT,
+    PORT_TYPES,
     ConfigField,
     NodeSpec,
     PortSpec,
@@ -59,12 +61,15 @@ class NodePortData(_Frozen):
 
     ``type`` 决定它传不传值（``message`` 传、``trigger`` 不传），``required`` 只对输入端口
     有意义：画布把没接线的必填入口标出来（后端也会在语义阶段报 ``INPUT_NOT_CONNECTED``）。
+    ``tie`` 是**透传对**：指向同一节点另一侧的端口 id —— 两端生效类型永远一致（输入接什么、
+    输出就是什么），画布据此让两端显示同一种类型、同色表示对应。
     """
 
     id: str
     type: str
     label: str
     required: bool = False
+    tie: str = ""
 
     @classmethod
     def from_port(cls, port: PortSpec) -> NodePortData:
@@ -73,6 +78,7 @@ class NodePortData(_Frozen):
             type=port.type,
             label=port.label or port.id,
             required=port.required,
+            tie=port.tie,
         )
 
 
@@ -108,10 +114,12 @@ class NodeTypeData(_Frozen):
 
     type: str
     label: str
+    #: 画布配色（CSS 颜色值）；空串 = 注册时没配，前端用兜底色
+    color: str = ""
     role: str
     order: int
     has_executor: bool
-    #: 语义分类（画布面板按它分组）：trigger / target / constant / action / control / data / end
+    #: 语义分类（画布面板按它分组）：trigger / constant / action / control / data / onebot / kook / end
     category: str = "data"
     min_outgoing: int
     max_outgoing: int | None = None
@@ -124,6 +132,7 @@ class NodeTypeData(_Frozen):
         return cls(
             type=spec.node_type,
             label=spec.label or spec.node_type,
+            color=spec.color,
             role=spec.role,
             order=spec.order,
             has_executor=spec.executor is not None,
@@ -136,17 +145,66 @@ class NodeTypeData(_Frozen):
         )
 
 
+class NodePortTypeData(_Frozen):
+    """一种端口类型的展示信息：画布的端口配色 / 面板图例 / 数据流语义都从它来。
+
+    ``data=true`` 表示沿边送值（message / target / list / dict / set）；``false`` 只表达
+    先后（trigger）。前端**不再自己抄一份端口类型表** —— 加类型只改后端
+    :data:`tickneko.workflow.PORT_TYPES`，画布自动跟着变。
+    """
+
+    type: str
+    label: str
+    color: str
+    data: bool
+
+
+class NodeCategoryData(_Frozen):
+    """一种语义分类：画布面板的分组。**从节点注册自动收集**（见 ``from_registry``）：
+
+    * ``name`` 是节点标的分类机器名；* ``label`` 是显示名（查 ``CATEGORY_LABELS``，查不到用原名）。
+    * 顺序 = 面板顺序（按节点 ``order`` 排序后去重）—— 面板按它逐组展开。
+    """
+
+    name: str
+    label: str
+
+
 class NodeCatalogData(_Frozen):
     """节点目录：**后端注册了什么，画布就显示什么**（面板顺序按 ``order``）。"""
 
     nodes: list[NodeTypeData] = Field(default_factory=list)
+    categories: list[NodeCategoryData] = Field(default_factory=list)
+    port_types: list[NodePortTypeData] = Field(default_factory=list)
 
     @classmethod
     def from_registry(cls) -> NodeCatalogData:
         specs = [get_spec(node_type) for node_type in registered_types()]
         nodes = [NodeTypeData.from_spec(spec) for spec in specs if spec is not None]
         nodes.sort(key=lambda item: (item.order, item.type))
-        return cls(nodes=nodes)
+        # 分类自动收集：从排好序的节点里按出现顺序去重，画布面板的分组 = 这份清单
+        categories: list[NodeCategoryData] = []
+        seen: set[str] = set()
+        for item in nodes:
+            if item.category in seen:
+                continue
+            seen.add(item.category)
+            categories.append(
+                NodeCategoryData(
+                    name=item.category,
+                    label=CATEGORY_LABELS.get(item.category, item.category),
+                )
+            )
+        port_types = [
+            NodePortTypeData(
+                type=item.type,
+                label=item.label,
+                color=item.color,
+                data=item.data,
+            )
+            for item in PORT_TYPES.values()
+        ]
+        return cls(nodes=nodes, categories=categories, port_types=port_types)
 
 
 class WorkflowData(_Frozen):

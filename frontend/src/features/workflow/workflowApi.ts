@@ -7,8 +7,20 @@ import { http } from '../../lib/http'
  * ``GET /workflows/node-types``（见下面的 fetchNodeCatalog）—— 加一个节点类型只改后端。
  * 所以 ``type`` 就是普通字符串：认不出的类型（旧图 / 扩展没装）画成灰色未知节点，
  * 保存时会被后端校验的 ``UNKNOWN_NODE_TYPE`` 挡下。
+ *
+ * 端口类型同理（``PortType`` 就是字符串）：有哪几种、每种什么色 / 是不是数据流，全由后端
+ * 目录的 ``port_types`` 下发（见下面的 PortTypeSpec / NodeCatalog），前端不再抄一份表。
  */
-export type PortType = 'trigger' | 'message' | 'target'
+export type PortType = string
+
+/** 一种端口类型的展示信息（目录接口 ``port_types`` 逐条下发）：
+ * ``data=true`` 沿边送值，``false`` 只表达先后（trigger）。 */
+export interface PortTypeSpec {
+  type: string
+  label: string
+  color: string
+  data: boolean
+}
 
 export interface WorkflowNode {
   id: string
@@ -50,10 +62,12 @@ export interface WorkflowGraph {
  */
 export interface NodePortSpec {
   id: string
-  /** 端口类型：连线两端必须同类 */
+  /** 端口类型：连线两端必须同类（泛型端口例外 —— 可接任意数据流端口，见 catalog.portCompatible） */
   type: PortType
   label: string
   required: boolean
+  /** 透传对：指向同一节点另一侧的端口 id —— 输入输出生效类型永远一致（见 catalog.effectivePortTypes） */
+  tie?: string
 }
 
 /** config 里的一个字段：画布照它渲染输入框 / 下拉。 */
@@ -72,6 +86,7 @@ export interface NodeFieldSpec {
 export interface NodeTypeSpec {
   type: string
   label: string
+  color: string
   role: 'start' | 'end' | 'normal'
   /** 面板顺序（后端已排好：小的在前） */
   order: number
@@ -89,8 +104,19 @@ export interface NodeTypeSpec {
   fields: NodeFieldSpec[]
 }
 
+/** 一种语义分类（目录接口 ``categories`` 逐条下发）：画布面板按它分组。
+ * ``name`` 是节点标的机器分类名；``label`` 是后端 ``CATEGORY_LABELS`` 里的显示名。 */
+export interface NodeCategorySpec {
+  name: string
+  label: string
+}
+
 export interface NodeCatalog {
   nodes: NodeTypeSpec[]
+  /** 语义分类清单：画布面板的分组（顺序即显示顺序）全从这儿来 */
+  categories: NodeCategorySpec[]
+  /** 端口类型清单：端口配色 / 面板图例 / 数据流语义全从这儿来 */
+  port_types: PortTypeSpec[]
 }
 
 // --------------------------------------------------------------------------- 校验

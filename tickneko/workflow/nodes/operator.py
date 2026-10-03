@@ -108,6 +108,7 @@ def _fail(ctx: NodeExecutionContext, node_id: str, reason: str) -> NoReturn:
 @register_node(
     "operator",
     label="运算",
+    color="#f59e0b",
     order=130,
     category="data",
     # left / right 既是字段名也是数据入口（同 http.url）：接线或手填都行
