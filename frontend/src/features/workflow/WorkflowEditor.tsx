@@ -8,6 +8,7 @@
  * 文件怎么分的（本文件只留下「编排」）：
  *
  * * ``editor/catalog.ts``          目录与几何：``nodeDef`` / 尺寸 / 连线端点 / 各类纯函数
+ * * ``editor/clipboard.ts``        复制粘贴的负载（节点 + 连线 + 复制时刻）与解析
  * * ``editor/useGraphHistory.ts``  撤销栈（Ctrl+Z）
  * * ``editor/useCanvasView.ts``    pan / zoom 与坐标换算
  * * ``editor/useNodeDrag.ts``      拖节点（整组一起挪）
@@ -31,7 +32,15 @@ import {
   type WorkflowNode,
 } from './workflowApi'
 import { useToast } from '../../common/Toast'
+import { copyText, readText } from '../../lib/clipboard'
 import { Canvas, type BoxRect } from './editor/Canvas'
+import {
+  buildClipboardPayload,
+  formatCopiedAt,
+  parseClipboard,
+  serializeClipboard,
+  type ClipboardPayload,
+} from './editor/clipboard'
 import { ContextMenu } from './editor/ContextMenu'
 import { EdgeLayer } from './editor/EdgeLayer'
 import { GhostNode } from './editor/GhostNode'
@@ -120,8 +129,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const menuRef = useRef<HTMLDivElement>(null)
   /** 本次右键是否真的拖动过画布（拖过就不弹节点右键菜单） */
   const panMovedRef = useRef(false)
-  /** 画布内部剪贴板：Ctrl+C / Ctrl+X 存这里的节点 + 组内连线，Ctrl+V 以虚影放置 */
-  const clipboardRef = useRef<{ nodes: WorkflowNode[]; edges: WorkflowEdge[] } | null>(null)
+  /**
+   * 画布内部剪贴板：Ctrl+C / Ctrl+X 存这里的节点 + 组内连线，Ctrl+V 以虚影放置。
+   *
+   * 这是**第一重**保险（内存里那份，读写都是同步的）；同一份内容还会写进系统剪贴板
+   * （见 copySelection），刷新页面后靠它把内容捞回来。
+   */
+  const clipboardRef = useRef<ClipboardPayload | null>(null)
   /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
   const connectRef = useRef<{
     nodeId: string
@@ -642,23 +656,53 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     return selectedId ? new Set([selectedId]) : new Set<string>()
   }, [selectedIds, selectedId])
 
-  /** 复制选中节点 + 组内连线到内部剪贴板（Ctrl+C / Ctrl+X 共用）；返回复制到的节点数。 */
+  /**
+   * 复制选中节点 + 组内连线（Ctrl+C / Ctrl+X 共用）；返回复制到的节点数。
+   *
+   * **双重保险**：内存里的 clipboardRef（同步可用）+ 系统剪贴板（活过刷新 / 能跨标签页）。
+   * 负载里带上**复制时刻**（copiedAt），从系统剪贴板捞回来时能答出这是什么时候拷的。
+   * 写系统剪贴板是异步的，也不一定成功（非安全上下文 / 没权限），失败不影响第一重。
+   */
   const copySelection = useCallback((): number => {
     const ids = getSelectionIds()
     if (ids.size === 0) return 0
-    clipboardRef.current = {
-      nodes: graph.nodes.filter((n) => ids.has(n.id)).map((n) => structuredClone(n)),
-      edges: graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+    const payload = buildClipboardPayload(
+      graph.nodes.filter((n) => ids.has(n.id)).map((n) => structuredClone(n)),
+      graph.edges
+        .filter((e) => ids.has(e.source) && ids.has(e.target))
+        .map((e) => structuredClone(e)),
+    )
+    clipboardRef.current = payload
+    void copyText(serializeClipboard(payload)).catch(() => {
+      pushToast('error', '写入系统剪贴板失败（画布内剪贴板仍可用）')
+    })
+    return payload.nodes.length
+  }, [graph, getSelectionIds, pushToast])
+
+  /**
+   * 取当前剪贴板内容：先内存那一份（快，且一定是我们自己写的），
+   * 空了才去读系统剪贴板 —— 那是第二重保险，页面刷新过 / 换过标签页时只剩它。
+   * 读回来并认下来的那一份顺手存回内存，后面几次 Ctrl+V 不再去读系统剪贴板。
+   */
+  const takeClipboard = useCallback(async (): Promise<ClipboardPayload | null> => {
+    const local = clipboardRef.current
+    if (local && local.nodes.length > 0) return local
+    const payload = parseClipboard(await readText())
+    if (!payload) return null
+    clipboardRef.current = payload
+    const when = formatCopiedAt(payload.copiedAt)
+    if (when) {
+      pushToast('success', `已从系统剪贴板取回 ${payload.nodes.length} 个节点（复制于 ${when}）`)
     }
-    return clipboardRef.current.nodes.length
-  }, [graph, getSelectionIds])
+    return payload
+  }, [pushToast])
 
   /**
    * Ctrl+V：把剪贴板内容挂成虚影进入「放置模式」——虚影组中心跟着鼠标走，
    * 左键落子（dropPlacing）/ Esc 取消。
    */
-  const startPlacing = useCallback(() => {
-    const clip = clipboardRef.current
+  const startPlacing = useCallback(async () => {
+    const clip = await takeClipboard()
     if (!clip || clip.nodes.length === 0) return
     // 先把坐标落到快照上（旧节点用 localStorage 迁来的兜底坐标），渲染 / 落子都直接读
     const base = (n: WorkflowNode): Point => positions[n.id] ?? { x: n.x ?? 0, y: n.y ?? 0 }
@@ -684,7 +728,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     // 起点：最近一次画布鼠标位置；没有就退回原位（剪贴板组的中心）
     const start = lastPointerRef.current ?? { x: cx, y: cy }
     setPlacing({ nodes, edges: clip.edges, cx, cy, x: start.x, y: start.y })
-  }, [positions])
+  }, [positions, takeClipboard])
 
   /** 落子：按虚影当前所在位置真正放图（副本换新 id、组内连线重建，新节点成为框选集合）。 */
   const dropPlacing = useCallback(() => {
@@ -769,9 +813,16 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       }
 
       if (mod && key === 'v') {
-        if (!clipboardRef.current || clipboardRef.current.nodes.length === 0) return
-        e.preventDefault()
-        startPlacing()
+        const local = clipboardRef.current
+        if (local && local.nodes.length > 0) {
+          e.preventDefault()
+          void startPlacing()
+          return
+        }
+        // 内存那份没了（刷新过页面 / 换过标签页）：系统剪贴板是第二重保险。
+        // 读它要等一个 promise，赶不上这一发 preventDefault —— 画布上本来就没有可输入
+        // 目标（输入框上面已经放行走了），不拦也不碍事；读不到就什么都不发生。
+        void startPlacing()
         return
       }
 
