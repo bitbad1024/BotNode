@@ -9,6 +9,9 @@
  * 复制时刻（``copiedAt``）也一起写进去：粘贴时能答出「这一份是什么时候拷的」，
  * 从系统剪贴板捞回来的那一份尤其需要 —— 用户早忘了自己拷过什么。
  *
+ * 粘贴时两处**都读**（见 ``pickFresherClipboard``）：都读到就比 ``copiedAt`` 用新的那份，
+ * 只读到一份就用那一份，两份都没读到就当剪贴板是空的（什么都不做）。
+ *
  * 结构带 ``kind`` / ``version``：解析时**只认自己写的那一份**，不认识的（别的软件
  * 放进剪贴板的 JSON、我们以后改了格式的那一份）一律当没有，不往画布上乱贴。
  */
@@ -83,6 +86,22 @@ export function parseClipboard(text: string): ClipboardPayload | null {
     nodes,
     edges,
   }
+}
+
+/**
+ * 两份负载里挑更新的那一份：只有一份就用它，两份都没有返回 ``null``。
+ *
+ * 粘贴时内存与系统剪贴板**都读**，所以两边可能都有货 —— 那多半是用户刚在别的标签页 /
+ * 别的窗口里复制过，谁新听谁的。``copiedAt`` 相同时（同一发复制写进两处，内容本来就一样）
+ * 取内存那一份。
+ */
+export function pickFresherClipboard(
+  local: ClipboardPayload | null,
+  system: ClipboardPayload | null,
+): ClipboardPayload | null {
+  if (!local) return system
+  if (!system) return local
+  return system.copiedAt > local.copiedAt ? system : local
 }
 
 /** 复制时刻的显示口径：今天只看时分秒，跨天补上月日（``0`` = 没带时间戳，返回空串）。 */

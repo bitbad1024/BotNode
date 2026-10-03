@@ -38,6 +38,7 @@ import {
   buildClipboardPayload,
   formatCopiedAt,
   parseClipboard,
+  pickFresherClipboard,
   serializeClipboard,
   type ClipboardPayload,
 } from './editor/clipboard'
@@ -680,19 +681,27 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }, [graph, getSelectionIds, pushToast])
 
   /**
-   * 取当前剪贴板内容：先内存那一份（快，且一定是我们自己写的），
-   * 空了才去读系统剪贴板 —— 那是第二重保险，页面刷新过 / 换过标签页时只剩它。
-   * 读回来并认下来的那一份顺手存回内存，后面几次 Ctrl+V 不再去读系统剪贴板。
+   * 取当前剪贴板内容：内存与系统剪贴板**都读**，谁新听谁的。
+   *
+   * * 两份都读到了：用户多半刚在别的标签页 / 别的窗口复制过，比 ``copiedAt``，新的那份赢；
+   * * 只读到一份：就用这一份（内存空了说明刷新过页面，只剩系统剪贴板那一份）；
+   * * 两份都没读到：返回 ``null``，粘贴什么都不发生。
+   *
+   * 挑中的那一份顺手存回内存，后面几次 Ctrl+V 不必再读系统剪贴板。
    */
   const takeClipboard = useCallback(async (): Promise<ClipboardPayload | null> => {
-    const local = clipboardRef.current
-    if (local && local.nodes.length > 0) return local
-    const payload = parseClipboard(await readText())
+    const local =
+      clipboardRef.current && clipboardRef.current.nodes.length > 0 ? clipboardRef.current : null
+    const system = parseClipboard(await readText())
+    const payload = pickFresherClipboard(local, system)
     if (!payload) return null
     clipboardRef.current = payload
-    const when = formatCopiedAt(payload.copiedAt)
-    if (when) {
-      pushToast('success', `已从系统剪贴板取回 ${payload.nodes.length} 个节点（复制于 ${when}）`)
+    if (payload !== local) {
+      // 用的是系统剪贴板那一份：说清它是哪儿来的、什么时候拷的
+      const when = formatCopiedAt(payload.copiedAt)
+      if (when) {
+        pushToast('success', `已从系统剪贴板取回 ${payload.nodes.length} 个节点（复制于 ${when}）`)
+      }
     }
     return payload
   }, [pushToast])
@@ -813,15 +822,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       }
 
       if (mod && key === 'v') {
-        const local = clipboardRef.current
-        if (local && local.nodes.length > 0) {
-          e.preventDefault()
-          void startPlacing()
-          return
-        }
-        // 内存那份没了（刷新过页面 / 换过标签页）：系统剪贴板是第二重保险。
-        // 读它要等一个 promise，赶不上这一发 preventDefault —— 画布上本来就没有可输入
-        // 目标（输入框上面已经放行走了），不拦也不碍事；读不到就什么都不发生。
+        // 两处剪贴板都读（内存 + 系统），谁新用谁；两份都没货就什么都不发生。
+        // 内存有货时能同步拦下默认行为；只剩系统剪贴板那一份时要等 promise，
+        // 赶不上这一发 preventDefault —— 画布上本来就没有可输入目标（输入框上面
+        // 已经放行走了），不拦也不碍事。
+        if (clipboardRef.current && clipboardRef.current.nodes.length > 0) e.preventDefault()
         void startPlacing()
         return
       }
