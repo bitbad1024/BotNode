@@ -7,7 +7,7 @@
       start.py           内置节点：start（图起点；trigger=time 时按 cron 登记调度器）
       end.py             内置节点：end（图终点）
       log.py             内置节点：log（按级别写业务日志）
-      test.py            内置节点：test（回显，画布联调用）
+      test.py            内置节点：test（调试：回显入口的值到日志，画布联调用）
       constant.py        内置节点：constant（一个节点一个常量值，从 value 端口送下去）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
       delay.py           内置节点：delay（异步等待：触发进 / 触发出，秒数可接线覆盖手填）

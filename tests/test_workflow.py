@@ -2753,7 +2753,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
         "end": (20, "结束", ["trigger"], []),
         "constant": (30, "常量", ["trigger"], ["trigger", "value"]),
         "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
-        "test": (50, "测试", ["trigger", "message"], ["trigger", "message"]),
+        "test": (50, "调试", ["trigger", "message"], ["trigger", "message"]),
         "http": (60, "HTTP", ["trigger", "url", "body"], ["trigger", "http_status", "http_body"]),
         "delay": (70, "等待", ["trigger", "seconds"], ["trigger"]),
         "json": (80, "JSON", ["trigger", "json", "path"], ["trigger", "json_value"]),

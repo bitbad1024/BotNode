@@ -24,7 +24,7 @@ tickneko/workflow/
 │   ├── start.py         内置：start（图起点；trigger=time 时按 cron 登记调度器）
 │   ├── end.py           内置：end（图终点）
 │   ├── log.py           内置：log（按级别写业务日志；内容从 message 入口来）
-│   ├── test.py          内置：test（回显，画布联调用）
+│   ├── test.py          内置：test（调试：回显入口的值到日志，画布联调用）
 │   ├── constant.py      内置：constant（一个节点一个常量值，从 value 出口送下去）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
 │   ├── delay.py         内置：delay（异步等待：秒数可接线覆盖手填，不阻塞事件循环）
@@ -161,7 +161,7 @@ workflow_versions             每次保存一张不可变图快照
 | `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 —— **只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版），整图执行那一趟不碰调度器（它自己会排下一次） | — → `trigger` / `message` | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | `trigger` → — | —— |
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
-| `test.py` | 回显（画布联调）：把入口的值原样从出口送下去，夹在中间看「线上流过了什么」 | `trigger` / `message` → `trigger` / `message` | `message`（缺省 `hello`） |
+| `test.py` | **调试**：把入口的值**回显**到日志（还附一份**全部入口值**的快照），再原样从出口送下去 —— 夹在中间看「线上流过了什么」；不改写、不判断，纯粹给画布联调用 | `trigger` / `message` → `trigger` / `message` | `message`（没接线时的手填值，缺省 `hello`） |
 | `constant.py` | **常量**：一个节点一个值，从 `value` 出口送下去 | `trigger` → `trigger` / `value` | **`value`**（必填，没有默认值） |
 | `http.py` | 发一次 HTTP 请求；**4xx / 5xx = 业务失败**（对方回了错）：抛 `NodeFailure`，停止向下传播；连不上 / 超时是**可预期的环境问题**：抛 `EnvironmentFailure`，中断整条流程但日志只记一行（不铺 httpx 堆栈） | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
 | `delay.py` | **等待**：异步等一会儿再往下走（`await asyncio.sleep`，**不阻塞事件循环**）；`0` = 不等（临时把等待关掉） | `trigger` / `seconds` → `trigger` | `seconds`（**入口**：接线覆盖手填，缺省 5；`0` 允许，上限 1 小时 —— 手填值由自注册校验器把，线上的值运行期判断） |
