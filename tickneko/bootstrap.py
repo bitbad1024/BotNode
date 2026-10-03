@@ -153,9 +153,9 @@ async def on_platform_event(event: PlatformEvent) -> None:
                 "chat": event.chat,
                 "chat_id": event.chat_id,
                 "message_id": event.message_id,
-                #: 会话定位（回程地址）：start 的 target 出口原样透给下游 target 节点 /
-                #: send 节点。workflow 只透传这个对象，不 import bridge 类型 —— 它认的是
-                #: 「有 platform 属性的东西」，路由键就够用了。没有会话指向的事件是 None。
+                #: 会话定位（回程地址）：start 的 target 出口原样透给下游 send 节点
+                #: （回复触发它的会话）。workflow 只透传这个对象，不 import bridge 类型 ——
+                #: 它认的是「有 platform 属性的东西」，路由键就够用了。没有会话指向的事件是 None。
                 "target": event.target,
             },
         )

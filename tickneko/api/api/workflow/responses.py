@@ -119,7 +119,7 @@ class NodeTypeData(_Frozen):
     role: str
     order: int
     has_executor: bool
-    #: 语义分类（画布面板按它分组）：trigger / target / constant / action / control / data / end
+    #: 语义分类（画布面板按它分组）：trigger / constant / action / control / data / onebot / kook / end
     category: str = "data"
     min_outgoing: int
     max_outgoing: int | None = None

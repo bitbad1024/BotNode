@@ -85,7 +85,6 @@ NodeCategory = str
 #: ``categories`` 下发，画布面板按下发结果分组 —— 查不到名字的分类原样显示机器名。
 CATEGORY_LABELS: dict[str, str] = {
     "trigger": "触发",
-    "target": "目标",
     "constant": "常量",
     "action": "动作",
     "control": "控制",

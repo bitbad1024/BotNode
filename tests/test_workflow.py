@@ -2095,46 +2095,6 @@ class _FakeGateway:
 
 # ------------------------------------------------------------- ④-F send 节点（P3 泛化）
 @pytest.mark.asyncio
-async def test_target_node_takes_trigger_session_when_platform_empty() -> None:
-    """target 节点：platform 留空 = 自动取触发消息的会话定位（原样透出，没有则 None）。"""
-    from tickneko.workflow.nodes import exec_target
-
-    ctx_ = NodeExecutionContext()
-    ctx_.trigger_data = {"target": object()}  # 鸭子形状：透出同一个对象
-    node_ = WorkflowNode(id="tg1", type="target", config={"platform": ""})
-    result = await exec_target(node_, ctx_)
-    assert result["target"] is ctx_.trigger_data["target"]
-
-    # 没有会话定位（定时触发 / 离线跑）：None，不炸
-    ctx_.trigger_data = {}
-    assert (await exec_target(node_, ctx_))["target"] is None
-
-
-@pytest.mark.asyncio
-async def test_target_node_builds_manual_target_via_gateway() -> None:
-    """target 节点：platform 填了 = 手动构造，走 ctx.gateway.make_target 按平台路由。"""
-    from tickneko.workflow.nodes import exec_target
-
-    gateway = _FakeGateway()
-    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(
-        id="tg1",
-        type="target",
-        config={"platform": "onebot", "chat": "group", "chat_id": "70001"},
-    )
-    result = await exec_target(node_, ctx_)
-    assert gateway.target_calls == [
-        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001", "user_id": "", "message_id": ""})
-    ]
-    assert result["target"].platform == "onebot"  # 鸭子形状：有 platform 的东西
-
-    # 手动填但没接总线（gateway=None）：环境问题当场抛
-    bare = NodeExecutionContext(owner_id="u-admin")
-    with pytest.raises(RuntimeError, match="gateway"):
-        await exec_target(node_, bare)
-
-
-@pytest.mark.asyncio
 async def test_send_replies_via_gateway_to_target() -> None:
     """send 节点把 message 发到 target 指向的会话：走 ``ctx.gateway.reply(target, message)``，回执从 send_ok / send_data 送下去。"""
     from tickneko.workflow.nodes import exec_send
@@ -2383,7 +2343,7 @@ async def test_unpack_kook_splits_target_into_strings() -> None:
 
 @pytest.mark.asyncio
 async def test_unpack_without_target_yields_empty_strings() -> None:
-    """没有会话定位（运行值是 None，target 节点自动分支在定时触发时产出的就是 None）：
+    """没有会话定位（运行值是 None，定时触发时 ``start.target`` 透下来的就是 None）：
     全空串照常送下游，不打断流程。"""
     from tickneko.workflow.nodes import exec_unpack_onebot
 
@@ -2448,7 +2408,7 @@ async def test_pack_nodes_build_target_via_gateway() -> None:
 
 @pytest.mark.asyncio
 async def test_pack_wire_values_override_hand_fill() -> None:
-    """封装节点的字段可接线：线上的值优先，覆盖手填（同 target 节点口径）。"""
+    """封装节点的字段可接线：线上的值优先，覆盖手填（与其它数据入口同一口径）。"""
     from tickneko.workflow.nodes import exec_pack_onebot
 
     gateway = _FakeGateway()
@@ -4114,7 +4074,7 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
     graph = {
         "nodes": [
             node("s", "start"),
-            node("t", "target", platform="onebot", chat="private", user_id="10001"),
+            node("t", "pack-onebot", chat="private", user_id="10001"),
             node("snd", "send", message="到点提醒"),
             node("e", "end"),
         ],
@@ -4163,7 +4123,7 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
     graph = {
         "nodes": [
             node("s", "start", trigger="time", cron="*/5 * * * *"),
-            node("t", "target", platform="onebot", chat="group", chat_id="9"),
+            node("t", "pack-onebot", chat="group", chat_id="9"),
             node("snd", "send", message="到点了"),
             node("e", "end"),
         ],
@@ -4330,7 +4290,7 @@ async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None
 async def test_start_node_passes_target_through_to_downstream() -> None:
     """start 把装配层放进 trigger_data 的会话定位（ChatTarget）原样透出 target 出口。
 
-    target 出口是**数据流**：start 把它送下去，下游节点（target 节点 / send 节点）拿到同一个
+    target 出口是**数据流**：start 把它送下去，下游节点（send 节点）拿到同一个
     对象直接可用。没装配（定时触发 / 离线跑 / 没造事件）就 None，由下游自己处理分支。
     """
     from tickneko.workflow import WorkflowNode

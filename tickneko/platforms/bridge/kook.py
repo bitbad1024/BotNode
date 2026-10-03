@@ -340,7 +340,7 @@ class KookAdapter:
     ) -> ChatTarget:
         """从通用会话字段构造 Kook 的回程地址（id 是字符串，原样存）。
 
-        画布 target 节点手动填的会话号本来就是字符串，直接进 target：群聊用 ``chat_id``
+        画布上手动填的会话号本来就是字符串，直接进 target：群聊用 ``chat_id``
         当频道号、私聊用 ``user_id``（缺省回退 ``chat_id``）当对方账号。
         """
         return KookTarget(

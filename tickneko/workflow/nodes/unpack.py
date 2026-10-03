@@ -1,6 +1,6 @@
 """unpack 节点：把会话定位（target）**解包**成一组字符串字段（平台 / 会话类型 / 会话号 / 发送者 / 消息号 / 归属）。
 
-与 send / target 相对：target 是「回程地址」（:class:`~tickneko.platforms.bridge.models.ChatTarget`
+与 send 节点相对：会话定位是「回程地址」（:class:`~tickneko.platforms.bridge.models.ChatTarget`
 或平台特化 target），画布上直接接线用 —— 但**判断**得靠拆开的字段：「收到的是群聊还是私聊」、
 「谁发的」、「哪条消息」，还有日志里要落「发到哪」。unpack 就是那个拆的动作：把结构化的
 会话定位拆成普通文本字段，下游能接线 / 能比较 / 能进日志。
@@ -14,9 +14,13 @@
 :class:`~tickneko.platforms.bridge.models.ChatTarget`）—— 收到别平台的会话定位当场
 ValueError，不静默拆出空字段（那会让人以为「字段名错了」）。
 
-**没有会话定位不打断**：``target`` 端口接了线但运行值是 ``None``（定时触发 / 事件没有会话
-指向，target 节点自动分支产出的就是 None）时，照常送**全空串**到下游 —— 与 send 节点
+**没有会话定位不打断**：``target`` 端口**接了线**但运行值是 ``None``（定时触发 / 事件没有
+会话指向，``start.target`` 透下来的就是 None）时，照常送**全空串**到下游 —— 与 send 节点
 「没有 target 就不发」同一口径，数据流节点不因空值炸流程。
+
+（**「没接线」是另一回事，别混**：``target`` 是必填入口，又没有同名字段可以手填 ——
+没接线在语义阶段就报 ``INPUT_NOT_CONNECTED``，**图根本存不下来、轮不到运行**；上面说的是
+「接了线、跑起来值是 None」这种情况。）
 
 config：无（target 只能接线，不能手填 —— 会话定位是结构值，表单填不了）。
 
