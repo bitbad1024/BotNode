@@ -196,6 +196,23 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   )
   const wiredByNode = useMemo(() => wiredPortsByNode(graph.edges), [graph.edges])
   const effTypes = useMemo(() => effectivePortTypes(nodeById, graph.edges), [nodeById, graph.edges])
+  // 每个节点的「端口生效类型签名」：一个按值比较的字符串（'|' 分隔，前 inputs 后 outputs）。
+  // 直接把 effTypes 这个 Map 传给卡片的话，它的引用随 graph.nodes 变（改一下 config 就算），
+  // memo 化的卡片会整片重渲染 —— 传签名则只有自己端口类型真变了的卡片才重渲染。
+  const effSigByNode = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const node of graph.nodes) {
+      const def = nodeDef(node.type, node.config)
+      map.set(
+        node.id,
+        [
+          ...def.inputs.map((p) => effTypes.get(portEffKey(node.id, 'in', p.id)) ?? p.type),
+          ...def.outputs.map((p) => effTypes.get(portEffKey(node.id, 'out', p.id)) ?? p.type),
+        ].join('|'),
+      )
+    }
+    return map
+  }, [graph.nodes, effTypes])
   const errorByNode = useMemo(() => issuesByNode(report), [report])
 
   // 回调里要读最新值又不换身份（换身份会让 memo 化的卡片白重渲染），统一走 ref
@@ -976,7 +993,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 boxSelected={selectedIds.has(node.id)}
                 issues={errorByNode.get(node.id) ?? null}
                 wired={wiredByNode.get(node.id) ?? NO_WIRED}
-                effTypes={effTypes}
+                effSig={effSigByNode.get(node.id) ?? ''}
                 onMouseDown={onNodeMouseDown}
                 onClick={onNodeClick}
                 onContextMenu={onNodeContextMenu}

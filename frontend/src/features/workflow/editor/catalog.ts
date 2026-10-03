@@ -107,8 +107,10 @@ export function portEffKey(nodeId: string, direction: 'in' | 'out', portId: stri
  *   反之亦然，两端永远一致；③ 都没有就还是 generic。对方是 generic 就顺着继续追
  *   （同一端口不重复展开，环直接兜底 generic）。
  *
- * 由父组件按 ``edges`` 变化用 memo 算一次：返回的 Map 引用稳定，memo 化的卡片不会白
- * 重渲染。端口圆点颜色、边颜色都查它（见 :func:`edgeColor` / ``NodeCard``）。
+ * 由父组件按 ``edges`` 变化用 memo 算一次，连线层直接拿这个 Map 用。**卡片别直接拿它当
+ * prop** —— 它的引用随 ``graph.nodes`` 变（改一下 config 就算），Map 换新引用会让 memo
+ * 化的卡片整片重渲染；卡片侧改传「本节点的签名字符串」（按值比较，见 ``WorkflowEditor``
+ * 的 ``effSigByNode``），只有自己那几个端口的类型真变了才重渲染。
  */
 export function effectivePortTypes(
   nodeById: Map<string, WorkflowNode>,
