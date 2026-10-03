@@ -33,6 +33,9 @@ tickneko/workflow/
 │   ├── now.py           内置：now（当前时间：格式化文本 + Unix 时间戳）
 │   ├── condition.py     内置：condition（条件分支：true / false 双出口；引擎按选中出口剪枝）
 │   ├── send.py          内置：send（把 message 发到 target 指向的会话：去向走 target 值端口 + 内容端口，走 ctx.gateway.reply；没有 target 就不发，回执不成功 = 业务失败）
+│   ├── target.py        内置：target（产出「发到哪」的会话定位：platform 留空自动取触发消息的会话，填了走 gateway.make_target 手动构造）
+│   ├── unpack.py        内置：unpack-onebot / unpack-kook（会话解包：把会话定位拆成字符串字段，号统一字符串化）
+│   ├── pack.py          内置：pack-onebot / pack-kook（会话封装：把字符串字段拼回会话定位，走 gateway.make_target）
 │   ├── operator.py      内置：operator（算术：+ - * / %；结果文本化，算不出来 = 业务失败）
 │   └── cache.py         内置：cache（变量存取：get / set；读不到回默认值；作用域账号 / 图，键前缀区分）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
@@ -160,6 +163,9 @@ workflow_versions             每次保存一张不可变图快照
 | `now.py` | **当前时间**：产出「现在」（服务器本地时区）——格式化文本 + Unix 时间戳（整数秒）；没有失败分支 | `trigger` / `format` → `trigger` / `now_text` / `now_ts` | `format`（strftime 指令，缺省 `%Y-%m-%d %H:%M:%S`，可接线覆盖） |
 | `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的控制流边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（还有活 `trigger` 入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
 | `send.py` | **发送**：把 `message` 发到 `target` 指向的会话（target 化：去向从图上 target 值端口拿，内容从 message 端口拿）；走 `ctx.gateway.reply(target, message)`，平台差异（OneBot 整数号 / Kook 字符串号）由适配器翻译；**`target` 是数据边、不驱动执行**（触发走 `trigger` 边），**没有 target 就不发**（`send_ok=False` 照常送下游），回执（`send_ok` / `send_data`）成功时送下游，**失败回执 = 业务失败**：抛 `NodeFailure`，停止向下传播；没接总线（环境问题）→ 当场抛 | `trigger` / `target` / `message` → `trigger` / `send_ok` / `send_data` | `message`（**入口**必填：接线或手填；`target` 只能接线，从 `start.target` 或 `target` 节点来） |
+| `target.py` | **会话定位**：产出「发到哪」的 `target` 值 —— `platform` **留空 = 自动**取**触发消息**的会话定位（原样透出，没有则 `None`，由下游 send 判断不发）；**填了 = 手动**构造：走 `ctx.gateway.make_target`，适配器按平台口径转号（OneBot 整数 / Kook 字符串），`owner_id` 用 `ctx.owner_id` | `trigger` → `trigger` / `target` | `platform`（留空 = 自动；填 onebot / kook）、`chat`（group / private）、`chat_id`、`user_id`、`message_id` |
+| `unpack.py` | **会话解包**（`unpack-onebot` / `unpack-kook`）：把会话定位**拆成字符串字段**（平台 / 会话类型 / 会话号 / 发送者 / 消息号 / 归属），号统一字符串化（OneBot 整数 -> 字符串；缺的字段给空串）；收到**别平台**的 target 当场 `ValueError`（装配错位看得见）；没有会话定位送**全空串**、不打断流程 | `trigger` / `target` → `trigger` / `platform` / `chat` / `chat_id` / `user_id` / `message_id` / `owner_id` | 无（`target` 只能接线，不能手填 —— 会话定位是结构值） |
+| `pack.py` | **会话封装**（`pack-onebot` / `pack-kook`）：把字符串字段**拼回**会话定位（unpack 的逆操作）—— 平台写死在节点上，走 `ctx.gateway.make_target`，适配器按平台口径转号；会话号不全不额外拦（同 target 手动填，reply 时说明缺什么）；没接总线 = 环境问题当场抛 | `trigger` / `chat` / `chat_id` / `user_id` / `message_id` → `trigger` / `target` | `chat`（group / private）、`chat_id`、`user_id`、`message_id`（都可接线，接上覆盖手填） |
 | `operator.py` | **运算**：对两个操作数做一次算术（`+` / `-` / `*` / `/` / `%`）；`/` 是真除法、`%` 按 Python 语义，结果文本化（整数值不带小数点）；算不出来（空值 / 非数字 / 除数为 0 / 运算符不合法）= **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `left` / `right` → `trigger` / `operator_result` | `left` / `right`（**入口**必填：接线或手填）、`operator`（缺省 `+`，枚举由自注册校验器把） |
 | `cache.py` | **缓存**：把一个变量存进缓存 / 取回来 —— **跨执行（跨工作流）传递状态**的通道；`get` 没取到不算事故（回 `default` 默认值，没填就是空串），`set` 空值 = 清成空串；`key` 入口没接线也没填 / 账号作用域却没有归属 → 当场抛；缓存键按作用域拼前缀（`workflow:graph:{图 id}:{键}` / `workflow:acct:{账号 id}:{键}`） | `trigger` / `key` / `value` / `default` → `trigger` / `cache_value` | `action`（缺省 `get`）、`scope`（缺省 `workflow`；枚举都由自注册校验器把）、`key`（**入口**必填：接线或手填）、`value`（手填兜底，也能接线）、`default`（`get` 读不到时的默认值，手填兜底 / 也能接线） |
 
@@ -266,7 +272,7 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `target` 节点手动构造会话定位时带它（`gateway.make_target(platform, owner_id=...)`，握手时令牌定下，同一套 id 空间）；离线跑是空串 |
 | `ctx.user_id` | `str`：这一趟**面向哪个用户**（消息触发时是发消息那个人） | 把「同一个工作流在不同人身上的那一份」区分开（按人记状态 / 按人回复 / 按人打日志）。**和 `owner_id` 是两回事**：`owner_id` 是工作流的主人（账号），`user_id` 是被服务的对象。缺省空串（`NO_USER_ID`）—— 定时触发没有「这个人」；消息触发由消息路由（`dispatch`）带进来 |
-| `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` 节点靠它构造会话定位（`make_target`），`send` 节点靠它发消息（`reply(target, message)`）。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `tickneko.bridge.gateway.Gateway` |
+| `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` / `pack` 节点靠它构造会话定位（`make_target`），`send` 节点靠它发消息（`reply(target, message)`），`unpack` 节点解包 target 值。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `tickneko.bridge.gateway.Gateway` |
 | `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `tickneko.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`tickneko.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
 
 `input_value(node, ctx, name, default="")`：取某个数据入口的值 —— **线上的值优先，没接线才用

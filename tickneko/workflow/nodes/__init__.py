@@ -80,9 +80,11 @@ from .json import exec_json
 from .log import LOG_LEVELS, exec_log
 from .now import exec_now
 from .operator import exec_operator
+from .pack import exec_pack_kook, exec_pack_onebot
 from .regex import exec_regex
 from .send import exec_send
 from .target import exec_target
+from .unpack import exec_unpack_kook, exec_unpack_onebot
 from .registry import (
     declare_node_type,
     get_executor,
@@ -146,6 +148,10 @@ __all__ = [
     "exec_condition",
     "exec_send",
     "exec_target",
+    "exec_unpack_onebot",
+    "exec_unpack_kook",
+    "exec_pack_onebot",
+    "exec_pack_kook",
     "exec_operator",
     "exec_cache",
 ]

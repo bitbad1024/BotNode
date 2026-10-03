@@ -2199,6 +2199,167 @@ async def test_send_passes_target_through_untranslated() -> None:
     assert gateway.reply_calls == [(target, "hi")]
 
 
+# ------------------------------------------------------------- ④-F' 会话解包 / 封装（unpack / pack 节点）
+def _fake_onebot_target(**overrides: object):
+    """OneBot 形状的会话定位（号是整数；形状对齐 ``OneBotTarget``）。"""
+    from types import SimpleNamespace
+
+    base: dict[str, object] = {
+        "platform": "onebot",
+        "owner_id": "u-admin",
+        "chat": "group",
+        "group_id": 70001,
+        "user_id": 123456,
+        "message_id": 999,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.asyncio
+async def test_unpack_onebot_splits_target_into_strings() -> None:
+    """unpack-onebot：把 OneBot 的整数号**字符串化**拆出（群号读 ``group_id``），缺的字段给空串。"""
+    from tickneko.workflow.nodes import exec_unpack_onebot
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": _fake_onebot_target()}
+    result = await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+    assert result == {
+        "platform": "onebot",
+        "chat": "group",
+        "chat_id": "70001",    # 群号（group_id，整数 -> 字符串）
+        "user_id": "123456",   # 发送者
+        "message_id": "999",
+        "owner_id": "u-admin",
+    }
+
+    # 私聊没有群号：chat_id 给空串，对方号在 user_id
+    ctx_.inputs = {"target": _fake_onebot_target(chat="private", group_id=None)}
+    result = await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+    assert result["chat"] == "private"
+    assert result["chat_id"] == ""
+    assert result["user_id"] == "123456"
+
+
+@pytest.mark.asyncio
+async def test_unpack_kook_splits_target_into_strings() -> None:
+    """unpack-kook：Kook 的字符串 id 原样拆出（频道号读 ``chat_id``）。"""
+    from types import SimpleNamespace
+
+    from tickneko.workflow.nodes import exec_unpack_kook
+
+    target = SimpleNamespace(
+        platform="kook",
+        owner_id="u-admin",
+        chat="group",
+        chat_id="ch-70001",
+        user_id="u-123456",
+        message_id="m-999",
+    )
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": target}
+    result = await exec_unpack_kook(WorkflowNode(id="u2", type="unpack-kook"), ctx_)
+    assert result == {
+        "platform": "kook",
+        "chat": "group",
+        "chat_id": "ch-70001",
+        "user_id": "u-123456",
+        "message_id": "m-999",
+        "owner_id": "u-admin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unpack_without_target_yields_empty_strings() -> None:
+    """没有会话定位（运行值是 None，target 节点自动分支在定时触发时产出的就是 None）：
+    全空串照常送下游，不打断流程。"""
+    from tickneko.workflow.nodes import exec_unpack_onebot
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": None}
+    result = await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+    assert result == {
+        key: "" for key in ("platform", "chat", "chat_id", "user_id", "message_id", "owner_id")
+    }
+
+
+@pytest.mark.asyncio
+async def test_unpack_rejects_other_platform_target() -> None:
+    """装配错位看得见：解包某平台的节点收到别平台的 target，当场 ValueError。"""
+    from tickneko.workflow.nodes import exec_unpack_onebot
+
+    ctx_ = NodeExecutionContext()
+    ctx_.inputs = {"target": _fake_onebot_target(platform="kook")}
+    with pytest.raises(ValueError, match="生产与消费必须同平台"):
+        await exec_unpack_onebot(WorkflowNode(id="u1", type="unpack-onebot"), ctx_)
+
+
+def test_unpack_requires_a_target_source() -> None:
+    """target 是 unpack 的必填入口：没接线也没手填，语义阶段报 INPUT_NOT_CONNECTED。"""
+    graph = {
+        "nodes": [
+            node("s", "start"),
+            node("u", "unpack-onebot"),
+            node("e", "end"),
+        ],
+        "edges": [edge("s", "u"), edge("u", "e")],
+    }
+    report = validate_graph(graph)
+    assert not report.valid and report.stage == STAGE_SEMANTIC
+    assert [issue.code for issue in report.errors] == ["INPUT_NOT_CONNECTED"]
+
+
+@pytest.mark.asyncio
+async def test_pack_nodes_build_target_via_gateway() -> None:
+    """pack 节点把字符串字段交给 ``gateway.make_target`` 拼回会话定位（platform 写死在节点上）。"""
+    from tickneko.workflow.nodes import exec_pack_kook, exec_pack_onebot
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "group", "chat_id": "70001"})
+    result = await exec_pack_onebot(node_, ctx_)
+    assert gateway.target_calls == [
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001", "user_id": "", "message_id": ""})
+    ]
+    assert result["target"].platform == "onebot"
+
+    # kook 同款：platform 写死 kook
+    gateway.target_calls.clear()
+    node_k = WorkflowNode(id="p2", type="pack-kook", config={"chat": "private", "user_id": "u-9"})
+    result = await exec_pack_kook(node_k, ctx_)
+    assert gateway.target_calls == [
+        ("kook", {"owner_id": "u-admin", "chat": "private", "chat_id": "", "user_id": "u-9", "message_id": ""})
+    ]
+    assert result["target"].platform == "kook"
+
+
+@pytest.mark.asyncio
+async def test_pack_wire_values_override_hand_fill() -> None:
+    """封装节点的字段可接线：线上的值优先，覆盖手填（同 target 节点口径）。"""
+    from tickneko.workflow.nodes import exec_pack_onebot
+
+    gateway = _FakeGateway()
+    ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "private", "user_id": "hand"})
+    ctx_.inputs = {"chat": "group", "chat_id": "wired-70001"}
+    await exec_pack_onebot(node_, ctx_)
+    assert gateway.target_calls == [
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "wired-70001", "user_id": "hand", "message_id": ""})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pack_requires_gateway() -> None:
+    """封装需要平台总线：没接（gateway=None）是环境问题，当场抛（与 target 手动填同口径）。"""
+    from tickneko.workflow.nodes import exec_pack_onebot
+
+    ctx_ = NodeExecutionContext(owner_id="u-admin")
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "group", "chat_id": "7"})
+    with pytest.raises(RuntimeError, match="gateway"):
+        await exec_pack_onebot(node_, ctx_)
+
+
 # ------------------------------------------------------------- ④-G 运算节点
 @pytest.mark.asyncio
 async def test_operator_does_arithmetic_and_formats_result() -> None:
@@ -3144,15 +3305,20 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert end["max_outgoing"] == 0 and end["outputs"] == []
     orders = [item["order"] for item in payload["nodes"]]
     assert orders == sorted(orders)  # 面板顺序：接口给的就已经排好
-    # 语义分类：画布面板按它分组（触发 / 目标 / 常量 / 动作 / 控制 / 数据 / 结束）
+    # 语义分类：画布面板按它分组（触发 / 目标 / 常量 / 动作 / 控制 / 数据 / onebot / kook / 结束）
     assert nodes["start"]["category"] == "trigger"
     assert nodes["end"]["category"] == "end"
     assert nodes["constant"]["category"] == "constant"
     assert nodes["send"]["category"] == "action"
     assert nodes["condition"]["category"] == "control"
     assert nodes["json"]["category"] == "data"
+    # 平台专属节点按平台分类：会话解包 / 封装，onebot 归 onebot、kook 归 kook
+    assert nodes["unpack-onebot"]["category"] == "onebot"
+    assert nodes["unpack-kook"]["category"] == "kook"
+    assert nodes["pack-onebot"]["category"] == "onebot"
+    assert nodes["pack-kook"]["category"] == "kook"
     assert {item["category"] for item in payload["nodes"]} <= {
-        "trigger", "target", "constant", "action", "control", "data", "end",
+        "trigger", "target", "constant", "action", "control", "data", "onebot", "kook", "end",
     }
 
 

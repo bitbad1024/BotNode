@@ -85,6 +85,8 @@ NodeCategory = Literal[
     "action",    # 动作：对外副作用（发消息 / 发请求 / 写日志）
     "control",   # 控制：分支 / 等待
     "data",      # 数据：加工 / 提取 / 运算 / 存取
+    "onebot",    # OneBot 平台：平台专属节点（会话解包 / 封装）
+    "kook",      # Kook 平台：平台专属节点（会话解包 / 封装）
     "end",       # 结束：流程终点
 ]
 
