@@ -16,7 +16,7 @@ from config import DatabaseSettings, Settings
 # --------------------------------------------------------------------------- _engine_url
 def test_engine_url_sqlite_creates_parent_dir(tmp_path) -> None:
     """sqlite：URL 指向文件路径，且父目录会被顺手建出来（不依赖先手工建目录）。"""
-    settings = DatabaseSettings(driver="sqlite", path=tmp_path / "nested" / "botnode.db")
+    settings = DatabaseSettings(driver="sqlite", path=tmp_path / "nested" / "tickneko.db")
     url, target = app._engine_url(settings)
 
     assert url == f"sqlite+aiosqlite:///{settings.path.as_posix()}"
@@ -32,13 +32,13 @@ def test_engine_url_mariadb_keeps_password_out_of_target() -> None:
         port=3306,
         user="root",
         password="s3cret",
-        database="botnode",
+        database="tickneko",
     )
     url, target = app._engine_url(settings)
 
     assert "s3cret" in url  # 驱动要拿到口令
     assert "s3cret" not in target  # 给人看/落日志的摘录里没有
-    assert target == "192.168.1.200:3306/botnode"
+    assert target == "192.168.1.200:3306/tickneko"
     assert url.startswith("mysql+aiomysql://")
 
 
@@ -72,14 +72,14 @@ class _FakeEngine:
 
 async def test_probe_database_ok_when_reachable() -> None:
     """连得上：SELECT 1 正常执行，探测不抛。"""
-    await app._probe_database(_FakeEngine(), "192.168.1.200:3306/botnode", "mariadb")  # 不抛
+    await app._probe_database(_FakeEngine(), "192.168.1.200:3306/tickneko", "mariadb")  # 不抛
 
 
 async def test_probe_database_raises_with_target_on_unreachable() -> None:
     """连不上：抛 RuntimeError，消息带 target 与 driver（入口好打成 [初始化错误] 提示）。"""
     engine = _FakeEngine(OperationalError("stmt", {}, "Can't connect to MySQL server"))
-    with pytest.raises(RuntimeError, match="连不上数据库（mariadb @ 127.0.0.1:3306/botnode）"):
-        await app._probe_database(engine, "127.0.0.1:3306/botnode", "mariadb")
+    with pytest.raises(RuntimeError, match="连不上数据库（mariadb @ 127.0.0.1:3306/tickneko）"):
+        await app._probe_database(engine, "127.0.0.1:3306/tickneko", "mariadb")
 
 
 async def test_probe_database_cleanup_on_failure() -> None:
@@ -104,7 +104,7 @@ async def test_probe_database_cleanup_on_failure() -> None:
 
     engine = _TrackingEngine()
     with pytest.raises(RuntimeError, match="连不上数据库"):
-        await app._probe_database(engine, "127.0.0.1:3306/botnode", "mariadb")
+        await app._probe_database(engine, "127.0.0.1:3306/tickneko", "mariadb")
     assert engine.conn.closed
 
 

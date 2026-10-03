@@ -1,4 +1,4 @@
-"""``botnode/core/logger/processors/local.py`` 单元测试：按天分片、按时间/大小换片、跨片检索。
+"""``tickneko/core/logger/processors/local.py`` 单元测试：按天分片、按时间/大小换片、跨片检索。
 
 换片全看时间与片名，所以时间相关的用例靠**注入假时钟**（``now=``）——把「现在」握在手里，
 不必真的等到跨天。盘上已有的片则直接手写 JSON 行造出来（每行一条日志，见 ``write_lines``）。
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from botnode.core.logger.models import LogRecord
-from botnode.core.logger.processors.local import LocalFileLogProcessor
+from tickneko.core.logger.models import LogRecord
+from tickneko.core.logger.processors.local import LocalFileLogProcessor
 
 #: 造记录时间戳时统一用**带时区**的时刻：不写 tzinfo 的话，``normalize_timestamp`` 当它是 UTC、
 #: 而 ``datetime.timestamp()`` 当它是本地时间 —— 两边一混，过滤条件就会差出几个时区。
@@ -45,7 +45,7 @@ def make_processor(
     """一份文件出口：``buffer_size=1`` 逐条直写，时间走假时钟。"""
     return LocalFileLogProcessor(
         directory,
-        prefix="botnode",
+        prefix="tickneko",
         rotate_minutes=rotate_minutes,
         max_bytes=max_bytes,
         keep_days=keep_days,
@@ -94,12 +94,12 @@ async def test_shard_name_is_prefix_and_day(tmp_path: Path) -> None:
     await processor.start()
     try:
         await processor.write([log("第一条")])
-        assert processor.current_shard == tmp_path / "botnode-2026-09-28.log"
-        assert [path.name for path in processor.shards()] == ["botnode-2026-09-28.log"]
-        assert "第一条" in read(tmp_path / "botnode-2026-09-28.log")
+        assert processor.current_shard == tmp_path / "tickneko-2026-09-28.log"
+        assert [path.name for path in processor.shards()] == ["tickneko-2026-09-28.log"]
+        assert "第一条" in read(tmp_path / "tickneko-2026-09-28.log")
         # 状态里能看出「落哪个目录、正在写哪一片」
         assert processor.stats["directory"] == str(tmp_path)
-        assert processor.stats["path"] == str(tmp_path / "botnode-2026-09-28.log")
+        assert processor.stats["path"] == str(tmp_path / "tickneko-2026-09-28.log")
     finally:
         await processor.stop()
 
@@ -118,8 +118,8 @@ async def test_rolls_when_the_span_elapses(tmp_path: Path) -> None:
     finally:
         await processor.stop()
 
-    first = tmp_path / "botnode-2026-09-28.log"
-    second = tmp_path / "botnode-2026-09-28.1.log"
+    first = tmp_path / "tickneko-2026-09-28.log"
+    second = tmp_path / "tickneko-2026-09-28.1.log"
     assert "第一片" in read(first) and "还进第一片" in read(first)
     assert "第二片" not in read(first)
     assert "第二片" in read(second)
@@ -138,8 +138,8 @@ async def test_rolls_when_the_shard_hits_max_bytes(tmp_path: Path) -> None:
         await processor.stop()
 
     assert [path.name for path in processor.shards()] == [
-        "botnode-2026-09-28.1.log",
-        "botnode-2026-09-28.log",
+        "tickneko-2026-09-28.1.log",
+        "tickneko-2026-09-28.log",
     ]
 
 
@@ -158,11 +158,11 @@ async def test_new_day_opens_a_new_date_shard(tmp_path: Path) -> None:
         await processor.stop()
 
     assert [path.name for path in processor.shards()] == [
-        "botnode-2026-09-29.log",
-        "botnode-2026-09-28.1.log",
-        "botnode-2026-09-28.log",
+        "tickneko-2026-09-29.log",
+        "tickneko-2026-09-28.1.log",
+        "tickneko-2026-09-28.log",
     ]
-    assert "二十九号" in read(tmp_path / "botnode-2026-09-29.log")
+    assert "二十九号" in read(tmp_path / "tickneko-2026-09-29.log")
 
 
 async def test_restart_continues_the_same_shard(tmp_path: Path) -> None:
@@ -195,7 +195,7 @@ async def test_keeps_only_the_last_days(tmp_path: Path) -> None:
     """``keep_days`` 到期的片在换片时删掉（按片名里的日期算）；别人的文件不碰。"""
     clock = FakeClock(datetime(2026, 9, 28, 12, 0))
     for day in ("2026-09-01", "2026-09-20", "2026-09-27"):
-        write_lines(tmp_path / f"botnode-{day}.log", log(f"{day} 的旧日志"))
+        write_lines(tmp_path / f"tickneko-{day}.log", log(f"{day} 的旧日志"))
     outsider = tmp_path / "别人的.log"
     write_lines(outsider, log("不是这个出口的片"))
 
@@ -207,21 +207,21 @@ async def test_keeps_only_the_last_days(tmp_path: Path) -> None:
         await processor.stop()
 
     names = sorted(path.name for path in tmp_path.iterdir())
-    assert "botnode-2026-09-01.log" not in names  # 27 天前：删了
-    assert "botnode-2026-09-20.log" not in names  # 8 天前：也在保留期外
-    assert "botnode-2026-09-27.log" in names  # 昨天：留着
-    assert "botnode-2026-09-28.log" in names  # 今天这片
+    assert "tickneko-2026-09-01.log" not in names  # 27 天前：删了
+    assert "tickneko-2026-09-20.log" not in names  # 8 天前：也在保留期外
+    assert "tickneko-2026-09-27.log" in names  # 昨天：留着
+    assert "tickneko-2026-09-28.log" in names  # 今天这片
     assert outsider.name in names  # 不是我的前缀：不碰
 
 
 async def test_search_reads_all_shards_and_skips_other_days(tmp_path: Path) -> None:
     """检索把该前缀的片当一份数据读；给了 ``start`` 就按**片名的日期**先裁掉不相干的天。"""
     write_lines(
-        tmp_path / "botnode-2026-09-27.log",
+        tmp_path / "tickneko-2026-09-27.log",
         log("昨天那条", datetime(2026, 9, 27, 23, 0, tzinfo=UTC)),
     )
     write_lines(
-        tmp_path / "botnode-2026-09-28.log",
+        tmp_path / "tickneko-2026-09-28.log",
         log("第一条", datetime(2026, 9, 28, 1, 0, tzinfo=UTC)),
         log("第二条", datetime(2026, 9, 28, 2, 0, tzinfo=UTC)),
     )
@@ -257,9 +257,9 @@ async def test_search_reads_all_shards_and_skips_other_days(tmp_path: Path) -> N
 
 async def test_broken_lines_are_skipped(tmp_path: Path) -> None:
     """坏行（不是 JSON / 顶层不是对象 / 空行）跳过：一条坏数据不该毁掉整次检索。"""
-    write_lines(tmp_path / "botnode-2026-09-28.log", log("好的一条", datetime(2026, 9, 28, 1, 0)))
-    good = read(tmp_path / "botnode-2026-09-28.log")
-    (tmp_path / "botnode-2026-09-28.log").write_text(
+    write_lines(tmp_path / "tickneko-2026-09-28.log", log("好的一条", datetime(2026, 9, 28, 1, 0)))
+    good = read(tmp_path / "tickneko-2026-09-28.log")
+    (tmp_path / "tickneko-2026-09-28.log").write_text(
         "不是 JSON\n[1, 2, 3]\n\n" + good, encoding="utf-8"
     )
 
@@ -274,15 +274,15 @@ async def test_search_bounds_how_far_back_it_reads(tmp_path: Path) -> None:
     给了 ``start`` 就以调用方为准（窗口只是兜底）；``0`` = 不限，整目录当一份数据读。
     """
     write_lines(
-        tmp_path / "botnode-2026-09-25.log",
+        tmp_path / "tickneko-2026-09-25.log",
         log("前天那条", datetime(2026, 9, 25, 1, 0, tzinfo=UTC)),
     )
     write_lines(
-        tmp_path / "botnode-2026-09-27.log",
+        tmp_path / "tickneko-2026-09-27.log",
         log("昨天那条", datetime(2026, 9, 27, 1, 0, tzinfo=UTC)),
     )
     write_lines(
-        tmp_path / "botnode-2026-09-28.log",
+        tmp_path / "tickneko-2026-09-28.log",
         log("今天那条", datetime(2026, 9, 28, 1, 0, tzinfo=UTC)),
     )
 
@@ -309,9 +309,9 @@ async def test_search_skips_a_shard_that_vanished_after_listing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """片在「列完」之后被删掉（清理跑在写入线程那边）：跳过它，别把整段结果带没。"""
-    write_lines(tmp_path / "botnode-2026-09-28.log", log("还在的那条"))
+    write_lines(tmp_path / "tickneko-2026-09-28.log", log("还在的那条"))
     processor = make_processor(tmp_path, FakeClock(), rotate_minutes=0)
-    gone = tmp_path / "botnode-2026-09-27.log"  # 列得到、真要读的时候已经没了
+    gone = tmp_path / "tickneko-2026-09-27.log"  # 列得到、真要读的时候已经没了
     monkeypatch.setattr(
         processor, "_shards_within", lambda start, end: [gone, *processor.shards()]
     )

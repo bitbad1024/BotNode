@@ -1,6 +1,6 @@
-# botnode.workflow 模块索引（MODULE MAP）
+# tickneko.workflow 模块索引（MODULE MAP）
 
-> 本文件是 `botnode/workflow/` 下**逐文件 → 作用**的速查索引 + 各模块的「为什么」（第 7 节）；
+> 本文件是 `tickneko/workflow/` 下**逐文件 → 作用**的速查索引 + 各模块的「为什么」（第 7 节）；
 > 各 `.py` 的模块 docstring 只留一句话定位，并指回这里。
 >
 > **要写自己的节点，直接跳第 5 节**（完整指南：契约、注册即校验、可选依赖、测试写法）。
@@ -14,7 +14,7 @@
 ## 0. 分层总览
 
 ```
-botnode/workflow/
+tickneko/workflow/
 ├── models.py        图（节点 / 边）、校验报告、落库记录、规范 JSON / 摘要
 ├── validator.py     入库前校验：结构 → 拓扑 → 语义（④ Dry Run 只有阶段名，未接）
 ├── store.py         落库：定义 / 版本两张表（SQLModel + AsyncSession），按归属隔离
@@ -52,7 +52,7 @@ store ──────────────► models
 
 - `nodes/` 只依赖 `models`：**节点不需要知道**运行器、校验器、存储的存在；
 - 运行器按**类型名**从注册表取执行函数，不认识任何具体节点；
-- 本包不 import FastAPI（HTTP 入口在 `botnode/api/api/workflow/`，装配在 `botnode/api/app.py`）。
+- 本包不 import FastAPI（HTTP 入口在 `tickneko/api/api/workflow/`，装配在 `tickneko/api/app.py`）。
 
 ---
 
@@ -101,7 +101,7 @@ store ──────────────► models
 > **发布 ≠ 运行**：发布只挪发布指针（`status=published` + `published_version`），**不执行图**；
 > 要不要真的跑由 `enabled`（运行开关，默认 `False`）说了算 —— 它是**库里的字段**，重启 / 多进程
 > 认的是同一份。老库升级时这一列按 `0` 补（见 `_DEFINITION_ADDED_COLUMNS`），不会因为多了个
-> 开关就突然开始跑。开关怎么拨（接口 / 隔离 / 即时启停）见 `botnode/api/api/workflow/`。
+> 开关就突然开始跑。开关怎么拨（接口 / 隔离 / 即时启停）见 `tickneko/api/api/workflow/`。
 >
 > **实例策略**（`multi_instance`，就是设置弹窗里的「单实例 / 多实例」，默认 `False`）只管定时
 > 触发**这一拍怎么跑**：上一次还没跑完、到点又到点时，跳过本次（单实例）还是开新实例叠加
@@ -194,9 +194,9 @@ def load_node_modules(*module_names) -> list[str]: ...     # 装外部模块
 ### 5.1 三步，不用改框架文件
 
 ```python
-# ① 新建一个模块（照 botnode/workflow/nodes/log.py 的样子；一个节点一个文件）
+# ① 新建一个模块（照 tickneko/workflow/nodes/log.py 的样子；一个节点一个文件）
 #    my_pkg/nodes/dingtalk.py
-from botnode.workflow.nodes import (
+from tickneko.workflow.nodes import (
     ConfigField, NodeExecutionContext, PortSpec, input_value, register_node,
 )
 
@@ -222,7 +222,7 @@ async def exec_dingtalk(node, ctx: NodeExecutionContext) -> dict[str, object]:
 
 ```python
 # ③ 启动时装进来（app.py 或你自己的入口），一行
-from botnode.workflow import load_node_modules
+from tickneko.workflow import load_node_modules
 load_node_modules("my_pkg.nodes.dingtalk")
 ```
 
@@ -230,7 +230,7 @@ load_node_modules("my_pkg.nodes.dingtalk")
 失败**当场抛** —— 别把「节点没注册上」藏到跑图时才报「暂无执行器」。想核验：
 
 ```python
-from botnode.workflow import get_executor, registered_types
+from tickneko.workflow import get_executor, registered_types
 assert get_executor("dingtalk") is not None
 print(registered_types())        # 已注册的类型名（排序）
 ```
@@ -261,15 +261,15 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 |---|---|---|
 | `ctx.inputs` | `dict[str, Any]`，**引擎按入边投递进来的值**（键 = 目标端口名） | 用 `input_value(node, ctx, "名字")` 取；测试里直接 `ctx.inputs["x"] = ...` 预置。**上游没执行过的边不算数**（孤儿连出来的线不送值，`input_value` 回落到同名字段的手填值）；上游跑了但那个出口没产出才送空串 |
 | `ctx.trigger_data` | `dict[str, Any]`，消息触发时外面送进来的数据 | `start` 的 `message` 出口从它取（`ctx.trigger_data["message"]`） |
-| `ctx.logger` | `BaseLogger` / `BoundLogger`（`botnode.core.logger`） | 写业务日志（节点自己的运行痕迹）。**默认字段已提前绑好**：每条日志自动带 `workflow_id` / `owner_id` / `user_id`，节点只写自己那句话就认得出是哪条工作流、谁的、给谁跑的 |
+| `ctx.logger` | `BaseLogger` / `BoundLogger`（`tickneko.core.logger`） | 写业务日志（节点自己的运行痕迹）。**默认字段已提前绑好**：每条日志自动带 `workflow_id` / `owner_id` / `user_id`，节点只写自己那句话就认得出是哪条工作流、谁的、给谁跑的 |
 | `ctx.log` | `list[str]` | 节点产出的文字行（给前端回显 / 测试断言，不落日志文件） |
 | `ctx.scheduler` | `TaskManager \| None` | 要把流程挂到 cron 就用它（`start` 的 `trigger=time` 的做法）；没注入时是 `None` |
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `target` 节点手动构造会话定位时带它（`gateway.make_target(platform, owner_id=...)`，握手时令牌定下，同一套 id 空间）；离线跑是空串 |
 | `ctx.user_id` | `str`：这一趟**面向哪个用户**（消息触发时是发消息那个人） | 把「同一个工作流在不同人身上的那一份」区分开（按人记状态 / 按人回复 / 按人打日志）。**和 `owner_id` 是两回事**：`owner_id` 是工作流的主人（账号），`user_id` 是被服务的对象。缺省空串（`NO_USER_ID`）—— 定时触发没有「这个人」；消息触发由消息路由（`dispatch`）带进来 |
-| `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | P2 的兼容面，接口层 `OneBotLike` 与旧代码还用；`send` / `onebot` 节点已改走 `ctx.gateway`，不读它了。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `botnode.onebot.server.OneBotServer` |
-| `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` 节点靠它构造会话定位（`make_target`），`send` / `onebot` 节点靠它发消息（`reply(target, message)`）。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `botnode.bridge.gateway.Gateway` |
-| `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `botnode.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`botnode.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
+| `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | P2 的兼容面，接口层 `OneBotLike` 与旧代码还用；`send` / `onebot` 节点已改走 `ctx.gateway`，不读它了。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `tickneko.onebot.server.OneBotServer` |
+| `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` 节点靠它构造会话定位（`make_target`），`send` / `onebot` 节点靠它发消息（`reply(target, message)`）。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `tickneko.bridge.gateway.Gateway` |
+| `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `tickneko.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`tickneko.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
 
 `input_value(node, ctx, name, default="")`：取某个数据入口的值 —— **线上的值优先，没接线才用
 config 里同名字段的手填值**，两者都没有才用 `default`。这是「字段名 = 端口名」那条约定的唯一
@@ -381,7 +381,7 @@ def _import_httpx() -> Any:
     try:
         import httpx
     except ImportError as exc:
-        hint = 'HTTP 节点需要 httpx：pip install httpx（或 pip install "botnode[workflow]"）'
+        hint = 'HTTP 节点需要 httpx：pip install httpx（或 pip install "tickneko[workflow]"）'
         raise RuntimeError(hint) from exc
     return httpx
 ```
@@ -398,7 +398,7 @@ async def test_my_node_outputs(...) -> None:
         id="d1", type="dingtalk", config={}       # text 走连线，不写在 config 里
     )
     ctx = NodeExecutionContext()
-    ctx.inputs = {"text": "hi botnode"}             # 引擎投递进来的入口值（测试直接预置）
+    ctx.inputs = {"text": "hi tickneko"}             # 引擎投递进来的入口值（测试直接预置）
     assert await exec_dingtalk(node, ctx) == {"sent": True}
 ```
 
@@ -429,12 +429,12 @@ async def test_my_node_outputs(...) -> None:
 | 节点类型专属的校验规则 | 该节点模块里写校验函数，注册时挂 `validator=`（不动 `validator.py`） |
 | 通用的图层面校验（新的拓扑规则 / 新阶段） | `validator.py`（只放跨类型、与具体节点无关的规则） |
 | 图 / 记录上要加字段 | `models.py`（协议）+ `store.py`（表结构） |
-| 新的 HTTP 接口 | `botnode/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
+| 新的 HTTP 接口 | `tickneko/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 重试） | `executor.py`（串行 + 分支剪枝已就位；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
 | 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流） |
 | 给 `ctx` 注入新能力（如平台总线 / OneBot 服务端） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` / `onebot.py` 模块文档） |
-| 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `botnode.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
+| 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `tickneko.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
 
 ---
 
@@ -479,7 +479,7 @@ async def test_my_node_outputs(...) -> None:
   只写一条开始日志；
 - 图的公共算法在 `graph.py`，与校验器共用同一份口径。本模块只再导出
   `SimpleWorkflowRunner` / `NodeExecutionContext` / `get_executor` 三个 —— 老代码
-  `from botnode.workflow.executor import ...` 还能用，新代码直接从 `botnode.workflow` 取。
+  `from tickneko.workflow.executor import ...` 还能用，新代码直接从 `tickneko.workflow` 取。
 
 ### 7.4 runtime.py —— 发布 ≠ 运行
 
@@ -506,18 +506,18 @@ async def test_my_node_outputs(...) -> None:
 
 ### 7.6 logging.py —— 日志接入
 
-接的是 `botnode.core.logger` 那套进程门面，用名字 `workflow`（相对核心 `botnode` ->
-`botnode.workflow`）：
+接的是 `tickneko.core.logger` 那套进程门面，用名字 `workflow`（相对核心 `tickneko` ->
+`tickneko.workflow`）：
 
 ```python
-from botnode.workflow import workflow_logger
+from tickneko.workflow import workflow_logger
 
 workflow_logger().info("工作流已登记", workflow_id=...)
 ```
 
 **业务模块一律不直接 `default_core()`** —— 要日志实例就调 `workflow_logger()`；`runtime.py`
-里的模块级 `_log()` 与节点上下文的 `logger` 都走这一口。核心由装配层（`botnode.bootstrap` 或
-`botnode.wiring.wire_loggers`）经 `set_core()` 存进本模块槽位；`import` 本模块**零副作用**，
+里的模块级 `_log()` 与节点上下文的 `logger` 都走这一口。核心由装配层（`tickneko.bootstrap` 或
+`tickneko.wiring.wire_loggers`）经 `set_core()` 存进本模块槽位；`import` 本模块**零副作用**，
 没装配就调用会当场抛错（fail fast），不会默默按默认参数建一份把配置定死的核心。
 
 日志实例**用到才取，不要在模块级取**：模块级 `_logger = workflow_logger()` 是导入即执行的 ——

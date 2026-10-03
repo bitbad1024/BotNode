@@ -9,9 +9,9 @@ import dataclasses
 
 import pytest
 
-from botnode.platforms.bridge import Gateway
-from botnode.platforms.bridge.models import ActionResult, BotClient, ChatTarget, PlatformEvent
-from botnode.platforms.bridge.protocols import BotAdapter
+from tickneko.platforms.bridge import Gateway
+from tickneko.platforms.bridge.models import ActionResult, BotClient, ChatTarget, PlatformEvent
+from tickneko.platforms.bridge.protocols import BotAdapter
 
 
 # --------------------------------------------------------------------- 模型口径

@@ -1,6 +1,6 @@
 # 第三方组件与许可
 
-BotNode 本体以 [MIT 许可证](LICENSE) 发布，但**它使用的第三方组件各有自己的许可证**。
+TickNeko 本体以 [MIT 许可证](LICENSE) 发布，但**它使用的第三方组件各有自己的许可证**。
 下面列的是本项目**直接依赖**（`requirements.txt` 与 `frontend/package.json` 里声明的那一层），
 以及采集当下的实际版本。
 

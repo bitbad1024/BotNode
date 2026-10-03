@@ -1,7 +1,7 @@
 /**
  * 运行日志 API：GET /api/logs。
  *
- * 与后端契约一一对应（见 botnode/api/api/log/router.py）：
+ * 与后端契约一一对应（见 tickneko/api/api/log/router.py）：
  * - 响应是一页：`{ items, total }`，total 是命中总数，前端据此算总页数、做页码跳转；
  * - 结果按自增序号倒序（即写入顺序倒序；同一毫秒的几条也有先后），limit 1-500，offset 翻页；
  * - 非管理员后端强制只看自己的 owner_id，指定别人会 403，来源（source / processors）也只有管理员能传；
@@ -23,7 +23,7 @@ export interface LogEntry {
   /** Unix 时间戳（秒） */
   timestamp: number
   level: LogLevelName | string
-  /** 写日志的实例名，如 botnode.api */
+  /** 写日志的实例名，如 tickneko.api */
   logger_name: string
   /** 归属者；空串 = 公共（框架自身的日志） */
   owner_id: string

@@ -1,7 +1,7 @@
 /**
  * 登录 / 注册表单共用的前端校验规则。
  *
- * **后端才是裁判**（字符集、长度都由 `botnode/api/services/user/validation.py` 说了算），这里
+ * **后端才是裁判**（字符集、长度都由 `tickneko/api/services/user/validation.py` 说了算），这里
  * 只为了输入时立刻给提示 —— 规则与后端那份对齐，改一边要顺手改另一边。
  */
 

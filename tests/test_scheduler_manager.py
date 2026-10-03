@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from botnode.core.scheduler import CronError, CronExpr, Task, TaskManager
+from tickneko.core.scheduler import CronError, CronExpr, Task, TaskManager
 
 
 def noop() -> None:

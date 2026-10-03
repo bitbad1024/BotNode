@@ -1,9 +1,9 @@
-"""应用入口：读配置 -> 建日志核心与库引擎 -> 交给 :mod:`botnode.bootstrap` 装配 -> 优雅停机。
+"""应用入口：读配置 -> 建日志核心与库引擎 -> 交给 :mod:`tickneko.bootstrap` 装配 -> 优雅停机。
 
 **只做核心初始化**：解析命令行、读 ``data/config.toml``、按 ``[logging]`` 建日志核心、建共用的
 数据库引擎（建好立即探一次，连不上当场报错）。业务模块一律不在这里 import —— 日志核心必须
 先于任何业务模块按配置建好（它们有模块级的 ``default_core().child(...)``，导入即执行会把
-进程默认核心按默认参数定死），所以 :mod:`botnode.bootstrap` 也是核心就绪之后才在函数里导入。
+进程默认核心按默认参数定死），所以 :mod:`tickneko.bootstrap` 也是核心就绪之后才在函数里导入。
 配置本身的读取与校验在 ``config.py``，本文件只管流程。
 
 运行::
@@ -36,8 +36,8 @@ from config import (
     Settings,
     load_or_create_secret_key,
 )
-from botnode import __version__
-from botnode.core.logger import (
+from tickneko import __version__
+from tickneko.core.logger import (
     BaseLogProcessor,
     DatabaseLogProcessor,
     LocalFileLogProcessor,
@@ -45,7 +45,7 @@ from botnode.core.logger import (
     LogLevel,
     configure,
 )
-from botnode.db import SqlLogStore
+from tickneko.db import SqlLogStore
 
 # --------------------------------------------------------------------------- 初始化
 #: 日志出口单独连另一个库时自建的引擎（默认没有，用的就是业务那个）；停机时一并收
@@ -56,7 +56,7 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     """按 ``[logging]`` 建日志核心，并把共用的库引擎一并建好交回调用方。
 
     引擎（只是连接池，第一次真正用到才连库）在这里一起建：库出口得有引擎才能挂，建好一并
-    交给 :mod:`botnode.bootstrap` 给业务存储复用（两者**共用同一个**）——``[logging.database]``
+    交给 :mod:`tickneko.bootstrap` 给业务存储复用（两者**共用同一个**）——``[logging.database]``
     单独配了连接项（要把日志放另一个库）时才另建一个。
 
     业务侧（建表、起服务、拉缓存）**不在这里**：那些模块一被 import 就可能写日志，必须等核心
@@ -74,7 +74,7 @@ async def setup_logging(settings: Settings) -> tuple[LogCore, AsyncEngine]:
     )
     await _probe_database(engine, db_target, settings.database.driver)
 
-    # 片名前缀：配置留空就跟进程名，于是片名与进程名对得上（botnode-2026-09-28.log）
+    # 片名前缀：配置留空就跟进程名，于是片名与进程名对得上（tickneko-2026-09-28.log）
     file_prefix: str = file_log.prefix or app.name
     processors: list[BaseLogProcessor] = []
     if file_log.enabled:
@@ -181,7 +181,7 @@ async def _probe_database(engine: AsyncEngine, target: str, driver: str) -> None
 # --------------------------------------------------------------------------- 入口
 def _parse_args(argv: Sequence[str] | None) -> str:
     """解析命令行参数，返回配置文件路径。"""
-    parser = argparse.ArgumentParser(description="BotNode 应用入口")
+    parser = argparse.ArgumentParser(description="TickNeko 应用入口")
     _ = parser.add_argument(
         "-c",
         "--config",
@@ -192,7 +192,7 @@ def _parse_args(argv: Sequence[str] | None) -> str:
 
 
 async def _main(argv: Sequence[str] | None = None) -> None:
-    """入口：配置 -> 日志核心 -> 交给 botnode 装配 -> 等停机。
+    """入口：配置 -> 日志核心 -> 交给 tickneko 装配 -> 等停机。
 
     真正的服务（接口层 HTTP、OneBot 反向 WS）都在后台任务里跑，本函数只把**顺序**摆正：
     初始化哪一步失败都当场退出（``SystemExit(2)``），不留半截状态。
@@ -212,7 +212,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(2) from exc
 
     # 3) 装配：核心建好之后才导入业务装配模块（顺序的意义见模块文档）
-    from botnode.bootstrap import run, serve_forever, shutdown
+    from tickneko.bootstrap import run, serve_forever, shutdown
 
     try:
         core.info(
@@ -268,7 +268,7 @@ async def _main(argv: Sequence[str] | None = None) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     """同步入口：``python app.py`` 走这里。"""
     # Windows 下 stderr 默认按本地代码页（GBK）写，而终端/捕获端按 UTF-8 读——中文全变乱码。
-    # 启动前把 stderr 统一成 UTF-8（botnode 自己的 console 出口就是 UTF-8），
+    # 启动前把 stderr 统一成 UTF-8（tickneko 自己的 console 出口就是 UTF-8），
     # 这样启动失败时的「打印到 stderr」和日志核心的兜底（lastResort）都不再是乱码。
     try:
         if sys.stderr is not None:

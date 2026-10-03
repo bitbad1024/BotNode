@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from config import BASE_DIR, Settings
-from botnode.api import (
+from tickneko.api import (
     ApiOptions,
     ApiResponse,
     AvatarTooLargeError,
@@ -36,12 +36,12 @@ from botnode.api import (
     ValidationError,
     create_app,
 )
-from botnode.api.services.profile import ALLOWED_IMAGE_TYPES, sniff_image_type
+from tickneko.api.services.profile import ALLOWED_IMAGE_TYPES, sniff_image_type
 
-#: 演示账号只剩 admin（见 botnode.api.services.user.demo.DEMO_USERS）；id 就是 ``u-<账号>``。
+#: 演示账号只剩 admin（见 tickneko.api.services.user.demo.DEMO_USERS）；id 就是 ``u-<账号>``。
 #: robot 由 :func:`login` 顺手注册（昵称带上，与原来的演示账号一致）
-ADMIN = {"account": "admin", "password": "botnode-admin"}
-ROBOT = {"account": "robot", "password": "botnode-robot", "nickname": "巡检机器人"}
+ADMIN = {"account": "admin", "password": "tickneko-admin"}
+ROBOT = {"account": "robot", "password": "tickneko-robot", "nickname": "巡检机器人"}
 LOGIN_PATH = "/api/auth/login"
 REGISTER_PATH = "/api/auth/register"
 PROFILE_PATH = "/api/profile"
@@ -102,7 +102,7 @@ async def memory_user_store() -> SqlUserStore:
 async def login(client: httpx.AsyncClient, account: dict[str, str]) -> str:
     """登录换一个令牌。
 
-    演示账号现在只剩 ``admin``（见 ``botnode.api.services.user.demo``）：非 admin 的账号
+    演示账号现在只剩 ``admin``（见 ``tickneko.api.services.user.demo``）：非 admin 的账号
     由这里顺手注册一个（注册要昵称，就用账号名顶上），用例不必各自准备。
     """
     if account["account"] != ADMIN["account"]:
@@ -270,7 +270,7 @@ class TestProfileService:
         """
         import asyncio
 
-        from botnode.core.logger import (
+        from tickneko.core.logger import (
             BaseLogProcessor,
             LogCore,
             LogRecord,

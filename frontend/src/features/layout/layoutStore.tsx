@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from 'react'
 
-const COLLAPSE_KEY = 'botnode.sidebar.collapsed'
+const COLLAPSE_KEY = 'tickneko.sidebar.collapsed'
 /** 小屏断点（与 CSS 媒体查询保持一致，px）：<768 为手机，走抽屉；≥768 为桌面式侧栏。 */
 export const MOBILE_BREAKPOINT = 768
 

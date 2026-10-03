@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal
 
 rem ============================================================
-rem  BotNode 前端启动脚本
+rem  TickNeko 前端启动脚本
 rem  启动 Vite 开发服务器（默认 http://127.0.0.1:15173）
 rem  依赖：node 18+ / npm；首次运行会自动安装依赖
 rem ============================================================
@@ -38,7 +38,7 @@ if not exist "node_modules" (
     )
 )
 
-echo 正在启动 BotNode 前端（http://127.0.0.1:15173）...
+echo 正在启动 TickNeko 前端（http://127.0.0.1:15173）...
 echo 按 Ctrl+C 停止。
 echo.
 

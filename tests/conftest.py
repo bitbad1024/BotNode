@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from botnode.core.logger import current_default_core, default_core
-from botnode.wiring import wire_loggers
+from tickneko.core.logger import current_default_core, default_core
+from tickneko.wiring import wire_loggers
 
 
 @pytest.fixture(autouse=True)

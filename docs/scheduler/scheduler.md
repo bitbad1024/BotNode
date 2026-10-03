@@ -1,11 +1,11 @@
-# 定时任务（`botnode.core.scheduler`）
+# 定时任务（`tickneko.core.scheduler`）
 
 ## 设计要点
 
 - **只有三样东西对业务可见**：`CronExpr`（什么时候跑）、`Task`（跑什么）、
   `TaskManager`（登记、启停、改定义）；执行循环 `Scheduler` 与它背后的时间线
   `TaskTimeline` 都是内部实现，业务不用管；
-- **业务代码只碰进程级单例** `scheduler`（`botnode.core.scheduler` 导出的 `TaskManager()`
+- **业务代码只碰进程级单例** `scheduler`（`tickneko.core.scheduler` 导出的 `TaskManager()`
   实例）；
 - **登记不等于排程**：`add()` 只是记进登记簿，`next_run` 由执行循环算 —— 循环没启动时
   一直是 `None`，`start()` 第一圈才排上；
@@ -27,7 +27,7 @@
 ## 快速开始
 
 ```python
-from botnode.core.scheduler import CronExpr, scheduler
+from tickneko.core.scheduler import CronExpr, scheduler
 
 await scheduler.start()
 scheduler.add("*/5 * * * *", my_check, task_id="check", name="巡检")
@@ -85,12 +85,12 @@ O(n) 的全量对账只在启动和 `wake()`（外部绕过 `set_*` 直接改了
 
 ## 日志接入
 
-本层接的是 `botnode.core.logger` 的进程门面，名为 `scheduler`（相对核心 `botnode` ->
-`botnode.scheduler`）。**业务模块一律不直接 `default_core()`**：要日志实例就调
+本层接的是 `tickneko.core.logger` 的进程门面，名为 `scheduler`（相对核心 `tickneko` ->
+`tickneko.scheduler`）。**业务模块一律不直接 `default_core()`**：要日志实例就调
 `scheduler_logger()`；装配层也可把实例经 `TaskManager(..., logger=)` /
 `Scheduler(..., logger=)` 传入。
 
-核心由装配层（`botnode.bootstrap` 或 `botnode.wiring.wire_loggers`）经 `set_core()` 存进
+核心由装配层（`tickneko.bootstrap` 或 `tickneko.wiring.wire_loggers`）经 `set_core()` 存进
 本模块槽位。`import` 本模块**零副作用** —— 没装配就调 `scheduler_logger()` 会当场抛错
 （fail fast），不会默默按默认参数建一份把配置定死的核心。
 
