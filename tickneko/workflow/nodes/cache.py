@@ -114,6 +114,7 @@ def _clip(raw: str) -> str:
 @register_node(
     "cache",
     label="缓存",
+    color="#06b6d4",
     order=140,
     category="data",
     # key 既是字段名也是数据入口（同 http.url）：接线或手填都行，两个都没有才报错

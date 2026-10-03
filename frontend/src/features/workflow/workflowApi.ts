@@ -84,6 +84,7 @@ export interface NodeFieldSpec {
 export interface NodeTypeSpec {
   type: string
   label: string
+  color: string
   role: 'start' | 'end' | 'normal'
   /** 面板顺序（后端已排好：小的在前） */
   order: number

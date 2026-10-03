@@ -3121,6 +3121,7 @@ async def test_api_node_types_catalog_matches_registry() -> None:
 
     http = nodes["http"]
     assert http["label"] == "HTTP"
+    assert http["color"] == "#0ea5e9"  # 节点配色也随目录下发：加类型只改后端，前端不再抄一份
     assert http["role"] == "normal"
     assert http["has_executor"] is True
     assert [port["id"] for port in http["outputs"]] == ["trigger", "http_status", "http_body"]

@@ -9,10 +9,10 @@
  * * 杂项工具（``uid`` / ``truncate`` / ``normalizeGraph`` …）。
  *
  * 节点类型与**端口类型**都不在前端定义：后端给什么就画什么，认不出的节点类型只给一对触发口
- * 兜底（保存时会被 ``UNKNOWN_NODE_TYPE`` 拦下）、认不出的端口类型一律淡灰。这里只留前端
- * 自己的东西：节点颜色（皮肤）、运行时端口类型表（由 ``installCatalog`` 从目录的 ``port_types``
- * 装进来）与两个**固有例外**（``start`` 的端口随 ``config.trigger`` 变；``constant`` 的常量
- * 就是它的 config 本身）。
+ * 兜底（保存时会被 ``UNKNOWN_NODE_TYPE`` 拦下）、认不出的端口类型一律淡灰。**节点颜色**也
+ * 由后端目录下发（认不出的类型才用兜底色）。这里只留前端自己的东西：运行时端口类型表（由
+ * ``installCatalog`` 从目录的 ``port_types`` 装进来）与两个**固有例外**（``start`` 的端口随
+ * ``config.trigger`` 变；``constant`` 的常量就是它的 config 本身）。
  */
 import {
   type NodeFieldSpec,
@@ -124,25 +124,7 @@ export function groupByCategory(items: NodeTypeSpec[]): Array<[string, NodeTypeS
 //: 边没写端口时的口径：按「触发 -> 触发」读（与后端 graph.DEFAULT_EDGE_PORT 一致）
 export const DEFAULT_PORT = 'trigger'
 
-//: 节点配色（皮肤）：后端只给类型名与显示名，颜色由这里定
-const NODE_COLORS: Record<string, string> = {
-  start: '#22c55e',
-  end: '#ef4444',
-  log: '#3b82f6',
-  test: '#8b5cf6',
-  http: '#0ea5e9',
-  constant: '#eab308',
-  target: '#f59e0b',
-  delay: '#14b8a6',
-  json: '#f97316',
-  regex: '#ec4899',
-  now: '#84cc16',
-  condition: '#6366f1',
-  send: '#d946ef',
-  operator: '#f59e0b',
-  cache: '#06b6d4',
-}
-
+//: 认不出的节点类型 / 后端没配色的兜底色
 const DEFAULT_COLOR = '#64748b'
 
 /** start 时间形态换色（面板上「开始」只有一个入口，节点按触发方式区分） */
@@ -183,8 +165,8 @@ export function installCatalog(catalog: NodeCatalog): NodeTypeSpec[] {
 const DEF_CACHE = new Map<string, NodeTypeDef>()
 
 /**
- * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序全部来自后端目录，前端只补颜色，
- * 并按 config 处理上面说的两个固有例外。
+ * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序 / 颜色全部来自后端目录（认不出的
+ * 类型用兜底色），并按 config 处理上面说的两个固有例外。
  */
 export function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
   // start 是唯一「形状随 config 变」的类型，把它那一项也进 key
@@ -222,7 +204,7 @@ function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTyp
   const base: NodeTypeDef = {
     type: spec.type,
     label: spec.label,
-    color: NODE_COLORS[spec.type] ?? DEFAULT_COLOR,
+    color: spec.color || DEFAULT_COLOR,
     defaults,
     inputs: spec.inputs,
     outputs: spec.outputs,

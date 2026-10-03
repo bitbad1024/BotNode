@@ -36,6 +36,7 @@ from .registry import register_node
 @register_node(
     "target",
     label="目标",
+    color="#f59e0b",
     order=35,
     category="target",
     inputs=[TRIGGER_PORT],

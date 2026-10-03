@@ -109,6 +109,8 @@ class NodeTypeData(_Frozen):
 
     type: str
     label: str
+    #: 画布配色（CSS 颜色值）；空串 = 注册时没配，前端用兜底色
+    color: str = ""
     role: str
     order: int
     has_executor: bool
@@ -125,6 +127,7 @@ class NodeTypeData(_Frozen):
         return cls(
             type=spec.node_type,
             label=spec.label or spec.node_type,
+            color=spec.color,
             role=spec.role,
             order=spec.order,
             has_executor=spec.executor is not None,

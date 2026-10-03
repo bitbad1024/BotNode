@@ -68,6 +68,7 @@ def _dump(data: object) -> str:
 @register_node(
     "send",
     label="发送",
+    color="#d946ef",
     order=120,
     category="action",
     # 去向（target）与内容（message）都要有来源：接线或手填（message 可手填，target 只能接线）

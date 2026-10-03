@@ -18,6 +18,7 @@ from .registry import register_node
 @register_node(
     "test",
     label="测试",
+    color="#8b5cf6",
     order=50,
     category="data",
     inputs=[TRIGGER_PORT, PortSpec("message", "message", "回显内容")],

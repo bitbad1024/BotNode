@@ -167,6 +167,8 @@ class NodeSpec:
     :param branching: 分流节点（如 condition）：执行后只让**选中端口的出边**保持活着，
         其余出口的边整段剪枝（对岸节点不执行，级联到它的下游）；普通节点永远 False；
     :param label: 显示名（画布面板项 / 节点标题），缺省用 ``node_type``；
+    :param color: 画布配色（CSS 颜色值，如 ``"#3b82f6"``）；空串 = 没配，前端用兜底色。
+        加节点类型**不需要改前端** —— 颜色跟其他展示信息一起从目录接口下发；
     :param order: 画布面板顺序（小的在前，内置节点从 10 起）；
     :param category: 语义分类（画布面板分组用，见 :data:`NodeCategory`）；
     :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
@@ -183,6 +185,7 @@ class NodeSpec:
     expression_field: str | None = None
     branching: bool = False
     label: str = ""
+    color: str = ""
     order: int = 100
     category: NodeCategory = "data"
     inputs: tuple[PortSpec, ...] = ()

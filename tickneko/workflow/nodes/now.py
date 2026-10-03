@@ -38,6 +38,7 @@ DEFAULT_TIME_FORMAT: str = "%Y-%m-%d %H:%M:%S"
 @register_node(
     "now",
     label="当前时间",
+    color="#84cc16",
     order=100,
     category="data",
     # format 既是字段名也是数据入口：接线优先，没接线才用手填值

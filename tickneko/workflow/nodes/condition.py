@@ -107,6 +107,7 @@ def _compare(left: str, operator: str, right: str) -> bool | None:
 @register_node(
     "condition",
     label="条件",
+    color="#6366f1",
     order=110,
     category="control",
     # 分流节点：引擎按「选中了哪个出口」剪枝，没走的出口整段跳过

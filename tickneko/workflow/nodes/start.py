@@ -86,6 +86,7 @@ def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
 @register_node(
     "start",
     label="开始",
+    color="#22c55e",
     order=10,
     role="start",
     category="trigger",
