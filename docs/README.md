@@ -28,7 +28,7 @@
 | 贡献指南 | [`.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md) | 环境准备、目录速览、代码约定、测试、提交规范 |
 | 安全策略 | [`.github/SECURITY.md`](../.github/SECURITY.md) | 漏洞报告渠道、部署必关的门、已知设计取舍 |
 | 行为准则 | [`.github/CODE_OF_CONDUCT.md`](../.github/CODE_OF_CONDUCT.md) | 社区行为准则 |
-| 许可证 | [`LICENSE`](../LICENSE) · [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | MIT 与第三方组件许可 |
+| 许可证 | [`LICENSE`](../LICENSE) · [`NOTICE`](../NOTICE) · [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | Apache-2.0 与第三方组件许可 |
 
 
 ---
