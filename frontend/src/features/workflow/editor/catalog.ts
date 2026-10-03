@@ -83,6 +83,106 @@ export function isDataPort(type: string): boolean {
   return PORT_TYPES[type]?.data ?? false
 }
 
+/** 两种端口类型能不能互接：**同类互通；泛型端口跟任何数据流端口互接**（不接触发）。
+ * 泛型就一个，直接按类型名 ``generic`` 判断（不加标记字段，与后端
+ * ``port_types.port_types_compatible`` 同一份语义）；另一端是不是数据流端口查
+ * ``data``（trigger 为 false）。认不出的类型按「非数据、非泛型」处理。 */
+export function portCompatible(a: PortType, b: PortType): boolean {
+  if (a === b) return true
+  return (a === 'generic' && isDataPort(b)) || (b === 'generic' && isDataPort(a))
+}
+
+/** 端口生效类型表的 key：``节点:方向:端口``（见 :func:`effectivePortTypes`）。 */
+export function portEffKey(nodeId: string, direction: 'in' | 'out', portId: string): string {
+  return `${nodeId}:${direction}:${portId}`
+}
+
+/**
+ * 每个端口的**生效类型**（泛型端口「接什么显什么」）：
+ *
+ * * 非 generic 端口 = 自身声明的类型；
+ * * generic 端口按优先级取：① 自己接的边（**输入**取连进来那条边的源端口生效类型，
+ *   **输出**取连出去那条边的目标端口生效类型）；② 没接到具体类型时看**透传对**
+ *   （``tie`` 指向同一节点另一侧的端口）—— 输入没接线但输出接了，输入显示输出的类型，
+ *   反之亦然，两端永远一致；③ 都没有就还是 generic。对方是 generic 就顺着继续追
+ *   （同一端口不重复展开，环直接兜底 generic）。
+ *
+ * 由父组件按 ``edges`` 变化用 memo 算一次：返回的 Map 引用稳定，memo 化的卡片不会白
+ * 重渲染。端口圆点颜色、边颜色都查它（见 :func:`edgeColor` / ``NodeCard``）。
+ */
+export function effectivePortTypes(
+  nodeById: Map<string, WorkflowNode>,
+  edges: WorkflowEdge[],
+): Map<string, string> {
+  const byIn = new Map<string, WorkflowEdge[]>()
+  const byOut = new Map<string, WorkflowEdge[]>()
+  for (const edge of edges) {
+    const inKey = portEffKey(edge.target, 'in', edge.targetPort || DEFAULT_PORT)
+    const outKey = portEffKey(edge.source, 'out', edge.sourcePort || DEFAULT_PORT)
+    const push = (map: Map<string, WorkflowEdge[]>, key: string) => {
+      const list = map.get(key)
+      if (list) list.push(edge)
+      else map.set(key, [edge])
+    }
+    push(byIn, inKey)
+    push(byOut, outKey)
+  }
+
+  const memo = new Map<string, string>()
+  const resolving = new Set<string>()
+
+  const portSpec = (
+    nodeId: string,
+    direction: 'in' | 'out',
+    portId: string,
+  ): PortSpec | null => {
+    const node = nodeById.get(nodeId)
+    if (!node) return null
+    const ports = nodeDef(node.type, node.config)[direction === 'in' ? 'inputs' : 'outputs']
+    return ports.find((p) => p.id === portId) ?? null
+  }
+
+  const resolve = (nodeId: string, direction: 'in' | 'out', portId: string): string => {
+    const key = portEffKey(nodeId, direction, portId)
+    const hit = memo.get(key)
+    if (hit !== undefined) return hit
+    if (resolving.has(key)) return 'generic' // 环：顺着追到原地，兜底不展开
+    resolving.add(key)
+    const spec = portSpec(nodeId, direction, portId)
+    let result = spec?.type ?? 'generic'
+    if (result === 'generic') {
+      // ① 自己接的边：另一端是具体类型就跟着它
+      for (const edge of (direction === 'in' ? byIn.get(key) : byOut.get(key)) ?? []) {
+        const other =
+          direction === 'in'
+            ? resolve(edge.source, 'out', edge.sourcePort || DEFAULT_PORT)
+            : resolve(edge.target, 'in', edge.targetPort || DEFAULT_PORT)
+        if (other !== 'generic') {
+          result = other
+          break
+        }
+      }
+      // ② 没接到具体类型：透传对 —— 看同一节点另一侧的配对端口（tie），输入输出保持一致
+      if (result === 'generic' && spec?.tie) {
+        const other = resolve(nodeId, direction === 'in' ? 'out' : 'in', spec.tie)
+        if (other !== 'generic') result = other
+      }
+    }
+    memo.set(key, result)
+    resolving.delete(key)
+    return result
+  }
+
+  // 所有端口都解析（不只是有边的）：透传对的另一侧没接线也得算出来（输入没接、输出接了时
+  // 输入也要显示输出那边定下的类型）。memo 化，重复 resolve 直接命中。
+  for (const node of nodeById.values()) {
+    const def = nodeDef(node.type, node.config)
+    for (const p of def.inputs) resolve(node.id, 'in', p.id)
+    for (const p of def.outputs) resolve(node.id, 'out', p.id)
+  }
+  return memo
+}
+
 /** 面板图例用的端口类型清单：顺序就是后端 ``PORT_TYPES`` 的顺序。 */
 export function portTypeLegend(): PortTypeSpec[] {
   return Object.values(PORT_TYPES)
@@ -323,16 +423,20 @@ export function edgeCoords(
   }
 }
 
-/** 连线颜色：取起点那个输出端口的类型色（认不出就淡灰）。 */
+/** 连线颜色：取起点那个输出端口的类型色（认不出就淡灰）。泛型端口带上
+ * ``effectivePortTypes`` 算的生效类型表就跟着变（接出去是什么就画什么色），不带则退回
+ * 声明类型（粘贴虚影那一路，半透明预览不需要跟随）。 */
 export function edgeColor(
   edge: WorkflowEdge,
   nodeById: Map<string, WorkflowNode>,
+  effTypes?: Map<string, string>,
 ): string {
   const srcNode = nodeById.get(edge.source)
   if (!srcNode) return 'var(--text-3)'
-  const port = nodeDef(srcNode.type, srcNode.config).outputs.find(
-    (p) => p.id === (edge.sourcePort ?? DEFAULT_PORT),
-  )
+  const outPort = edge.sourcePort ?? DEFAULT_PORT
+  const eff = effTypes?.get(portEffKey(edge.source, 'out', outPort))
+  if (eff) return portColor(eff)
+  const port = nodeDef(srcNode.type, srcNode.config).outputs.find((p) => p.id === outPort)
   return port ? portColor(port.type) : 'var(--text-3)'
 }
 

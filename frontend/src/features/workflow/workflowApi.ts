@@ -62,10 +62,12 @@ export interface WorkflowGraph {
  */
 export interface NodePortSpec {
   id: string
-  /** 端口类型：连线两端必须同类 */
+  /** 端口类型：连线两端必须同类（泛型端口例外 —— 可接任意数据流端口，见 catalog.portCompatible） */
   type: PortType
   label: string
   required: boolean
+  /** 透传对：指向同一节点另一侧的端口 id —— 输入输出生效类型永远一致（见 catalog.effectivePortTypes） */
+  tie?: string
 }
 
 /** config 里的一个字段：画布照它渲染输入框 / 下拉。 */

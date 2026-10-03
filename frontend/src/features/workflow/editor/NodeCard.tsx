@@ -15,6 +15,7 @@ import {
   PORT_ROW_H,
   nodeDef,
   portColor,
+  portEffKey,
   truncate,
   type PortType,
   type ValidationIssue,
@@ -34,6 +35,9 @@ export interface NodeCardProps {
   issues: ValidationIssue[] | null
   /** 已接上线的入口（没写端口的边按 trigger 算） */
   wired: Set<string>
+  /** 端口生效类型表（见 ``catalog.effectivePortTypes``）：泛型端口接什么显什么颜色，
+   * 非泛型端口查出来就是它自己；引用由父组件按边的变化用 memo 固化 */
+  effTypes: Map<string, string>
   onMouseDown: (event: React.MouseEvent, nodeId: string) => void
   onClick: (event: React.MouseEvent) => void
   onContextMenu: (event: React.MouseEvent, nodeId: string) => void
@@ -61,6 +65,7 @@ function NodeCardBase({
   boxSelected,
   issues,
   wired,
+  effTypes,
   onMouseDown,
   onClick,
   onContextMenu,
@@ -89,6 +94,8 @@ function NodeCardBase({
         {Array.from({ length: portRows }).map((_, rowIdx) => {
           const inp = def.inputs[rowIdx]
           const out = def.outputs[rowIdx]
+          // 端口圆点按「生效类型」显色：泛型端口接什么显什么，声明了 tie 的透传对
+          // （输入输出同一种类型）两端颜色永远一致 —— 对应关系就靠这一致的颜色表达
           return (
             <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
               {/* 输入端口（左侧） */}
@@ -100,7 +107,9 @@ function NodeCardBase({
                       className={styles.portCircle}
                       style={{
                         left: -5,
-                        background: portColor(inp.type),
+                        background: portColor(
+                          effTypes.get(portEffKey(node.id, 'in', inp.id)) ?? inp.type,
+                        ),
                         // 必填入口还没接线：红圈提醒（后端也会报 INPUT_NOT_CONNECTED）
                         ...(inp.required && !wired.has(inp.id)
                           ? { boxShadow: '0 0 0 3px rgba(239,68,68,.35)' }
@@ -129,7 +138,12 @@ function NodeCardBase({
                     <span
                       data-role="port"
                       className={styles.portCircle}
-                      style={{ right: -5, background: portColor(out.type) }}
+                      style={{
+                        right: -5,
+                        background: portColor(
+                          effTypes.get(portEffKey(node.id, 'out', out.id)) ?? out.type,
+                        ),
+                      }}
                       onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
                       onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
                     />

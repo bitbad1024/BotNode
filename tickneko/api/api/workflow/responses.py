@@ -61,12 +61,15 @@ class NodePortData(_Frozen):
 
     ``type`` 决定它传不传值（``message`` 传、``trigger`` 不传），``required`` 只对输入端口
     有意义：画布把没接线的必填入口标出来（后端也会在语义阶段报 ``INPUT_NOT_CONNECTED``）。
+    ``tie`` 是**透传对**：指向同一节点另一侧的端口 id —— 两端生效类型永远一致（输入接什么、
+    输出就是什么），画布据此让两端显示同一种类型、同色表示对应。
     """
 
     id: str
     type: str
     label: str
     required: bool = False
+    tie: str = ""
 
     @classmethod
     def from_port(cls, port: PortSpec) -> NodePortData:
@@ -75,6 +78,7 @@ class NodePortData(_Frozen):
             type=port.type,
             label=port.label or port.id,
             required=port.required,
+            tie=port.tie,
         )
 
 

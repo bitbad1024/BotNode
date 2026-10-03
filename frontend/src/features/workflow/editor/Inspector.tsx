@@ -11,6 +11,7 @@ import {
   hasDedicatedEditor,
   isDataPort,
   portColor,
+  portEffKey,
   triggerOptionsOf,
   type NodeTypeDef,
   type ValidationReport,
@@ -24,6 +25,8 @@ export interface InspectorProps {
   def: NodeTypeDef | null
   /** 选中节点已经接上线的入口（没写端口的边按 trigger 算） */
   wired: Set<string>
+  /** 端口生效类型表（见 ``catalog.effectivePortTypes``）：泛型端口接什么显什么类型/颜色 */
+  effTypes: Map<string, string>
   /** 校验报告（null 或已通过 = 不显示错误面板） */
   report: ValidationReport | null
   versions: WorkflowVersionData[]
@@ -36,6 +39,7 @@ export function Inspector({
   node,
   def,
   wired,
+  effTypes,
   report,
   versions,
   onUpdate,
@@ -61,13 +65,14 @@ export function Inspector({
                 <span className={styles.portInfoLabel}>输入</span>
                 {def.inputs.map((p) => {
                   const connected = wired.has(p.id)
+                  const eff = effTypes.get(portEffKey(node.id, 'in', p.id)) ?? p.type
                   return (
                     <span
                       className={styles.portInfoItem}
                       key={p.id}
-                      style={{ color: portColor(p.type) }}
+                      style={{ color: portColor(eff) }}
                     >
-                      ● {p.label}（{p.type}）
+                      ● {p.label}（{eff}）
                       {isDataPort(p.type) ? (connected ? ' · 已接线' : ' · 未接线') : ''}
                       {p.required && !connected ? ' · 必填！' : ''}
                     </span>
@@ -78,11 +83,14 @@ export function Inspector({
             {def.outputs.length > 0 && (
               <div className={styles.portInfoSection}>
                 <span className={styles.portInfoLabel}>输出</span>
-                {def.outputs.map((p) => (
-                  <span className={styles.portInfoItem} key={p.id} style={{ color: portColor(p.type) }}>
-                    ● {p.label}（{p.type}）
-                  </span>
-                ))}
+                {def.outputs.map((p) => {
+                  const eff = effTypes.get(portEffKey(node.id, 'out', p.id)) ?? p.type
+                  return (
+                    <span className={styles.portInfoItem} key={p.id} style={{ color: portColor(eff) }}>
+                      ● {p.label}（{eff}）
+                    </span>
+                  )
+                })}
               </div>
             )}
             <div className={styles.constHint}>

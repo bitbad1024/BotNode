@@ -146,13 +146,31 @@ class PortSpec:
     :param id: 端口名（edge 两端引用的就是它；数据输出端口同时是产出值的键名）；
     :param type: 端口类型，连线两端必须同类；
     :param label: 显示名（缺省用 id）；
-    :param required: 仅输入端口有效：必须接线（或同名字段手填了值）。
+    :param required: 仅输入端口有效：必须接线（或同名字段手填了值）；
+    :param tie: **透传对**（可选）：指向**同一节点另一侧**的端口 id，表示「输入输出是
+        同一种类型」—— 输入端口的生效类型决定输出，反之亦然（placeholder 的透传口用它
+        声明配对；泛型端口接什么类型，对端就跟着显示什么类型）。只有泛型端口有意义：
+        非泛型端口带 ``tie`` 当场报错（见 :meth:`__post_init__`），对侧有没有这个端口由
+        :class:`NodeSpec` 在注册时查。
     """
 
     id: str
     type: PortType = "trigger"
     label: str = ""
     required: bool = False
+    tie: str = ""
+
+    def __post_init__(self) -> None:
+        """``tie`` 只对泛型端口有意义 —— 别的类型带上它说明写错了，声明时当场炸掉。
+
+        指错端口 id 是**静默失效**（画布上只是两端颜色对不上，看不出原因），能在注册这一
+        步拦住就别留到画布上猜。
+        """
+        if self.tie and self.type != "generic":
+            raise ValueError(
+                f"端口 {self.id!r} 声明了透传对 tie={self.tie!r}，"
+                f"但它的类型不是 generic（{self.type!r}）—— 只有泛型端口能配对"
+            )
 
 
 #: 各节点通用的触发端口（出入口都叫「触发」）
@@ -180,6 +198,10 @@ class NodeSpec:
     :param category: 语义分类（画布面板分组用，见 :data:`NodeCategory`）；
     :param inputs: 输入端口（画布左侧圆点；数据入口的值进 ``ctx.inputs``）；
     :param outputs: 输出端口（画布右侧圆点；执行函数返回值的键必须是这里的 id）。
+
+    端口上声明的 ``tie``（透传对）在**注册这一步**就查对侧有没有那个端口（见
+    :meth:`__post_init__`）：三个注册入口（``register_node`` / ``register_executor`` /
+    ``declare_node_type``）都经过这里，不用各写一遍。
     """
 
     node_type: str
@@ -197,6 +219,21 @@ class NodeSpec:
     category: NodeCategory = "data"
     inputs: tuple[PortSpec, ...] = ()
     outputs: tuple[PortSpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        """透传对 ``tie`` 必须**指向另一侧的某个真实端口** —— 写错 id 是静默失效
+        （画布上表现为两端颜色对不上），注册时当场报错更好排查。"""
+        for port, others, side in (
+            *((p, self.outputs, "输出") for p in self.inputs),
+            *((p, self.inputs, "输入") for p in self.outputs),
+        ):
+            if not port.tie:
+                continue
+            if not any(other.id == port.tie for other in others):
+                raise ValueError(
+                    f"{self.node_type} 的输入 / 输出端口 {port.id!r} 声明了透传对 "
+                    f"tie={port.tie!r}，但{side}端口里没有这个 id"
+                )
 
 def input_value(
     node: WorkflowNode, ctx: NodeExecutionContext, name: str, default: Any = ""

@@ -39,6 +39,7 @@ from tickneko.wiring import wire_loggers  # noqa: E402
 from tickneko.workflow import (  # noqa: E402
     ConfigField,
     NodeExecutionContext,
+    NodeSpec,
     PortSpec,
     SimpleWorkflowRunner,
     SqlWorkflowStore,
@@ -358,6 +359,59 @@ def test_semantic_checks_edge_ports() -> None:
     assert "PORT_TYPE_MISMATCH" in codes
 
 
+def test_semantic_generic_port_connects_any_data_port_not_trigger() -> None:
+    """泛型端口（placeholder 透传口）：接任意数据流端口都放行、接触发端口报错。"""
+    # 泛型 -> 会话定位（send 的 target 入口）：透传口接数据流端口，放行
+    ok = {
+        "nodes": [
+            node("s", "start"),
+            node("p", "placeholder"),
+            node("d", "send", message="hi"),  # target 接线、message 手填，都不缺
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "p"),
+            edge("p", "d", "value", "target"),  # generic -> target
+            edge("d", "e"),
+        ],
+    }
+    report = validate_graph(ok)
+    assert report.valid, report.errors
+
+    # 泛型 -> 触发：泛型只走数据流，接触发端口报 PORT_TYPE_MISMATCH
+    bad = {
+        "nodes": [
+            node("s", "start"),
+            node("p", "placeholder"),
+            node("l", "log"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "p"),
+            edge("p", "l", "value", "trigger"),  # generic -> trigger
+            edge("l", "e"),
+        ],
+    }
+    codes = {issue.code for issue in validate_graph(bad).errors}
+    assert "PORT_TYPE_MISMATCH" in codes
+
+    # 泛型 -> 泛型（占位 -> 占位）：同为数据流，放行
+    through = {
+        "nodes": [
+            node("s", "start"),
+            node("p1", "placeholder"),
+            node("p2", "placeholder"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "p1"),
+            edge("p1", "p2", "value", "value"),  # generic -> generic
+            edge("p2", "e"),
+        ],
+    }
+    assert validate_graph(through).valid
+
+
 def test_semantic_one_data_input_takes_one_edge() -> None:
     """一个数据入口只允许接一条线（要合并就先汇到一个节点再往下送）。"""
     graph = {
@@ -376,6 +430,30 @@ def test_semantic_one_data_input_takes_one_edge() -> None:
     }
     codes = {issue.code for issue in validate_graph(graph).errors}
     assert "DUPLICATE_INPUT_EDGE" in codes
+
+
+def test_port_tie_must_be_generic_and_point_to_a_real_port() -> None:
+    """透传对 ``tie`` 写错是静默失效（画布上只表现为两端颜色对不上）—— 声明时当场报错。
+
+    * 非泛型端口带 ``tie``：没意义（只有泛型「输入什么输出什么」才谈得上配对）；
+    * ``tie`` 指向另一侧不存在的端口 id：查不到就当没配对，比报错更难查。
+    """
+    with pytest.raises(ValueError, match="generic"):
+        PortSpec("text", "message", "文本", tie="text")
+
+    with pytest.raises(ValueError, match="没有这个 id"):
+        NodeSpec(
+            node_type="bad-tie",
+            inputs=[PortSpec("value", "generic", "透传值", tie="value")],
+            outputs=[PortSpec("other", "generic", "别的出口")],  # 没有叫 value 的出口
+        )
+
+    # 正常配对：输入输出互相指认（placeholder 那样）不报错
+    NodeSpec(
+        node_type="ok-tie",
+        inputs=[PortSpec("value", "generic", "透传值", tie="value")],
+        outputs=[PortSpec("value", "generic", "透传结果", tie="value")],
+    )
 
 
 def test_semantic_trigger_ports_allow_convergence() -> None:
@@ -639,8 +717,8 @@ async def test_executor_placeholder_passes_through_without_side_effects() -> Non
     """占位节点：入口的值**原样透传**到出口，不写日志、不留运行痕迹（仿佛不存在）。"""
     node = WorkflowNode(id="p1", type="placeholder", config={})
     ctx = NodeExecutionContext()
-    ctx.inputs = {"message": "来自上游"}
-    assert await exec_placeholder(node, ctx) == {"message": "来自上游"}
+    ctx.inputs = {"value": "来自上游"}
+    assert await exec_placeholder(node, ctx) == {"value": "来自上游"}
     assert ctx.log == []  # 不留痕迹
 
 
@@ -651,13 +729,13 @@ async def test_executor_placeholder_relays_value_along_the_edge() -> None:
         {
             "nodes": [
                 node("s", "start"),
-                node("p", "placeholder", message="透传我"),
+                node("p", "placeholder", value="透传我"),
                 node("l", "log", level="INFO"),
                 node("e", "end"),
             ],
             "edges": [
                 edge("s", "p"),
-                edge("p", "l", "message", "message"),  # 占位的透传 -> log 的日志内容
+                edge("p", "l", "value", "message"),  # 占位的透传 -> log 的日志内容
                 edge("l", "e"),
             ],
         }
@@ -2747,6 +2825,12 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     assert log.inputs[1].required is True  # 必填入口：接线或手填同名字段
     assert log.inputs[0].required is False  # 触发端口不谈必填
 
+    # 占位节点是泛型透传口：输入接什么类型、输出就是什么类型（泛型只走数据流、不接触发）
+    placeholder = get_spec("placeholder")
+    assert placeholder is not None
+    assert [(p.id, p.type) for p in placeholder.inputs] == [("trigger", "trigger"), ("value", "generic")]
+    assert [(p.id, p.type) for p in placeholder.outputs] == [("trigger", "trigger"), ("value", "generic")]
+
     http = get_spec("http")
     assert http is not None
     http_inputs = {p.id: p for p in http.inputs}
@@ -3307,10 +3391,11 @@ async def test_api_node_types_catalog_matches_registry() -> None:
         "list",
         "dict",
         "set",
+        "generic",
     ]
     assert port_types["trigger"]["data"] is False  # 控制流：只表达先后
     assert port_types["trigger"]["label"] == "触发（控制流）"
-    for port_type in ("message", "target", "list", "dict", "set"):
+    for port_type in ("message", "target", "list", "dict", "set", "generic"):
         assert port_types[port_type]["data"] is True  # 数据流：沿边送值
         assert port_types[port_type]["color"]  # 每种类型都带配色
 
@@ -3334,6 +3419,18 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     url = next(field for field in http["fields"] if field["name"] == "url")
     # url 的「必填」落在入口上：字段本身没默认值，接线或手填都行
     assert url["required"] is False and url["has_default"] is False and url["default"] is None
+
+    # 透传对：placeholder 的泛型入口 / 出口用 tie 互相指认（指向同一节点另一侧的端口 id）——
+    # 画布据此让输入输出显示同一种类型（两端同色表示对应）
+    ph = nodes["placeholder"]
+    assert [(port["id"], port["type"], port["tie"]) for port in ph["inputs"]] == [
+        ("trigger", "trigger", ""),
+        ("value", "generic", "value"),
+    ]
+    assert [(port["id"], port["type"], port["tie"]) for port in ph["outputs"]] == [
+        ("trigger", "trigger", ""),
+        ("value", "generic", "value"),
+    ]
 
     end = nodes["end"]
     assert end["max_outgoing"] == 0 and end["outputs"] == []

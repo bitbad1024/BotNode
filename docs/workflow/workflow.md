@@ -73,8 +73,15 @@ store ──────────────► models
 
 > **数据沿连线走，没有全局变量**：节点从自己的**输入端口**拿到上游送来的值（引擎按边投递，
 > 键 = 目标端口名），把产出放在**输出端口**上（执行函数返回值的键 = 端口 id）。
-> `trigger` 类型端口只表达先后；其余类型（`message` / `target` / `list` / `dict` / `set`，
-> 见 `nodes/port_types.py` 的 `PORT_TYPES`）都送值；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
+> `trigger` 类型端口只表达先后；其余类型（`message` / `target` / `list` / `dict` / `set` /
+> `generic`，见 `nodes/port_types.py` 的 `PORT_TYPES`）都送值；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
+>
+> **泛型端口 `generic`（透传）是唯一例外**：它是「输入什么类型、输出就是什么类型」，所以能
+> 接**任意数据流端口**（接了会话定位就当会话定位用），但**不接触发**（`generic` ↔ `trigger`
+> 不放行）—— 接线语义见 `port_types.port_types_compatible`。声明成 `generic` 的一对入口 / 出口
+> 用 `PortSpec(..., tie="value")` 互相指认为**透传对**（`tie` 指向同一节点另一侧的端口 id）：
+> 两端生效类型永远一致（输入没接线但输出接了，输入显示输出定下的类型，反之亦然），画布上
+> 就靠**两端同色**表达这层对应（见 §5.6 ⑥）。
 >
 > 边没写端口时按 `trigger` 读（`graph.DEFAULT_EDGE_PORT`）：这类边只表达顺序、不送值。
 
@@ -159,7 +166,7 @@ workflow_versions             每次保存一张不可变图快照
 | `constant.py` | **常量**：一个节点一个值，从 `value` 出口送下去 | `trigger` → `trigger` / `value` | **`value`**（必填，没有默认值） |
 | `http.py` | 发一次 HTTP 请求；**4xx / 5xx = 业务失败**（对方回了错）：抛 `NodeFailure`，停止向下传播；连不上 / 超时是**可预期的环境问题**：抛 `EnvironmentFailure`，中断整条流程但日志只记一行（不铺 httpx 堆栈） | `trigger` / `url` / `body` → `trigger` / `http_status` / `http_body` | `url`（**入口**必填：接线或手填）、**`method`**（枚举由自注册校验器把）、`body`（没接线时手填）、`timeout`（缺省 10，注册默认值）、`headers`（只能手写，没有对应端口） |
 | `delay.py` | **等待**：异步等一会儿再往下走（`await asyncio.sleep`，**不阻塞事件循环**）；`0` = 不等（临时把等待关掉） | `trigger` / `seconds` → `trigger` | `seconds`（**入口**：接线覆盖手填，缺省 5；`0` 允许，上限 1 小时 —— 手填值由自注册校验器把，线上的值运行期判断） |
-| `placeholder.py` | **占位**：没有任何功能，只参与画布理线 —— 入口的值**原样透传**到出口（不读不写不记日志），流程语义和「线直接连」等价 | `trigger` / `message` → `trigger` / `message` | ——（无配置字段；`message` 没接线透传空串） |
+| `placeholder.py` | **占位**：没有任何功能，只参与画布理线 —— 入口的值**原样透传**到出口（不读不写不记日志），流程语义和「线直接连」等价；入口出口是 `generic` **泛型**（接会话定位就出会话定位），两者用 `tie` 声明成透传对 | `trigger` / `value`（`generic`） → `trigger` / `value`（`generic`） | ——（无配置字段；`value` 没接线透传空串） |
 | `json.py` | **JSON**：解析 JSON 文本 + 点路径取值（HTTP 的搭档）；空文本 / 解析失败 / 路径取不到 = **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `json` / `path` → `trigger` / `json_value` | `json`（**入口**必填：接线或手填）、`path`（缺省空 = 取整个文档；点分段，数字段是数组下标） |
 | `regex.py` | **正则**：提取第一个匹配（有组取组）/ 替换所有匹配（脱敏改写）；空文本 / 空正则 / 没匹配 / 正则语法错 = **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `text` / `pattern` / `replace` → `trigger` / `regex_value` | `text`、`pattern`（**入口**必填：接线或手填）、`action`（缺省 extract；枚举由自注册校验器把）、`replace`（替换文本，支持 \1 反向引用）、`flags`（i/m/s 组合，缺省无） |
 | `now.py` | **当前时间**：产出「现在」（服务器本地时区）——格式化文本 + Unix 时间戳（整数秒）；没有失败分支 | `trigger` / `format` → `trigger` / `now_text` / `now_ts` | `format`（strftime 指令，缺省 `%Y-%m-%d %H:%M:%S`，可接线覆盖） |
@@ -325,6 +332,8 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 | 控制流端口 | `PortSpec("trigger", "trigger", "触发")`（内置节点用常量 `TRIGGER_PORT`） | 只表达先后，不送值；多条入边允许（汇聚） |
 | 数据出口 | `outputs=[PortSpec("http_status", "message", "状态码")]` | 执行函数返回值的键；下游把线接过来才拿得到 |
 | 出口 / 入口与字段同名 | `ConfigField("url", "请求地址")` 配 `PortSpec("url", ...)` | 该字段可被连线覆盖：**线上优先**，没接线才用手填 |
+| 泛型端口（透传） | `PortSpec("value", "generic", "透传值")` | 输入接什么类型、输出就是什么类型：可接任意数据流端口、不接触发（见 `port_types.py`） |
+| 透传对（输入输出同一种类型） | 两端都声明：`PortSpec("value", "generic", "透传值", tie="value")` / `PortSpec("value", "generic", "透传结果", tie="value")` | `tie` 指向**同一节点另一侧**的端口 id：两端生效类型永远一致（输入没接线、输出接了，输入就显示输出定下的类型，反之亦然），画布上两端**同色**表示对应 |
 | 不可缺失字段 | `ConfigField("url", required=True)` | 主流程上的节点直接报 `MISSING_CONFIG`（`None` / 空串也算缺失） |
 | 默认值字段 | `ConfigField("level", default="INFO")` | 校验前先补默认值（自定义校验器看到的是补全后的 config）；保存版本时写进快照 |
 | 枚举字段 | `ConfigField("level", default="INFO", options=LOG_LEVEL_ORDER)` | 同上；`options` 只描述「有哪些可选值、按什么顺序显示」（画布渲染成下拉），校验仍归自定义校验器 |
@@ -376,6 +385,11 @@ async def exec_dingtalk(node, ctx): ...
 
 前端不定义任何节点展示信息，只留兜底：认不出的节点类型用灰的；端口类型配色认不出也一律
 淡灰。
+
+**泛型端口怎么显色**也照这套：端口圆点 / 连线 / 配置面板都按「生效类型」画 —— 由
+`editor/catalog.ts` 的 `effectivePortTypes` 顺着边（以及透传对 `tie`）推出来，接什么类型就
+显什么颜色；声明了 `tie` 的透传对两端**颜色永远一致** —— 对应关系就靠这层同色表达（端口
+圆点、连线、配置面板三处口径一致）。没接线 / 追不到具体类型的泛型端口保持灰。
 
 还有一处**固有例外**（形状本来就随 config 变，不是「前端另有定义」）：`start` 的端口与卡片上
 的字段条随 `config.trigger` 变（时间触发的图里不显示 `message` 出口）。

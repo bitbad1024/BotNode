@@ -52,6 +52,7 @@ import { Toolbar } from './editor/Toolbar'
 import {
   NODE_W,
   edgeCurve,
+  effectivePortTypes,
   emptyGraph,
   installCatalog,
   isEditingTarget,
@@ -61,6 +62,8 @@ import {
   normalizeGraph,
   portAbsPos,
   portColor,
+  portCompatible,
+  portEffKey,
   uid,
   wiredPortsByNode,
   type Point,
@@ -192,6 +195,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [graph.nodes],
   )
   const wiredByNode = useMemo(() => wiredPortsByNode(graph.edges), [graph.edges])
+  const effTypes = useMemo(() => effectivePortTypes(nodeById, graph.edges), [nodeById, graph.edges])
   const errorByNode = useMemo(() => issuesByNode(report), [report])
 
   // 回调里要读最新值又不换身份（换身份会让 memo 化的卡片白重渲染），统一走 ref
@@ -611,8 +615,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       if (pending.nodeId === nodeId) return clear()
       // 方向必须一进一出
       if (pending.direction === direction) return clear()
-      // 类型必须匹配
-      if (pending.portType !== portType) {
+      // 类型必须兼容（同类；泛型端口可接任意数据流端口）
+      if (!portCompatible(pending.portType, portType)) {
         pushToast('error', `端口类型不匹配：${pending.portType} ≠ ${portType}`)
         return clear()
       }
@@ -875,9 +879,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (!start) return null
     return {
       path: edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y),
-      color: portColor(conn.portType),
+      // 泛型端口拖线也按生效类型显色（placeholder 输出接会话定位就是橙色预览线）
+      color: portColor(
+        effTypes.get(portEffKey(conn.nodeId, conn.direction, conn.portId)) ?? conn.portType,
+      ),
     }
-  }, [connectCursor, nodeById, positions])
+  }, [connectCursor, nodeById, positions, effTypes])
 
   /** 加载中 / 目录拉不回来：画布位置显示它 */
   const placeholder =
@@ -954,6 +961,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             posOf={posOf}
             onDelete={deleteEdge}
             pending={pendingEdge}
+            effTypes={effTypes}
           />
 
           {graph.nodes.map((node) => {
@@ -968,6 +976,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 boxSelected={selectedIds.has(node.id)}
                 issues={errorByNode.get(node.id) ?? null}
                 wired={wiredByNode.get(node.id) ?? NO_WIRED}
+                effTypes={effTypes}
                 onMouseDown={onNodeMouseDown}
                 onClick={onNodeClick}
                 onContextMenu={onNodeContextMenu}
@@ -1022,6 +1031,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             node={selectedNode}
             def={selectedDef}
             wired={selectedWired}
+            effTypes={effTypes}
             report={report}
             versions={versions}
             onUpdate={updateConfig}
