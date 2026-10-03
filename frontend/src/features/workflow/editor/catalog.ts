@@ -62,6 +62,7 @@ export const PORT_COLORS: Record<PortType, string> = {
   trigger: '#22c55e',
   message: '#3b82f6',
   target: '#f59e0b',
+  list: '#a855f7',
 }
 
 //: 节点面板的语义分组（与后端 NodeCategory 对齐）：顺序即显示顺序，标签是中文名
