@@ -1,11 +1,11 @@
 # 应用入口与配置：`app.py` / `config.py`
 
-仓库根目录这两个文件不属于 `botnode` 包 —— 它们是**进程的起点**，一个管「按什么顺序把东西
+仓库根目录这两个文件不属于 `tickneko` 包 —— 它们是**进程的起点**，一个管「按什么顺序把东西
 建起来」，一个管「配置怎么读、错了怎么报」。
 
 | 文件 | 管什么 | 刻意不做什么 |
 |---|---|---|
-| `app.py` | 解析命令行 → 读配置 → **按配置建日志核心与数据库引擎** → 交给 `botnode.bootstrap` 装配业务 → 等停机 | 顶层不 import 任何业务模块（原因见 §1.1） |
+| `app.py` | 解析命令行 → 读配置 → **按配置建日志核心与数据库引擎** → 交给 `tickneko.bootstrap` 装配业务 → 等停机 | 顶层不 import 任何业务模块（原因见 §1.1） |
 | `config.py` | 读 TOML、用 pydantic 校验、产出 `Settings`；派生值（Kook 凭证密钥）也在这儿 | 不做装配、不碰数据库 |
 
 两个文件的模块 docstring 只留一句话定位，细节都在这里。
@@ -14,13 +14,13 @@
 
 ## 1. `app.py` —— 启动顺序
 
-一句话：**本文件只做核心初始化**，业务一律交给 `botnode.bootstrap`。
+一句话：**本文件只做核心初始化**，业务一律交给 `tickneko.bootstrap`。
 
 ```
 main()  →  _main()
   1. 解析命令行、读 data/config.toml（Settings.load）  配置错 → [配置错误] + 退出码 2
   2. setup_logging(settings)                          建日志核心 + 建库引擎 + 探一次库
-  3. from botnode.bootstrap import run, ...           ← 到这里才 import 业务模块
+  3. from tickneko.bootstrap import run, ...           ← 到这里才 import 业务模块
      await run(engine=..., api=..., onebot=..., kook=...)
   4. await serve_forever()                            主协程停在这；端口被占当场报错退出
   5. 停机：await shutdown() → 关日志库连接
@@ -28,12 +28,12 @@ main()  →  _main()
 
 ### 1.1 为什么先建日志核心（这一刀切在哪）
 
-日志核心必须在**任何业务模块被 import 之前**按配置建好。`botnode` 里有模块级
+日志核心必须在**任何业务模块被 import 之前**按配置建好。`tickneko` 里有模块级
 `default_core().child(...)`（导入即执行）——谁先被 import，谁就顺手把进程默认核心按**默认
 参数**建出来，配置里的颜色 / 级别就此定死、再也传不进去（`LogManager.configure` 在「核心已
 存在」时只会合并 processors）。
 
-所以：`app.py` 顶层**不 import 任何业务模块**，`botnode.bootstrap` 也是建好核心之后才在函数
+所以：`app.py` 顶层**不 import 任何业务模块**，`tickneko.bootstrap` 也是建好核心之后才在函数
 里导入。初始化只用日志门面的两个动作：
 
 ```python
@@ -60,7 +60,7 @@ MariaDB 连接还带 `connect_timeout=5`：默认驱动会一直重试到系统�
 
 ### 1.4 服务都在哪儿跑
 
-接口层（`botnode.api`，约定用 `botnode.api`）随主程序由 uvicorn 起成 HTTP 服务，和 OneBot
+接口层（`tickneko.api`，约定用 `tickneko.api`）随主程序由 uvicorn 起成 HTTP 服务，和 OneBot
 同进程、同事件循环；监听地址在 `[api]` 的 `host` / `port`。OneBot 反向 WS 同样随主程序起，
 监听 `[onebot]` 的 `host` / `port`（端口默认 `16700`）；它的日志单独落 `logs/onebot.log`
 （共用同一个日志核心，只是换了个文件出口）。
@@ -68,7 +68,7 @@ MariaDB 连接还带 `connect_timeout=5`：默认驱动会一直重试到系统�
 两处的监听地址默认都是 `0.0.0.0`：它们都在「等服务上门」（浏览器连控制台、OneBot 实现连反向
 WS），只听回环的话容器 / 局域网里就够不着 —— 只在本机用再改回 `127.0.0.1`。
 
-装配与停机顺序的细节在 `botnode/bootstrap.py`，逐层职责见 [docs/README.md](../README.md)。
+装配与停机顺序的细节在 `tickneko/bootstrap.py`，逐层职责见 [docs/README.md](../README.md)。
 
 ### 1.5 怎么运行、依赖什么
 
@@ -77,7 +77,7 @@ python app.py                     # 读 data/config.toml，不存在则按默认
 python app.py -c path/to.toml     # 指定配置文件
 ```
 
-依赖：`botnode[api]` + `botnode[onebot]`（`fastapi` / `uvicorn` / `sqlmodel` / `aiosqlite` /
+依赖：`tickneko[api]` + `tickneko[onebot]`（`fastapi` / `uvicorn` / `sqlmodel` / `aiosqlite` /
 `websockets`）。
 
 ---
@@ -87,7 +87,7 @@ python app.py -c path/to.toml     # 指定配置文件
 配置文件是 TOML（`#` 写注释），模板 `config.toml.example`，**复制成 `data/config.toml` 才生效**；
 那份已进 `.gitignore`（整个 `data/` 都不入库）。
 
-**为什么住 `data/` 而不是仓库根**：配置是运行时数据，跟 sqlite（`data/botnode.db`）、Kook 密钥
+**为什么住 `data/` 而不是仓库根**：配置是运行时数据，跟 sqlite（`data/tickneko.db`）、Kook 密钥
 （`data/secret_key`）、上传的头像同处一地 —— 备份 / 搬迁 / 容器挂载都只搬 `data/` 一个目录，不会
 漏掉某一项；容器里 `data/` 是**按目录挂**的，容器才写得进去，「首次启动照模板生成一份配置」才有
 可能。
@@ -177,6 +177,6 @@ except ConfigError as exc:
 |---|---|
 | 加一项配置（新区域 / 新字段） | `config.py` 加字段（带 `Field(...)` 描述与取值校验）+ `config.toml.example` 补注释项；测试见 `tests/test_config.py` |
 | 停用 / 改名一项配置 | `config.py` 的 `legacy_keys` 写清处理办法（报错指路），别静默忽略 |
-| 启动顺序 / 收尾顺序 | `app.py`（核心初始化）与 `botnode/bootstrap.py`（业务装配、停机） |
+| 启动顺序 / 收尾顺序 | `app.py`（核心初始化）与 `tickneko/bootstrap.py`（业务装配、停机） |
 | 装配层要读新配置 | `app.py` 取出来传参给 `bootstrap.run(...)` —— 包内一律不读配置文件 |
 | 进程默认日志核心 | `app.py` 的 `setup_logging()`（按 `[logging]` 建出口与队列） |

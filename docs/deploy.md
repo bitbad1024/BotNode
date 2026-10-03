@@ -16,7 +16,7 @@
 ## 1. 一键打包
 
 ```bat
-scripts\build-all.bat              :: Windows：前端 + 后端产物 + 单镜像 botnode:latest
+scripts\build-all.bat              :: Windows：前端 + 后端产物 + 单镜像 tickneko:latest
 scripts\build-all.bat v0.1.0       :: 换个镜像标签
 scripts\build-all.bat --no-docker  :: 只打包前后端产物，不碰 Docker
 ```
@@ -31,13 +31,13 @@ scripts\build-all.bat --no-docker  :: 只打包前后端产物，不碰 Docker
 |---|---|---|
 | 控制台静态文件 | `frontend/dist` | 交给任意静态服务器 / CDN；刷新子路由要回落到 `index.html`（单页应用） |
 | 后端源码包 | `build/backend` | 不用 Docker 时：`cd build/backend && pip install -r requirements.txt && python app.py` |
-| 单镜像 | `botnode:<标签>` | 下面两种跑法都用它 |
+| 单镜像 | `tickneko:<标签>` | 下面两种跑法都用它 |
 
 只想自己敲命令也可以：
 
 ```bash
 cd frontend && npm ci && npm run build && cd ..
-docker build -t botnode:latest .
+docker build -t tickneko:latest .
 ```
 
 国内网络慢就换源（两者都可选）：
@@ -46,7 +46,7 @@ docker build -t botnode:latest .
 docker build \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-  -t botnode:latest .
+  -t tickneko:latest .
 ```
 
 ## 2. 跑起来
@@ -65,13 +65,13 @@ mkdir -p data && cp config.toml.example data/config.toml   # Windows: mkdir data
 ### 2.1 docker run
 
 ```bash
-docker run -d --name botnode \
+docker run -d --name tickneko \
   -p 8080:80 \
   -p 16700:16700 \
   -v "$PWD/data:/app/data" \
-  -v botnode-logs:/app/logs \
+  -v tickneko-logs:/app/logs \
   --restart unless-stopped \
-  botnode:latest
+  tickneko:latest
 ```
 
 ### 2.2 docker compose
@@ -95,8 +95,8 @@ docker compose up -d --build
 
 | 挂到哪 | 装什么 | 丢了会怎样 |
 |---|---|---|
-| 宿主 `./data` → `/app/data` | `config.toml`（配置）、`sqlite` 数据库（`[database].path` 默认 `data/botnode.db`）、`secret_key`（Kook 凭证加密密钥）、头像上传 | **配置与用户数据都没了**；Bot Token 也得重填（密钥丢了解不开旧密文） |
-| 卷 `botnode-logs` → `/app/logs` | 日志分片（`[logging.file].dir` 默认 `logs/`） | 只是日志没了，数据无碍 |
+| 宿主 `./data` → `/app/data` | `config.toml`（配置）、`sqlite` 数据库（`[database].path` 默认 `data/tickneko.db`）、`secret_key`（Kook 凭证加密密钥）、头像上传 | **配置与用户数据都没了**；Bot Token 也得重填（密钥丢了解不开旧密文） |
+| 卷 `tickneko-logs` → `/app/logs` | 日志分片（`[logging.file].dir` 默认 `logs/`） | 只是日志没了，数据无碍 |
 
 ## 3. 容器里要改的配置
 
@@ -116,11 +116,11 @@ port = 18080
 
 其余按需：
 
-* `[database]`：默认 `sqlite`（文件落在 `/app/data/botnode.db`，随宿主 `./data` 持久化）；要用 MariaDB 就把 `driver` 改成
+* `[database]`：默认 `sqlite`（文件落在 `/app/data/tickneko.db`，随宿主 `./data` 持久化）；要用 MariaDB 就把 `driver` 改成
   `mariadb` 并填连接项 —— 注意容器里的 `host` 不是 `127.0.0.1`，而是数据库服务的地址
   （compose 里加一个 `mariadb` 服务，host 就写服务名）。
 * `[cache]`：默认进程内内存缓存；要用 Redis 同理，`host` 写 Redis 服务名而不是本机。
-* `[logging]`：控制台出口在容器里就是 `docker logs botnode`，文件出口落在 `/app/logs`。
+* `[logging]`：控制台出口在容器里就是 `docker logs tickneko`，文件出口落在 `/app/logs`。
 * `[kook]`：Kook 是正向连接，出网即可，不需要额外映射端口；`secret_key` 留空会自动生成到
   `/app/data/secret_key`（就在宿主 `./data` 里 —— 丢了 Bot Token 要重填）。
 
@@ -152,7 +152,7 @@ port = 18080
 
 ## 5. 上线前必须做的事
 
-* **改掉演示账号 `admin` 的默认密码**（`botnode-admin`，由开发用代码写入）—— 公网部署前务必改密；
+* **改掉演示账号 `admin` 的默认密码**（`tickneko-admin`，由开发用代码写入）—— 公网部署前务必改密；
   要别的账号不用改代码：在登录页注册即可（新账号是普通用户）；
 * **`data/config.toml` 别提交、别打进镜像**（里面有数据库口令与 `secret_key`）—— 整个 `data/` 已在
   `.gitignore` 里；
@@ -168,13 +168,13 @@ docker compose up -d --build          # 重新构建并滚动替换
 ```
 
 `./data` 与日志卷都不动，数据都还在。回滚就是把代码切回旧提交再 `up -d --build`（镜像标签也可以
-带版本号，用 `scripts\build-all.bat v0.1.0` 打出 `botnode:v0.1.0` 之类长期留着）。
+带版本号，用 `scripts\build-all.bat v0.1.0` 打出 `tickneko:v0.1.0` 之类长期留着）。
 
 ## 7. 常见问题
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| 控制台能开，接口全 502 | 后端没起来。`docker logs botnode` 看是不是连不上数据库（`[database]` 填错） |
+| 控制台能开，接口全 502 | 后端没起来。`docker logs tickneko` 看是不是连不上数据库（`[database]` 填错） |
 | OneBot 实现端连不上 `16700` | 容器里 `[onebot] host` 还是 `127.0.0.1` —— 改成 `0.0.0.0` 并确认宿主端口已映射 |
 | 刷新工作流页面 404 | 前端的静态服务器没配「回落到 `index.html`」；用镜像里的 nginx 没这个问题 |
 | 数据重启后没了 | 没挂 `/app/data`（配置与 sqlite 都在里面），或用了 `docker run --rm` |

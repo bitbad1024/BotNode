@@ -6,7 +6,7 @@
 * 存储：内存 sqlite 上验多用户隔离、版本自增、checksum 去重、发布与级联删除；
 * 接口：``create_app`` + httpx ASGI 直连，验登录隔离、校验失败不写库、保存 / 发布链路。
 
-需要 ``fastapi`` / ``httpx``（``pip install "botnode[dev]"``），没装就整文件跳过。
+需要 ``fastapi`` / ``httpx``（``pip install "tickneko[dev]"``），没装就整文件跳过。
 """
 from __future__ import annotations
 
@@ -19,15 +19,15 @@ from typing import Any, ClassVar
 
 import pytest
 
-pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"botnode[api]\"")
-pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"botnode[dev]\"")
+pytest.importorskip("fastapi", reason="接口层要装 fastapi：pip install \"tickneko[api]\"")
+pytest.importorskip("httpx", reason="接口层测试用 httpx 发请求：pip install \"tickneko[dev]\"")
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
-from botnode.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
-from botnode.core.logger import (  # noqa: E402
+from tickneko.api import ApiOptions, Pbkdf2PasswordHasher, create_app  # noqa: E402
+from tickneko.core.logger import (  # noqa: E402
     BaseLogProcessor,
     LogCore,
     LogRecord,
@@ -35,8 +35,8 @@ from botnode.core.logger import (  # noqa: E402
     configure,
     manager,
 )
-from botnode.wiring import wire_loggers  # noqa: E402
-from botnode.workflow import (  # noqa: E402
+from tickneko.wiring import wire_loggers  # noqa: E402
+from tickneko.workflow import (  # noqa: E402
     ConfigField,
     NodeExecutionContext,
     PortSpec,
@@ -57,8 +57,8 @@ from botnode.workflow import (  # noqa: E402
     registered_types,
     validate_graph,
 )
-from botnode.workflow.executor import get_executor  # noqa: E402
-from botnode.workflow.nodes import (  # noqa: E402
+from tickneko.workflow.executor import get_executor  # noqa: E402
+from tickneko.workflow.nodes import (  # noqa: E402
     exec_cache,
     exec_condition,
     exec_http,
@@ -68,11 +68,11 @@ from botnode.workflow.nodes import (  # noqa: E402
     exec_operator,
     exec_regex,
 )
-from botnode.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
+from tickneko.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
 
 #: 演示账号只剩 admin（id 即 u-admin）；robot 由 :func:`login` 顺手注册（id 还是 u-robot）
-ADMIN = {"account": "admin", "password": "botnode-admin"}
-ROBOT = {"account": "robot", "password": "botnode-robot", "nickname": "巡检机器人"}
+ADMIN = {"account": "admin", "password": "tickneko-admin"}
+ROBOT = {"account": "robot", "password": "tickneko-robot", "nickname": "巡检机器人"}
 _TEST_HASHER = Pbkdf2PasswordHasher(iterations=1_000)
 
 
@@ -143,15 +143,15 @@ async def runtime_logs() -> AsyncIterator[list[LogRecord]]:
     """把**进程默认核心**换成带采集出口的一份，并把各业务模块的日志槽位指到它
     （产出「收到的记录」列表，退出时还原）。
 
-    运行时模块的日志走 ``botnode.workflow.runtime`` 的 ``_log()``，而它没有可从调用点注入的
-    口子 —— 改造后走的是**装配槽位**（:func:`botnode.wiring.wire_loggers` 存进去的核心）。
+    运行时模块的日志走 ``tickneko.workflow.runtime`` 的 ``_log()``，而它没有可从调用点注入的
+    口子 —— 改造后走的是**装配槽位**（:func:`tickneko.wiring.wire_loggers` 存进去的核心）。
     这里换上新核心后重新 wire 一次，runtime 那几条日志就落进采集出口；退出时还原默认核心
     并清空槽位（下个用例由 conftest 重新装配）。
     """
     records: list[LogRecord] = []
     manager.reset()
     core: LogCore = configure(
-        "botnode", console=False, processors=[LogCollector(records)], dispatch_timeout=0.01
+        "tickneko", console=False, processors=[LogCollector(records)], dispatch_timeout=0.01
     )
     await core.start()
     wire_loggers(core)  # 槽位指到带采集出口的这份核心，runtime._log() 由此落进口袋
@@ -614,7 +614,7 @@ async def test_executor_start_end_log_test_run() -> None:
         {
             "nodes": [
                 node("s", "start"),
-                node("t", "test", message="hello botnode"),
+                node("t", "test", message="hello tickneko"),
                 node("l", "log", level="INFO"),
                 node("e", "end"),
             ],
@@ -628,8 +628,8 @@ async def test_executor_start_end_log_test_run() -> None:
     ctx = NodeExecutionContext()
     await SimpleWorkflowRunner().run(graph, ctx)
     # 日志收集器按顺序记了节点，log 那行是 test 送过来的值
-    assert any("[test] t: hello botnode" in line for line in ctx.log)
-    assert any("[INFO] l: hello botnode" in line for line in ctx.log)
+    assert any("[test] t: hello tickneko" in line for line in ctx.log)
+    assert any("[INFO] l: hello tickneko" in line for line in ctx.log)
     # 最后一个节点（end）没接线的入口：触发边不送值
     assert ctx.inputs == {}
 
@@ -751,7 +751,7 @@ async def test_executor_start_time_trigger_registers_only_when_priming() -> None
     task_id = ``wf-<工作流 id>-<节点 id>``（工作流 + 节点两级，避免不同图的同名节点撞车）；
     重复登记是幂等的：同名旧任务先摘掉再加。
     """
-    from botnode.core.scheduler import TaskManager
+    from tickneko.core.scheduler import TaskManager
 
     scheduler = TaskManager()
 
@@ -786,7 +786,7 @@ async def test_executor_start_time_trigger_leaves_scheduler_alone_while_running(
     ``run_count`` / ``last_run`` 这些运行统计被清零，连「上一次还没跑完就跳过本次」的
     单实例保护（看 ``task.active``）也一并失效了。
     """
-    from botnode.core.scheduler import TaskManager
+    from tickneko.core.scheduler import TaskManager
 
     scheduler = TaskManager()
     graph = WorkflowGraph.model_validate(
@@ -814,7 +814,7 @@ async def test_executor_start_time_trigger_leaves_scheduler_alone_while_running(
 @pytest.mark.asyncio
 async def test_executor_start_message_trigger_does_not_register() -> None:
     """消息触发的 start 不登记调度器，只写一条开始日志。"""
-    from botnode.core.scheduler import TaskManager
+    from tickneko.core.scheduler import TaskManager
 
     scheduler = TaskManager()
     graph = WorkflowGraph.model_validate(
@@ -914,7 +914,7 @@ async def test_executor_unsupported_node_type_raises() -> None:
 @pytest.mark.asyncio
 async def test_executor_stops_downstream_on_node_failure() -> None:
     """业务失败（NodeFailure）**停止向下传播**：下游整段跳过，别的分支照跑，流程不中断。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     ran: list[str] = []
 
@@ -1035,7 +1035,7 @@ async def test_node_with_only_data_edges_still_runs() -> None:
 @pytest.mark.asyncio
 async def test_executor_wraps_environment_error_with_node_context() -> None:
     """节点抛环境异常（不是 NodeFailure）：包上节点信息再抛，原异常链保留（堆栈里看得到）。"""
-    from botnode.workflow.executor import NodeExecutionError
+    from tickneko.workflow.executor import NodeExecutionError
 
     @register_node("boom-env")
     async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
@@ -1070,7 +1070,7 @@ async def test_executor_wrapped_error_survives_empty_message() -> None:
             "edges": [edge("s", "b"), edge("b", "e")],
         }
     )
-    from botnode.workflow.executor import NodeExecutionError
+    from tickneko.workflow.executor import NodeExecutionError
 
     with pytest.raises(NodeExecutionError) as caught:
         await SimpleWorkflowRunner().run(graph, NodeExecutionContext())
@@ -1082,7 +1082,7 @@ async def test_executor_wrapped_error_survives_empty_message() -> None:
 @pytest.mark.asyncio
 async def test_executor_failed_node_produces_nothing_downstream() -> None:
     """失败节点**不产出**：下游如有其它活入边照常执行，但从失败那条线拿不到值（回落手填）。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     @register_node("boom2")
     async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
@@ -1253,7 +1253,7 @@ async def test_http_status_reaches_downstream_message_input(
 @pytest.mark.asyncio
 async def test_http_error_status_is_a_node_failure(fake_http: type[FakeAsyncClient]) -> None:
     """4xx / 5xx 是「对方的回答」= **业务失败**：抛 NodeFailure（停止向下传播），不再当正常结果。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     fake_http.status = 500
     fake_http.text = "boom"
@@ -1299,7 +1299,7 @@ async def test_http_node_raises_on_connection_failure(fake_http: type[FakeAsyncC
     """连不上 / 超时是环境问题：直接抛，但消息里要带方法 / 地址 / 超时与异常类型。"""
     import httpx
 
-    from botnode.workflow.nodes import EnvironmentFailure
+    from tickneko.workflow.nodes import EnvironmentFailure
 
     fake_http.error = httpx.ConnectError("连不上")
 
@@ -1318,7 +1318,7 @@ async def test_http_node_connection_failure_names_the_exception_when_str_is_empt
     """``str(exc)`` 为空（httpx 常见）时消息也不能空着 —— 用类型名兜底。"""
     import httpx
 
-    from botnode.workflow.nodes import EnvironmentFailure
+    from tickneko.workflow.nodes import EnvironmentFailure
 
     fake_http.error = httpx.ReadTimeout("")
 
@@ -1546,7 +1546,7 @@ async def test_executor_delay_rejects_bad_wired_seconds() -> None:
             }
         )
 
-    from botnode.workflow.executor import NodeExecutionError
+    from tickneko.workflow.executor import NodeExecutionError
 
     with pytest.raises(NodeExecutionError, match="不是数字") as caught:
         await SimpleWorkflowRunner().run(graph_with("一会儿"), NodeExecutionContext())
@@ -1612,7 +1612,7 @@ async def test_json_extracts_nested_scalar_and_whole_document() -> None:
 async def test_json_failure_stops_propagation() -> None:
     """三块「数据不合预期」都是**业务失败**（抛 NodeFailure，停止向下传播）：空文本 /
     非法 JSON / 路径不存在 —— 不再送空串。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     async def failing(text: str, path: str = "") -> str:
         node_ = WorkflowNode(id="j1", type="json", config={"path": path})
@@ -1686,7 +1686,7 @@ async def test_regex_extracts_and_replaces() -> None:
 async def test_regex_failure_stops_propagation() -> None:
     """抽不到 = **业务失败**（抛 NodeFailure，停止向下传播）：没匹配 / 空文本 / 线上来的
     非法正则 —— 不再送空串。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     async def failing(text: str, pattern: str) -> str:
         node_ = WorkflowNode(id="r1", type="regex", config={})
@@ -1924,7 +1924,7 @@ def test_condition_fields_are_validated() -> None:
 
 # ------------------------------------------------------------- ④-E OneBot 节点
 class _FakeActionResponse:
-    """假的动作回应（形状对齐 ``botnode.platforms.onebot.models.ActionResponse``：``ok`` = status/retcode 都成功）。"""
+    """假的动作回应（形状对齐 ``tickneko.platforms.onebot.models.ActionResponse``：``ok`` = status/retcode 都成功）。"""
 
     def __init__(self, status: str = "ok", retcode: int = 0, data: object = None) -> None:
         self.status = status
@@ -1952,7 +1952,7 @@ class _FakeGateway:
     async def send(
         self, platform: str, owner_id: str, action: str, /, **params: object
     ) -> Any:
-        from botnode.platforms.bridge.models import ActionResult
+        from tickneko.platforms.bridge.models import ActionResult
 
         self.calls.append((platform, owner_id, action, dict(params)))
         resp = self._response
@@ -1964,7 +1964,7 @@ class _FakeGateway:
         )
 
     async def reply(self, target: object, content: str) -> Any:
-        from botnode.platforms.bridge.models import ActionResult
+        from tickneko.platforms.bridge.models import ActionResult
 
         self.reply_calls.append((target, content))
         resp = self._response
@@ -2025,7 +2025,7 @@ async def test_onebot_without_target_skips_and_requires_gateway() -> None:
 async def test_onebot_failed_receipt_is_a_node_failure() -> None:
     """对方收下了但回执不成功（status / retcode 非成功）= **业务失败**：抛 NodeFailure（停止
     向下传播），不再把「没发出去」当结果往下送。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     gateway = _FakeGateway(
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "账号被禁言"})
@@ -2065,7 +2065,7 @@ def test_onebot_requires_a_target_source() -> None:
 @pytest.mark.asyncio
 async def test_target_node_takes_trigger_session_when_platform_empty() -> None:
     """target 节点：platform 留空 = 自动取触发消息的会话定位（原样透出，没有则 None）。"""
-    from botnode.workflow.nodes import exec_target
+    from tickneko.workflow.nodes import exec_target
 
     ctx_ = NodeExecutionContext()
     ctx_.trigger_data = {"target": object()}  # 鸭子形状：透出同一个对象
@@ -2081,7 +2081,7 @@ async def test_target_node_takes_trigger_session_when_platform_empty() -> None:
 @pytest.mark.asyncio
 async def test_target_node_builds_manual_target_via_gateway() -> None:
     """target 节点：platform 填了 = 手动构造，走 ctx.gateway.make_target 按平台路由。"""
-    from botnode.workflow.nodes import exec_target
+    from tickneko.workflow.nodes import exec_target
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
@@ -2105,7 +2105,7 @@ async def test_target_node_builds_manual_target_via_gateway() -> None:
 @pytest.mark.asyncio
 async def test_send_replies_via_gateway_to_target() -> None:
     """send 节点把 message 发到 target 指向的会话：走 ``ctx.gateway.reply(target, message)``，回执从 send_ok / send_data 送下去。"""
-    from botnode.workflow.nodes import exec_send
+    from tickneko.workflow.nodes import exec_send
 
     gateway = _FakeGateway(response=_FakeActionResponse(data={"message_id": 7}))
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
@@ -2121,7 +2121,7 @@ async def test_send_replies_via_gateway_to_target() -> None:
 @pytest.mark.asyncio
 async def test_send_without_target_skips_and_requires_gateway() -> None:
     """没有会话定位（target 是 None / 空）就不发：send_ok=False 照常送下游，也不碰网关；有 target 但没接总线是环境问题，当场抛。"""
-    from botnode.workflow.nodes import exec_send
+    from tickneko.workflow.nodes import exec_send
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
@@ -2160,7 +2160,7 @@ class _RecordingLogger:
 @pytest.mark.asyncio
 async def test_send_failure_logs_what_was_sent() -> None:
     """回执失败（业务失败，抛 NodeFailure）时日志带上内容长度与片段：看得出到底发了什么。"""
-    from botnode.workflow.nodes import NodeFailure, exec_send
+    from tickneko.workflow.nodes import NodeFailure, exec_send
 
     content = "当前时间为：2026-10-02 18:57:51"
     gateway = _FakeGateway(response=_FakeActionResponse(status="failed", retcode=1200))
@@ -2184,7 +2184,7 @@ async def test_send_failure_logs_what_was_sent() -> None:
 @pytest.mark.asyncio
 async def test_send_success_logs_length_without_preview() -> None:
     """发送成功只记长度、不记内容片段（日志不囤正文）。"""
-    from botnode.workflow.nodes import exec_send
+    from tickneko.workflow.nodes import exec_send
 
     gateway = _FakeGateway()
     recorder = _RecordingLogger()
@@ -2206,7 +2206,7 @@ async def test_send_success_logs_length_without_preview() -> None:
 @pytest.mark.asyncio
 async def test_send_empty_message_skips() -> None:
     """内容为空（上游「算不出来」送的就是空串）：不发，send_ok=False 送下游，也不碰网关。"""
-    from botnode.workflow.nodes import exec_send
+    from tickneko.workflow.nodes import exec_send
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
@@ -2227,7 +2227,7 @@ async def test_send_empty_message_skips() -> None:
 @pytest.mark.asyncio
 async def test_onebot_empty_message_skips() -> None:
     """onebot 别名同款：内容为空时不发，retcode 记 1（没发出去）、data 空串送下游。"""
-    from botnode.workflow.nodes import exec_onebot
+    from tickneko.workflow.nodes import exec_onebot
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
@@ -2245,7 +2245,7 @@ async def test_onebot_empty_message_skips() -> None:
 async def test_send_failed_receipt_is_a_node_failure() -> None:
     """对方收下但回执不成功（ok=False）= **业务失败**：抛 NodeFailure（停止向下传播），
     不再把「没发出去」当结果往下送。"""
-    from botnode.workflow.nodes import NodeFailure, exec_send
+    from tickneko.workflow.nodes import NodeFailure, exec_send
 
     gateway = _FakeGateway(
         response=_FakeActionResponse(status="failed", retcode=1200, data={"msg": "被禁言"})
@@ -2284,7 +2284,7 @@ def test_send_requires_a_target_source() -> None:
 @pytest.mark.asyncio
 async def test_send_passes_target_through_untranslated() -> None:
     """send 不碰 target 内部结构：适配器构造的 target 原样透传给 ``gateway.reply``（id 转不转整数由适配器管，这里验证的是「不拆、不转、不过手」）。"""
-    from botnode.workflow.nodes import exec_send
+    from tickneko.workflow.nodes import exec_send
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
@@ -2339,7 +2339,7 @@ async def test_operator_takes_operands_from_wire_with_hand_fallback() -> None:
 async def test_operator_failure_stops_propagation() -> None:
     """算不出来 = **业务失败**（抛 NodeFailure，引擎停止向下传播）：空值 / 非数字 / 除数为 0 /
     运算符不合法 —— 不再送空串，免得下游拿着「没算出来」的结果继续跑。"""
-    from botnode.workflow.nodes import NodeFailure
+    from tickneko.workflow.nodes import NodeFailure
 
     async def failing(symbol: str, left: str, right: str) -> str:
         node_ = WorkflowNode(id="m1", type="operator", config={"operator": symbol})
@@ -2411,7 +2411,7 @@ def test_operator_symbol_is_validated() -> None:
 
 # ------------------------------------------------------------- ④-G 缓存节点
 class _FakeCache:
-    """假的缓存门面（鸭子形状对齐 ``botnode.core.cache.Cache``：``get`` / ``set`` 两个异步方法）。
+    """假的缓存门面（鸭子形状对齐 ``tickneko.core.cache.Cache``：``get`` / ``set`` 两个异步方法）。
 
     单元测试里不碰进程级单例（它没 ``start()``，直接调会抛 ``CacheError``）—— 给 ctx
     注入这个假对象即可。
@@ -2573,8 +2573,8 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
     ``test`` 的 message 字段、``http.method`` 的缺省 GET、``log.level`` / ``start.trigger``
     的可选值。声明清楚了，「后端提供什么、画布显示什么」才立得住。
     """
-    from botnode.workflow import get_spec
-    from botnode.workflow.nodes import HTTP_METHODS
+    from tickneko.workflow import get_spec
+    from tickneko.workflow.nodes import HTTP_METHODS
 
     http = get_spec("http")
     assert http is not None
@@ -2610,7 +2610,7 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     ``message`` 端口送值、``trigger`` 端口只表达先后；字段名与端口 id 同名的（``log`` 的
     ``message``、``http`` 的 ``url``）就是「可以被连线覆盖的那个入口」。
     """
-    from botnode.workflow import get_spec
+    from tickneko.workflow import get_spec
 
     expected: dict[str, tuple[int, str, list[str], list[str]]] = {
         "start": (10, "开始", [], ["trigger", "message", "target"]),
@@ -2747,7 +2747,7 @@ def test_declare_node_type_gives_rules_without_executor() -> None:
 
     内置节点里已经没有这种「只声明不实现」的类型了（见 nodes/ 的文件表），这条给扩展方用。
     """
-    from botnode.workflow import get_spec
+    from tickneko.workflow import get_spec
 
     declare_node_type(
         "test-declared",
@@ -2786,12 +2786,12 @@ def test_register_node_decorator_registers_and_returns_the_function() -> None:
 
 def test_load_node_modules_is_idempotent_and_loud_on_failure() -> None:
     """装别人的节点模块：重复加载幂等；模块不存在当场抛（别把「没注册上」藏到跑图时才报）。"""
-    assert load_node_modules("botnode.workflow.nodes.log") == ["botnode.workflow.nodes.log"]
+    assert load_node_modules("tickneko.workflow.nodes.log") == ["tickneko.workflow.nodes.log"]
     # 第二次命中 sys.modules 缓存：模块体不会再执行一遍
-    assert load_node_modules("botnode.workflow.nodes.log") == ["botnode.workflow.nodes.log"]
+    assert load_node_modules("tickneko.workflow.nodes.log") == ["tickneko.workflow.nodes.log"]
 
     with pytest.raises(ModuleNotFoundError):
-        load_node_modules("botnode.workflow.nodes.no_such_module")
+        load_node_modules("tickneko.workflow.nodes.no_such_module")
 
 
 @pytest.mark.asyncio
@@ -2816,7 +2816,7 @@ async def test_custom_node_type_runs_end_to_end() -> None:
     graph = WorkflowGraph(
         nodes=[
             WorkflowNode(id="s", type="start", config={}),
-            WorkflowNode(id="c", type="constant", config={"value": "hi botnode"}),
+            WorkflowNode(id="c", type="constant", config={"value": "hi tickneko"}),
             WorkflowNode(id="u", type="my-upper", config={}),
         ],
         edges=[
@@ -2829,8 +2829,8 @@ async def test_custom_node_type_runs_end_to_end() -> None:
 
     await SimpleWorkflowRunner().run(graph, ctx)
 
-    assert seen == ["hi botnode"]  # 值确实沿 c.value -> u.text 送到了
-    assert ctx.inputs == {"text": "hi botnode"}  # 最后一个节点的入口就是它收到的那份
+    assert seen == ["hi tickneko"]  # 值确实沿 c.value -> u.text 送到了
+    assert ctx.inputs == {"text": "hi tickneko"}  # 最后一个节点的入口就是它收到的那份
 
 
 # --------------------------------------------------------------------------- checksum
@@ -2903,7 +2903,7 @@ def test_edge_ports_round_trip_and_affect_checksum() -> None:
 
 def test_draft_graph_is_lenient() -> None:
     """暂存图允许空节点列表 / 缺字段 / 额外 UI 数据（提交版本时才严格校验）。"""
-    from botnode.workflow import DraftGraph
+    from tickneko.workflow import DraftGraph
 
     draft = DraftGraph.model_validate({"nodes": [], "edges": []})
     assert draft.nodes == [] and draft.edges == []
@@ -3029,7 +3029,7 @@ async def test_store_draft_save_overwrites_and_switches_pointer(
     store: SqlWorkflowStore,
 ) -> None:
     """暂存覆盖式写图、指针切 draft；提交版本后指针切 version；暂存内容原样可读。"""
-    from botnode.workflow import canonical_draft_json
+    from tickneko.workflow import canonical_draft_json
 
     definition = await store.create("u-admin", "暂存流")
     # 新建默认指针 draft，没暂存过
@@ -3167,7 +3167,7 @@ class FakeTriggers:
 
 
 def api_app_with_triggers(triggers: FakeTriggers) -> FastAPI:
-    """接口层应用 + 运行时触发器（主程序就是这么传的，见 ``botnode.bootstrap``）。"""
+    """接口层应用 + 运行时触发器（主程序就是这么传的，见 ``tickneko.bootstrap``）。"""
     return create_app(
         ApiOptions(prefix="/api"), hasher=_TEST_HASHER, workflow_triggers=triggers
     )
@@ -3186,7 +3186,7 @@ async def api_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
 async def login(client: httpx.AsyncClient, who: dict[str, str]) -> str:
     """登录拿令牌。
 
-    演示账号现在只剩 ``admin``（见 ``botnode.api.services.user.demo``）：非 admin 的账号
+    演示账号现在只剩 ``admin``（见 ``tickneko.api.services.user.demo``）：非 admin 的账号
     由这里顺手注册一个（注册要昵称，就用账号名顶上），用例不必各自准备。
     """
     if who["account"] != ADMIN["account"]:
@@ -3297,7 +3297,7 @@ async def test_api_owners_lists_everyone_for_admin_and_self_for_user() -> None:
         admin = await login(client, ADMIN)
         registered = await client.post(
             "/api/auth/register",
-            json={"account": "worker", "password": "botnode-worker", "nickname": "干活的"},
+            json={"account": "worker", "password": "tickneko-worker", "nickname": "干活的"},
         )
         assert registered.status_code == 201, registered.text
         worker_id = registered.json()["data"]["id"]
@@ -3307,7 +3307,7 @@ async def test_api_owners_lists_everyone_for_admin_and_self_for_user() -> None:
         assert by_id[worker_id]["nickname"] == "干活的"  # 昵称跟着回来
         assert "u-admin" in by_id  # 管理员自己也在清单里
 
-        worker = await login(client, {"account": "worker", "password": "botnode-worker"})
+        worker = await login(client, {"account": "worker", "password": "tickneko-worker"})
         mine = (await client.get("/api/owners", headers=auth(worker))).json()["data"]
         assert [item["owner_id"] for item in mine] == [worker_id]  # 只看得见自己
 
@@ -3322,10 +3322,10 @@ async def test_api_workflow_list_carries_owner_name_and_filters_by_owner() -> No
         admin = await login(client, ADMIN)
         registered = await client.post(
             "/api/auth/register",
-            json={"account": "worker", "password": "botnode-worker", "nickname": "干活的"},
+            json={"account": "worker", "password": "tickneko-worker", "nickname": "干活的"},
         )
         worker_id = registered.json()["data"]["id"]
-        worker = await login(client, {"account": "worker", "password": "botnode-worker"})
+        worker = await login(client, {"account": "worker", "password": "tickneko-worker"})
 
         await client.post("/api/workflows", headers=auth(admin), json={"name": "管理员的流"})
         await client.post("/api/workflows", headers=auth(worker), json={"name": "干活的流"})
@@ -3535,8 +3535,8 @@ async def test_load_published_workflows_registers_crons() -> None:
 
     「已发布但开关关着」与「只存了版本没发布」两种都不登记 —— 发布 ≠ 运行。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import load_published_workflows
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -3594,8 +3594,8 @@ async def test_load_published_workflows_logs_what_it_loaded() -> None:
     ``if primed`` 的条件；扫过多少 / 登记上几条 / 开关关着跳过几条一并给出来 —— 排
     「某条流为何没跑」时不用再猜。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import load_published_workflows
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -3652,8 +3652,8 @@ async def test_runtime_logs_are_attributed_to_the_workflow_owner() -> None:
     —— 记成公共的话，「谁的流在跑」既筛不出来也追不到人。节点日志与运行时那几条同一口径：
     这一趟里**每条**都该是 ``u-admin``。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import make_trigger
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import make_trigger
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -3688,8 +3688,8 @@ async def test_load_published_workflows_pages_past_the_first_page() -> None:
     回归：以前那边写死 ``limit=500`` 一次拉完，第 501 条起的工作流开机不会登记（静默漏跑）。
     这里用 ``page_size=2`` 造 5 条，逼它翻三页（最后一页不满）。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import load_published_workflows
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -3728,10 +3728,10 @@ async def test_load_published_workflows_passes_the_instance_strategy_to_the_sche
 
     调度器靠 ``Task.multi_instance`` 决定「上一次还没跑完、到点又到点」时是跳过本次还是开新
     实例，所以这条断言的是「设置真的落到了那个任务上」——登记那一趟读定义表，见
-    :func:`botnode.workflow.runtime.register_published_workflow`。
+    :func:`tickneko.workflow.runtime.register_published_workflow`。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import load_published_workflows
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -3769,8 +3769,8 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
     执行了一次（没到点也跑）。现在登记只调开始节点自己。
     """
 
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import load_published_workflows
 
     ran: list[str] = []
 
@@ -3811,8 +3811,8 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
 
 async def test_workflow_failure_log_has_stack_type_and_node() -> None:
     """执行失败时日志带**堆栈 / 异常类型 / 哪个节点**：只记 ``str(exc)`` 会是空串，排不了错。"""
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import run_published_workflow
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import run_published_workflow
 
     @register_node("boom-env-log")
     async def exec_boom(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
@@ -3857,8 +3857,8 @@ async def test_expected_environment_failure_logs_one_line(
     """
     import httpx
 
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import run_published_workflow
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import run_published_workflow
 
     fake_http.error = httpx.ReadTimeout("")
 
@@ -3901,8 +3901,8 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
     ``gateway``（平台总线）在这一层就得带上 —— 调度器到点执行的是登记时构造的闭包本身，
     send 节点到点那一趟也要能拿得到它发动作。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import make_trigger
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import make_trigger
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -3950,8 +3950,8 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
     调度器到点执行的是**登记那一趟构造的闭包**（任务的 ``func``）—— 总线必须从
     ``register_published_workflow`` 就传下去；这里手动调 ``func`` 模拟「到点」。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import register_published_workflow
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import register_published_workflow
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -4003,8 +4003,8 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
 
 async def test_stop_published_workflow_removes_the_registered_tasks() -> None:
     """停用：把这一版登记的定时任务摘掉（**不跑图**），重复停、停不存在的都无害。"""
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import (
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import (
         register_published_workflow,
         stop_published_workflow,
     )
@@ -4045,8 +4045,8 @@ async def test_workflow_task_ids_carry_the_workflow_id() -> None:
     以前只按节点 id 算（``wf-<node.id>``），而节点 id 只在**一张图内**唯一 —— 两条图都有
     ``s`` 时，后登记的会把先登记的那条移除，等于悄悄停掉别人的定时。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import load_published_workflows
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -4084,8 +4084,8 @@ async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None
     行为与现在完全一致。这里用一张 ``start(message) -> log`` 的图，log 节点把 start 送下来的
     message 写进日志，断言它拿到了消息内容。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import run_published_workflow
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import run_published_workflow
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -4130,8 +4130,8 @@ async def test_start_node_passes_target_through_to_downstream() -> None:
     target 出口是**数据流**：start 把它送下去，下游节点（target 节点 / send 节点）拿到同一个
     对象直接可用。没装配（定时触发 / 离线跑 / 没造事件）就 None，由下游自己处理分支。
     """
-    from botnode.workflow import WorkflowNode
-    from botnode.workflow.nodes.start import exec_start
+    from tickneko.workflow import WorkflowNode
+    from tickneko.workflow.nodes.start import exec_start
 
     class FakeTarget:  # 鸭子形状：workflow 只认「有 platform 的东西」，不 import bridge
         platform = "onebot"
@@ -4158,7 +4158,7 @@ async def test_message_router_dispatches_by_owner_and_isolates_failures() -> Non
     * ``dispatch`` 只跑该 owner 下登记过的工作流，别的 owner 不动；
     * 某个工作流抛异常不影响同 owner 的其它工作流（与 ``load_published_workflows`` 同口径）。
     """
-    from botnode.workflow.runtime import MessageRouter
+    from tickneko.workflow.runtime import MessageRouter
 
     ran: list[tuple[str, int, str, str]] = []  # (workflow_id, version, user_id, message)
 
@@ -4193,7 +4193,7 @@ async def test_message_router_dispatches_by_owner_and_isolates_failures() -> Non
 
 async def test_message_router_without_executor_drops_and_returns_zero() -> None:
     """没注入执行回调（``attach`` 没调）：dispatch 只记 warning、返回 0，不炸。"""
-    from botnode.workflow.runtime import MessageRouter
+    from tickneko.workflow.runtime import MessageRouter
 
     router = MessageRouter()
     router.register("a", 1, "u-admin")
@@ -4206,8 +4206,8 @@ async def test_register_published_workflow_registers_message_trigger() -> None:
     与时间触发的对偶：``trigger=time`` 登记到调度器，``trigger=message`` 登记到消息路由
     （按 owner 路由）。登记那一趟只点名、不跑下游，消息路由里出现 ``{workflow_id: version}``。
     """
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import (
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import (
         MessageRouter,
         register_published_workflow,
         stop_published_workflow,
@@ -4251,8 +4251,8 @@ async def test_register_published_workflow_registers_message_trigger() -> None:
 
 async def test_load_published_workflows_registers_message_triggers() -> None:
     """启动载入：开着开关的已发布**消息**流登记到消息路由（与定时流分走两条登记路）。"""
-    from botnode.core.scheduler import TaskManager
-    from botnode.workflow.runtime import MessageRouter, load_published_workflows
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import MessageRouter, load_published_workflows
 
     engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
     store = SqlWorkflowStore(engine)
@@ -4295,9 +4295,9 @@ async def test_on_platform_event_dispatches_message_to_router() -> None:
     本身不 import bridge（依赖方向不破）。这里验证：message 事件带着 text / user_id / 平台
     字段进 ``trigger_data``，按 owner_id 路由；notice / meta 之类不触发。
     """
-    import botnode.bootstrap as bootstrap
-    from botnode.platforms.bridge.models import PlatformEvent
-    from botnode.workflow.runtime import MessageRouter
+    import tickneko.bootstrap as bootstrap
+    from tickneko.platforms.bridge.models import PlatformEvent
+    from tickneko.workflow.runtime import MessageRouter
 
     dispatched: list[tuple[str, dict[str, str]]] = []  # (owner_id, trigger_data)
 

@@ -12,7 +12,7 @@ from textwrap import dedent
 import pytest
 
 from config import Settings
-from botnode.core.cache import (
+from tickneko.core.cache import (
     Cache,
     CacheBackend,
     CacheError,
@@ -411,7 +411,7 @@ class TestRedisBackend:
         facade = Cache(
             CacheOptions(
                 backend="redis",
-                namespace="botnode-test",
+                namespace="tickneko-test",
                 redis=options,
                 fallback_to_memory=True,  # 探得到却连不上时退回内存，便于下方 skip
             )
@@ -463,7 +463,7 @@ class TestOptionsFromMapping:
         """配置里没有 [cache] 这一节时，转出来的选项就是本地内存版。"""
         options = CacheOptions.from_mapping(Settings().cache.model_dump())
         assert options.backend == "memory"
-        assert options.namespace == "botnode"
+        assert options.namespace == "tickneko"
         assert options.default_ttl == 0.0
         assert options.redis.port == 6379
 

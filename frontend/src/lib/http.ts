@@ -6,7 +6,7 @@
  *   失败 { success:false, error:{code,message,details}, trace_id }
  *
  * 认证是**双轨**的（后端 cookie 路径限定在 /api/auth）：
- * - withCredentials 让浏览器自动收发 HttpOnly Cookie（botnode_session），/api/auth/* 靠它；
+ * - withCredentials 让浏览器自动收发 HttpOnly Cookie（tickneko_session），/api/auth/* 靠它；
  * - 同时从本地存储读会话令牌附带 Authorization: Bearer —— /api/onebot/* 不在 cookie
  *   路径内，只能靠这个头。
  *
@@ -23,12 +23,12 @@ import axios, {
 import { API_BASE_URL } from '../config/env'
 
 /** 会话在浏览器存储里的键名（localStorage / sessionStorage 同名）。 */
-export const SESSION_KEY = 'botnode.console.session'
+export const SESSION_KEY = 'tickneko.console.session'
 
 /** 滑动续期心跳：detail 是剩余秒数（0 = 不过期）。 */
-export const SESSION_TICK_EVENT = 'botnode:session-tick'
+export const SESSION_TICK_EVENT = 'tickneko:session-tick'
 /** 任意请求 401：会话已失效。 */
-export const UNAUTHORIZED_EVENT = 'botnode:unauthorized'
+export const UNAUTHORIZED_EVENT = 'tickneko:unauthorized'
 
 export interface ErrorDetail {
   field: string

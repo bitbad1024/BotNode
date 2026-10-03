@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢愿意给 BotNode 添砖加瓦。这份指南只讲「怎么动手」，架构与设计取舍看 [`docs/README.md`](../docs/README.md) 与各模块文档。
+感谢愿意给 TickNeko 添砖加瓦。这份指南只讲「怎么动手」，架构与设计取舍看 [`docs/README.md`](../docs/README.md) 与各模块文档。
 
 一句话原则：**改动要小而完整** —— 代码、测试、文档一起到位，别人 review 时不用猜。
 
@@ -16,8 +16,8 @@
 | Redis | 可选 | 不装就用进程内缓存（默认） |
 
 ```bash
-git clone https://github.com/bitbad1024/BotNode.git
-cd BotNode
+git clone https://github.com/haloneko/TickNeko.git
+cd TickNeko
 
 python -m venv .venv && .venv\Scripts\activate     # Windows（Linux: source .venv/bin/activate）
 pip install -r requirements.txt -r requirements-dev.txt
@@ -38,7 +38,7 @@ cd frontend && npm run dev                     # 控制台 http://127.0.0.1:1517
 ## 2. 目录速览
 
 ```
-botnode/
+tickneko/
   core/        地基：logger / cache / scheduler（只依赖自身，不 import 上层）
   platforms/   onebot（反向 WS）、kook（正向 WS）、bridge（适配器 + Gateway 总线）
   workflow/    画布图：模型 / 校验 / 落库 / 执行引擎 / 运行时（不 import FastAPI）

@@ -1,18 +1,18 @@
-# BotNode 单镜像：一份镜像里同时有控制台（前端产物）与后端。
+# TickNeko 单镜像：一份镜像里同时有控制台（前端产物）与后端。
 #
 #   控制台 + 接口  :80    （nginx：托管前端静态文件，把 /api、/docs 反代给本机后端）
 #   后端本体       :18080 （容器内，不直接对外，由 nginx 转）
 #   OneBot 反向 WS :16700 （要对外暴露，OneBot 实现端连进来的口）
 #
 # 构建：
-#   docker build -t botnode:latest .
+#   docker build -t tickneko:latest .
 #   国内网络可换源：--build-arg NPM_REGISTRY=https://registry.npmmirror.com \
 #                   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 #
 # 运行（配置不进镜像，挂 data/ 目录进去）：
-#   docker run -d --name botnode -p 8080:80 -p 16700:16700 \
+#   docker run -d --name tickneko -p 8080:80 -p 16700:16700 \
 #     -v "$PWD/data:/app/data" \
-#     -v botnode-logs:/app/logs botnode:latest
+#     -v tickneko-logs:/app/logs tickneko:latest
 #
 # 挂的是 data/ 这个**目录**：配置（首次启动照模板生成 data/config.toml）、sqlite、密钥、头像
 # 都在里面 —— 挂目录而不是挂单文件，容器才写得进去，配置也就不必先手工准备好。
@@ -56,7 +56,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
 COPY app.py config.py config.toml.example ./
-COPY botnode/ ./botnode/
+COPY tickneko/ ./tickneko/
 
 # nginx：去掉发行版自带的默认站点，换成我们这份（静态 + 反代）
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf

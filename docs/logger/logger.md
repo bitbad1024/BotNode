@@ -1,4 +1,4 @@
-# 异步日志系统（`botnode.core.logger`）
+# 异步日志系统（`tickneko.core.logger`）
 
 ## 设计要点
 
@@ -23,13 +23,13 @@
 ## 快速开始（最小化启动 + 增量挂载）
 
 ```python
-from botnode.core.logger import LogCore, LocalFileLogProcessor
+from tickneko.core.logger import LogCore, LocalFileLogProcessor
 
 logger = LogCore()                      # 只有控制台，立即可用
 await logger.start()
 logger.info("机器人已启动", robot_id="r-001")
 
-logger.mount(LocalFileLogProcessor("logs", prefix="botnode"))   # 运行期挂载（按天分片）
+logger.mount(LocalFileLogProcessor("logs", prefix="tickneko"))   # 运行期挂载（按天分片）
 await logger.stop()                     # 停机自动冲刷余量
 ```
 
@@ -40,15 +40,15 @@ await logger.stop()                     # 停机自动冲刷余量
 ```python
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from botnode.core.logger import DatabaseLogProcessor, LogCore, LocalFileLogProcessor
-from botnode.db import SqlLogStore
+from tickneko.core.logger import DatabaseLogProcessor, LogCore, LocalFileLogProcessor
+from tickneko.db import SqlLogStore
 
 logger = LogCore()                          # 最小化启动：只有控制台
 await logger.start()
 
-db = create_async_engine("sqlite+aiosqlite:///data/botnode.db")
+db = create_async_engine("sqlite+aiosqlite:///data/tickneko.db")
 logger.mount(DatabaseLogProcessor(SqlLogStore(db)))   # 运行期挂载，自动启动
-logger.mount(LocalFileLogProcessor("logs", prefix="botnode"))   # 按天分片：botnode-<日期>.log
+logger.mount(LocalFileLogProcessor("logs", prefix="tickneko"))   # 按天分片：tickneko-<日期>.log
 
 logger.info("机器人已启动", robot_id="r-001")
 await logger.stop()                         # 自动冲刷余量
@@ -62,8 +62,8 @@ await logger.stop()                         # 自动冲刷余量
 发布过一条具名路由之后，这条路上的日志只投它自己那一份：
 
 ```python
-core = LogCore("botnode")                                        # root = [console]
-core.mount(LocalFileLogProcessor("logs", prefix="botnode"))      # root 的全量文件出口
+core = LogCore("tickneko")                                        # root = [console]
+core.mount(LocalFileLogProcessor("logs", prefix="tickneko"))      # root 的全量文件出口
 
 core.route("robot", targets=[LocalFileLogProcessor("logs", prefix="robot")])
 core.route("robot.arm", targets=[LocalFileLogProcessor("logs", prefix="arm")])
@@ -73,7 +73,7 @@ core.route("robot.arm").info("过载")     # -> 只投 arm 那份
 core.route("vision").info("没发布过")    # -> 跟着 root：console + root 那份
 ```
 
-名字**相对 root**（`"robot"` 即 `"botnode.robot"`），按名字发布过就一直返回同一份视图，不需要「先挂载、再取实例」。
+名字**相对 root**（`"robot"` 即 `"tickneko.robot"`），按名字发布过就一直返回同一份视图，不需要「先挂载、再取实例」。
 
 ## 命名层级（child）
 
@@ -100,7 +100,7 @@ api.info("只投 api 那份")           # 用固化下来的那一份目标
 
 ```python
 log = core.bind(
-    name="botnode.api.access",
+    name="tickneko.api.access",
     targets=[Target(file), Target(db, priority=-1)],   # 目标随记录走，db 先投
     trace_id="t-1",
 )
@@ -115,7 +115,7 @@ log.info("换个归属", owner_id="u-2")
 ## 运行期挂载与过滤器
 
 ```python
-from botnode.core.logger import Target
+from tickneko.core.logger import Target
 
 core.mount(LocalFileLogProcessor("logs", prefix="robot"),
            level="WARNING")                                  # 挂一个：只收 WARNING 及以上
@@ -126,9 +126,9 @@ core.mount(Target(outlet, level="ERROR", priority=-1))       # 带优先级
 ## 进程门面（业务代码通常只用这三个）
 
 ```python
-from botnode.core.logger import configure, get_logger, mount_module
+from tickneko.core.logger import configure, get_logger, mount_module
 
-configure(level="INFO")                  # 建立（或复用）进程默认核心（名 botnode）
+configure(level="INFO")                  # 建立（或复用）进程默认核心（名 tickneko）
 mount_module("api.robot", LocalFileLogProcessor("logs", prefix="api"))   # 名字相对核心
 get_logger("api.robot").info("收到请求")   # 一条具名绑定，与核心共享同一个队列
 ```

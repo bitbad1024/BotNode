@@ -15,7 +15,7 @@
 # 要用 MariaDB / Redis，就在 config.toml 里改 [database] / [cache]，并把它们加进下面的 services。
 
 services:
-  botnode:
+  tickneko:
     build:
       context: .
       args:
@@ -24,24 +24,24 @@ services:
         # 国内网络可换成镜像源，例如：
         # NPM_REGISTRY: https://registry.npmmirror.com
         # PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
-    image: botnode:latest
-    container_name: botnode
+    image: tickneko:latest
+    container_name: tickneko
     restart: unless-stopped
     ports:
       - "8080:80"      # 控制台 + 接口（容器内 nginx）
       - "16700:16700"  # OneBot 反向 WS：实现端要能连进来
     volumes:
       # 运行时数据整目录挂出来：配置（data/config.toml）、sqlite（[database].path 默认
-      # data/botnode.db）、Kook 密钥（data/secret_key）、上传的头像。
+      # data/tickneko.db）、Kook 密钥（data/secret_key）、上传的头像。
       #
       # 挂**目录**而不是挂单个文件：宿主上文件不存在时，挂单文件会被 Docker 建成一个同名
       # 目录，而且只读挂载下容器也写不进去（配置必须先手工准备好）。挂目录则怎么都不会错，
       # 首次启动容器还能自己把配置照模板生成出来。
       - ./data:/app/data
       # 日志分片（[logging.file].dir 默认 logs/）：只在容器里翻，用卷存着就够
-      - botnode-logs:/app/logs
+      - tickneko-logs:/app/logs
     environment:
       TZ: Asia/Shanghai
 
 volumes:
-  botnode-logs:
+  tickneko-logs:

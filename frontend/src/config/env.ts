@@ -30,5 +30,5 @@ export interface DemoAccount {
 }
 
 export const DEMO_ACCOUNTS: DemoAccount[] = [
-  { account: 'admin', password: 'botnode-admin' },
+  { account: 'admin', password: 'tickneko-admin' },
 ]

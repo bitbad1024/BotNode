@@ -1,6 +1,6 @@
 """日志核心实例、子实例配置继承与进程门面的单元测试。
 
-对应 ``botnode/core/logger/core.py``、``manager.py`` 与新增的控制台处理机：
+对应 ``tickneko/core/logger/core.py``、``manager.py`` 与新增的控制台处理机：
 
 * 最小化启动：``LogCore()`` 天生带一路控制台输出，``start()`` 后立刻可见；
 * 运行期挂载：``attach`` 之后不用手动启动处理机，下一批日志就会喂给它；
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from botnode.core.logger import (
+from tickneko.core.logger import (
     BaseLogProcessor,
     BoundLogger,
     ChildLogger,
@@ -34,7 +34,7 @@ from botnode.core.logger import (
     default_core,
     manager,
 )
-from botnode.core.logger.models import LogLevel, TimestampLike
+from tickneko.core.logger.models import LogLevel, TimestampLike
 
 
 async def wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> bool:
@@ -157,7 +157,7 @@ class TestMinimalStartup:
 
     async def test_console_output_contains_level_logger_and_extra(self) -> None:
         stream = io.StringIO()
-        logger = LogCore("botnode.robot", console_stream=stream, dispatch_timeout=0.01)
+        logger = LogCore("tickneko.robot", console_stream=stream, dispatch_timeout=0.01)
         await logger.start()
         try:
             logger.warning("机器人电压偏低", battery=12.5)
@@ -167,13 +167,13 @@ class TestMinimalStartup:
 
         text = stream.getvalue()
         assert "WARNING" in text
-        assert "botnode.robot" in text
+        assert "tickneko.robot" in text
         assert "battery" in text
 
     async def test_console_renders_owner_only_when_given(self) -> None:
         """有所有者的日志在实例名后带上 ``(谁的)``；公共日志（空串）不加那对括号。"""
         stream = io.StringIO()
-        logger = LogCore("botnode.api", console_stream=stream, dispatch_timeout=0.01)
+        logger = LogCore("tickneko.api", console_stream=stream, dispatch_timeout=0.01)
         await logger.start()
         try:
             logger.info("请求完成", owner_id="u-admin")
@@ -183,8 +183,8 @@ class TestMinimalStartup:
             await logger.stop()
 
         text = stream.getvalue()
-        assert "botnode.api(u-admin) 请求完成" in text
-        assert "botnode.api 框架启动" in text  # 没归属就不挂括号
+        assert "tickneko.api(u-admin) 请求完成" in text
+        assert "tickneko.api 框架启动" in text  # 没归属就不挂括号
 
     async def test_console_filters_below_its_level(self) -> None:
         stream = io.StringIO()
@@ -377,8 +377,8 @@ class TestDispatcherFiltering:
         first = CollectingProcessor(name="first")
         second = CollectingProcessor(name="second")
         core = LogCore(console=False, dispatch_timeout=0.01)
-        core.child("a", targets=[first])   # botnode.a -> 只投 first
-        core.child("b", targets=[second])  # botnode.b -> 只投 second
+        core.child("a", targets=[first])   # tickneko.a -> 只投 first
+        core.child("b", targets=[second])  # tickneko.b -> 只投 second
 
         await core.start()
         try:
@@ -394,7 +394,7 @@ class TestManagerFacade:
     """进程门面：configure 增量挂载，child 挂到共享核心的命名层级。"""
 
     def test_configure_returns_core_with_console(self) -> None:
-        core = configure("botnode", console=False)
+        core = configure("tickneko", console=False)
         assert isinstance(core, LogCore)
         assert default_core() is core
         assert manager.core is core
@@ -402,26 +402,26 @@ class TestManagerFacade:
 
     def test_configure_twice_attaches_incrementally(self) -> None:
         """二次 configure 不再静默丢弃参数，而是增量挂载。"""
-        core = configure("botnode", console=False)
+        core = configure("tickneko", console=False)
         assert core.processors == []
 
         processor = CollectingProcessor()
-        assert configure("botnode", processors=[processor]) is core
+        assert configure("tickneko", processors=[processor]) is core
         assert core.get_processor("collecting") is processor
 
     def test_configure_replaces_same_name_channel(self, tmp_path: Path) -> None:
         """换落点：同名通道被替换（换输出目录 / 换前缀就是这条路）。"""
         first = LocalFileLogProcessor(tmp_path, prefix="old")
-        core = configure("botnode", console=False, processors=[first])
+        core = configure("tickneko", console=False, processors=[first])
 
         second = LocalFileLogProcessor(tmp_path, prefix="new")
-        configure("botnode", processors=[second])
+        configure("tickneko", processors=[second])
 
         assert core.processors == [second]
         assert core.get_processor("local") is second
 
     async def test_manager_start_stop_delegates_to_core(self) -> None:
-        core = configure("botnode", console=False)
+        core = configure("tickneko", console=False)
         await manager.start()
         try:
             assert core.running is True
@@ -430,7 +430,7 @@ class TestManagerFacade:
         assert core.running is False
 
     def test_reset_detaches_default_core(self) -> None:
-        core = configure("botnode", console=False)
+        core = configure("tickneko", console=False)
         manager.reset()
         assert manager.core is None
         assert manager.root is None
@@ -566,7 +566,7 @@ class TestBoundDefaults:
         """``bind`` 视图不进注册表：叠多少层、绑多少个 id，注册表都不变长。
 
         这条是「请求级数据不许拿 ``bind`` 当实例用」的保险丝：哪天有人为了省参数去按
-        用户 / 按请求绑定出名字（``botnode.api.user-42`` 那种），注册表就成了只增不减的
+        用户 / 按请求绑定出名字（``tickneko.api.user-42`` 那种），注册表就成了只增不减的
         字典 —— 那是 :meth:`BaseLogger.child` 该操心的事。
         """
         core = LogCore(console=False)
@@ -641,7 +641,7 @@ class TestBoundTargets:
         access = core.child("api.access", targets=[Target(db, priority=-1), Target(file)])
         quiet = access.bind().mute("database")
 
-        assert access.name == "botnode.api.access"
+        assert access.name == "tickneko.api.access"
         assert [target.processor for target in quiet.targets or ()] == [db, file]
 
         await core.start()
@@ -661,7 +661,7 @@ class TestBoundTargets:
         await core.start()
         try:
             core.info("走核心那份")
-            module = core.bind(name="botnode.module", targets=[module_file])
+            module = core.bind(name="tickneko.module", targets=[module_file])
             module.info("走模块那份")
 
             assert await wait_until(lambda: core_file.received == ["走核心那份"]) is True
@@ -669,7 +669,7 @@ class TestBoundTargets:
         finally:
             await core.stop()
 
-        assert module_file.records[-1].logger_name == "botnode.module"  # 名字只是标签
+        assert module_file.records[-1].logger_name == "tickneko.module"  # 名字只是标签
 
     async def test_target_filter_applies_per_target(self) -> None:
         """过滤器跟着目标走：同一个出口 Filter 只在它那一份上生效。"""
@@ -736,11 +736,11 @@ class TestChildLogger:
         core = LogCore(console=False)
         a = core.child("a")
         assert isinstance(a, ChildLogger)
-        assert a.name == "botnode.a"
-        assert a.child("b").name == "botnode.a.b"
+        assert a.name == "tickneko.a"
+        assert a.child("b").name == "tickneko.a.b"
         # root.child("a.b") 与 root.child("a").child("b") 名字一致、行为等价
-        assert core.child("a.b").name == "botnode.a.b"
-        assert core.child("botnode.a.b").name == "botnode.a.b"  # 全名原样返回
+        assert core.child("a.b").name == "tickneko.a.b"
+        assert core.child("tickneko.a.b").name == "tickneko.a.b"  # 全名原样返回
 
     def test_child_cache_returns_same_object(self) -> None:
         """同名 child 命中缓存：返回同一对象，不重复固化。"""
@@ -797,7 +797,7 @@ class TestChildLogger:
         core = LogCore(console=False)
         child = core.child("api.access", targets=[outlet])
         log = child.bind(owner_id="u-admin", trace_id="t1")
-        assert log.name == "botnode.api.access"
+        assert log.name == "tickneko.api.access"
 
         await core.start()
         try:
@@ -808,6 +808,6 @@ class TestChildLogger:
             await core.stop()
 
         assert [(r.logger_name, r.owner_id, r.extra) for r in outlet.records] == [
-            ("botnode.api.access", "u-admin", {"trace_id": "t1"}),
-            ("botnode.api.access", "u-robot", {"trace_id": "t1"}),
+            ("tickneko.api.access", "u-admin", {"trace_id": "t1"}),
+            ("tickneko.api.access", "u-robot", {"trace_id": "t1"}),
         ]

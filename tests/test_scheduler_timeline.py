@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from botnode.core.scheduler import CronExpr
-from botnode.core.scheduler.models import Task
-from botnode.core.scheduler.timeline import Key, RBNode, RBTree, TaskTimeline
+from tickneko.core.scheduler import CronExpr
+from tickneko.core.scheduler.models import Task
+from tickneko.core.scheduler.timeline import Key, RBNode, RBTree, TaskTimeline
 
 BASE = datetime(2026, 9, 15, 10, 0, 0)
 
