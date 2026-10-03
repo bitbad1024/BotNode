@@ -2089,8 +2089,14 @@ class _FakeGateway:
     def make_target(self, platform: str, **fields: object) -> Any:
         from types import SimpleNamespace
 
-        self.target_calls.append((platform, fields))
-        return SimpleNamespace(platform=platform, **fields)
+        self.target_calls.append((platform, dict(fields)))
+        # 与真实适配器同一口径：私聊没给「对方号」时用 chat_id 兜底（生产里 pack 只给 chat_id，
+        # 两个适配器的 make_target 都是 ``user_id or chat_id``）—— 假网关不兜底的话，
+        # 测出来的 target 跟生产不一致（回复私聊会缺对方号）
+        resolved = dict(fields)
+        if resolved.get("chat") == "private" and not resolved.get("user_id"):
+            resolved["user_id"] = resolved.get("chat_id", "")
+        return SimpleNamespace(platform=platform, **resolved)
 
 
 # ------------------------------------------------------------- ④-F send 节点（P3 泛化）
@@ -2391,17 +2397,18 @@ async def test_pack_nodes_build_target_via_gateway() -> None:
 
     node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "group", "chat_id": "70001"})
     result = await exec_pack_onebot(node_, ctx_)
+    # 只带「会话类型 + 一个号」：消息号、对方号都不归封装管（私聊的号写在 chat_id 里）
     assert gateway.target_calls == [
-        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001", "user_id": "", "message_id": ""})
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "70001"})
     ]
     assert result["target"].platform == "onebot"
 
-    # kook 同款：platform 写死 kook
+    # kook 同款：platform 写死 kook；私聊的对方号填在 chat_id
     gateway.target_calls.clear()
-    node_k = WorkflowNode(id="p2", type="pack-kook", config={"chat": "private", "user_id": "u-9"})
+    node_k = WorkflowNode(id="p2", type="pack-kook", config={"chat": "private", "chat_id": "u-9"})
     result = await exec_pack_kook(node_k, ctx_)
     assert gateway.target_calls == [
-        ("kook", {"owner_id": "u-admin", "chat": "private", "chat_id": "", "user_id": "u-9", "message_id": ""})
+        ("kook", {"owner_id": "u-admin", "chat": "private", "chat_id": "u-9"})
     ]
     assert result["target"].platform == "kook"
 
@@ -2413,11 +2420,11 @@ async def test_pack_wire_values_override_hand_fill() -> None:
 
     gateway = _FakeGateway()
     ctx_ = NodeExecutionContext(owner_id="u-admin", gateway=gateway)
-    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "private", "user_id": "hand"})
+    node_ = WorkflowNode(id="p1", type="pack-onebot", config={"chat": "private", "chat_id": "hand"})
     ctx_.inputs = {"chat": "group", "chat_id": "wired-70001"}
     await exec_pack_onebot(node_, ctx_)
     assert gateway.target_calls == [
-        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "wired-70001", "user_id": "hand", "message_id": ""})
+        ("onebot", {"owner_id": "u-admin", "chat": "group", "chat_id": "wired-70001"})
     ]
 
 
@@ -4074,7 +4081,7 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
     graph = {
         "nodes": [
             node("s", "start"),
-            node("t", "pack-onebot", chat="private", user_id="10001"),
+            node("t", "pack-onebot", chat="private", chat_id="10001"),
             node("snd", "send", message="到点提醒"),
             node("e", "end"),
         ],
