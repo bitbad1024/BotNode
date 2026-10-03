@@ -92,8 +92,9 @@ NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
 #: 端口类型：trigger（控制流）决定「什么时候执行下一个节点」/ message（数据流）传内容 /
 #: target（数据流）传「发到哪」的会话定位值（:class:`~tickneko.platforms.bridge.models.ChatTarget`
 #: 或平台特化 target；workflow 本身不 import bridge，值由装配层放进 ``trigger_data``）/
-#: list（数据流）传**列表**容器（Python ``list``，值沿边原样投递，元素类型由产出节点负责）
-PortType = Literal["trigger", "message", "target", "list"]
+#: list（数据流）传**列表**容器（Python ``list``，值沿边原样投递，元素类型由产出节点负责）/
+#: dict（数据流）传**字典**容器（Python ``dict``，键 / 值类型都由产出节点负责）
+PortType = Literal["trigger", "message", "target", "list", "dict"]
 
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()

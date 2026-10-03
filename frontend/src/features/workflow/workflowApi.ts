@@ -8,7 +8,7 @@ import { http } from '../../lib/http'
  * 所以 ``type`` 就是普通字符串：认不出的类型（旧图 / 扩展没装）画成灰色未知节点，
  * 保存时会被后端校验的 ``UNKNOWN_NODE_TYPE`` 挡下。
  */
-export type PortType = 'trigger' | 'message' | 'target' | 'list'
+export type PortType = 'trigger' | 'message' | 'target' | 'list' | 'dict'
 
 export interface WorkflowNode {
   id: string
