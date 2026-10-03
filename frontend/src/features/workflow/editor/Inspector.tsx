@@ -6,6 +6,7 @@
  * 后端没声明、但 config 里确实存在的键也照旧给个输入框，别让它在界面上消失。
  */
 import { IconTrash } from '../../../common/icons'
+import { CronPicker } from '../../../common/CronPicker'
 import {
   TRIGGER_LABELS,
   hasDedicatedEditor,
@@ -117,6 +118,18 @@ export function Inspector({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+          {/* cron：走可视化选择器（手填表达式太容易写错，见 hasDedicatedEditor） */}
+          {node.type === 'start' && (
+            <div className={styles.field}>
+              <label className={styles.label}>cron 表达式</label>
+              <CronPicker
+                // 换节点就换一个新的（组件内部记着「用户选了哪个模式」，不该带到别的节点上）
+                key={node.id}
+                value={String(node.config.cron ?? '')}
+                onChange={(cron) => onUpdate(node.id, 'cron', cron)}
+              />
             </div>
           )}
           {def.fields

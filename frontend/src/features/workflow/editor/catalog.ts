@@ -328,10 +328,11 @@ function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTyp
 /**
  * 哪些字段**有专门的编辑器**，通用渲染要跳过（不然会出现两个控件）。
  *
- * 目前只有 start 的 ``trigger``：改它得顺手增删 cron，不是单纯改一个值。
+ * 两个：start 的 ``trigger``（改它得顺手增删 cron，不是单纯改一个值）与 ``cron``
+ * （走 :mod:`common/CronPicker` 可视化选择 —— 手填表达式太容易写错）。
  */
 export function hasDedicatedEditor(nodeType: string, fieldName: string): boolean {
-  return nodeType === 'start' && fieldName === 'trigger'
+  return nodeType === 'start' && (fieldName === 'trigger' || fieldName === 'cron')
 }
 
 /** start 的触发方式选项同样来自后端目录；label 用一句人话解释，认不出的值原样显示。 */
