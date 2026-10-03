@@ -65,6 +65,7 @@ from tickneko.workflow.nodes import (  # noqa: E402
     exec_json,
     exec_now,
     exec_operator,
+    exec_placeholder,
     exec_regex,
 )
 from tickneko.workflow.validator import STAGE_SEMANTIC, STAGE_STRUCTURE, STAGE_TOPOLOGY  # noqa: E402
@@ -631,6 +632,39 @@ async def test_executor_start_end_log_test_run() -> None:
     assert any("[INFO] l: hello tickneko" in line for line in ctx.log)
     # 最后一个节点（end）没接线的入口：触发边不送值
     assert ctx.inputs == {}
+
+
+@pytest.mark.asyncio
+async def test_executor_placeholder_passes_through_without_side_effects() -> None:
+    """占位节点：入口的值**原样透传**到出口，不写日志、不留运行痕迹（仿佛不存在）。"""
+    node = WorkflowNode(id="p1", type="placeholder", config={})
+    ctx = NodeExecutionContext()
+    ctx.inputs = {"message": "来自上游"}
+    assert await exec_placeholder(node, ctx) == {"message": "来自上游"}
+    assert ctx.log == []  # 不留痕迹
+
+
+@pytest.mark.asyncio
+async def test_executor_placeholder_relays_value_along_the_edge() -> None:
+    """start -> 占位 -> log：占位把值沿边原样透传，下游 log 收到的是线上来的值。"""
+    graph = WorkflowGraph.model_validate(
+        {
+            "nodes": [
+                node("s", "start"),
+                node("p", "placeholder", message="透传我"),
+                node("l", "log", level="INFO"),
+                node("e", "end"),
+            ],
+            "edges": [
+                edge("s", "p"),
+                edge("p", "l", "message", "message"),  # 占位的透传 -> log 的日志内容
+                edge("l", "e"),
+            ],
+        }
+    )
+    ctx = NodeExecutionContext()
+    await SimpleWorkflowRunner().run(graph, ctx)
+    assert any("[INFO] l: 透传我" in line for line in ctx.log)
 
 
 @pytest.mark.asyncio
@@ -2621,12 +2655,12 @@ def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in (
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "operator", "cache",
+        "json", "regex", "now", "condition", "operator", "cache", "placeholder",
     ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
         "start", "end", "log", "test", "http", "constant", "delay",
-        "json", "regex", "now", "condition", "operator", "cache",
+        "json", "regex", "now", "condition", "operator", "cache", "placeholder",
     }
 
 

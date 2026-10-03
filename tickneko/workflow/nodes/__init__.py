@@ -18,6 +18,7 @@
       send.py            内置节点：send（把 message 发到 target 指向的会话：去向走 target 值端口 + 内容端口，走 ctx.gateway.reply；没有 target 就不发，回执不成功不打断流程）
       operator.py        内置节点：operator（算术：+ - * / %，结果文本化；算不出来送空串）
       cache.py           内置节点：cache（变量存取：get / set；作用域账号 / 图，前缀区分）
+      placeholder.py     内置节点：placeholder（占位：只透传不做事，参与画布理线）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -82,6 +83,7 @@ from .log import LOG_LEVELS, exec_log
 from .now import exec_now
 from .operator import exec_operator
 from .pack import exec_pack_kook, exec_pack_onebot
+from .placeholder import exec_placeholder
 from .regex import exec_regex
 from .send import exec_send
 from .target import exec_target
@@ -154,6 +156,7 @@ __all__ = [
     "exec_unpack_kook",
     "exec_pack_onebot",
     "exec_pack_kook",
+    "exec_placeholder",
     "exec_operator",
     "exec_cache",
 ]
