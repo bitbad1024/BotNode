@@ -34,6 +34,10 @@ export interface NodeCardProps {
   issues: ValidationIssue[] | null
   /** 已接上线的入口（没写端口的边按 trigger 算） */
   wired: Set<string>
+  /** 本节点的**端口生效类型签名**（见 ``catalog.effectivePortTypes``）：``'|'`` 分隔的
+   * 类型名，前 ``def.inputs.length`` 个是入口、往后是出口。传**字符串**而不是 Map ——
+   * 字符串按值比较，别的节点改 config 时这张卡不会被牵连重渲染 */
+  effSig: string
   onMouseDown: (event: React.MouseEvent, nodeId: string) => void
   onClick: (event: React.MouseEvent) => void
   onContextMenu: (event: React.MouseEvent, nodeId: string) => void
@@ -61,6 +65,7 @@ function NodeCardBase({
   boxSelected,
   issues,
   wired,
+  effSig,
   onMouseDown,
   onClick,
   onContextMenu,
@@ -81,7 +86,10 @@ function NodeCardBase({
       {/* 头部：色条 + 标签 */}
       <div className={styles.nodeHeader}>
         <span className={styles.nodeColorBar} style={{ background: def.color }} />
-        <span className={styles.nodeLabel}>{def.label}</span>
+        {/* 标题：装不下时省略（见 .nodeLabel），悬停看完整名字 */}
+        <span className={styles.nodeLabel} title={def.label}>
+          {def.label}
+        </span>
       </div>
 
       {/* 端口区 */}
@@ -89,6 +97,10 @@ function NodeCardBase({
         {Array.from({ length: portRows }).map((_, rowIdx) => {
           const inp = def.inputs[rowIdx]
           const out = def.outputs[rowIdx]
+          // 端口圆点按「生效类型」显色：泛型端口接什么显什么，声明了 tie 的透传对
+          // （输入输出同一种类型）两端颜色永远一致 —— 对应关系就靠这一致的颜色表达。
+          // 生效类型从 effSig 里按位取：前 inputs.length 个是入口、往后是出口
+          const effs = effSig ? effSig.split('|') : []
           return (
             <div className={styles.portRow} key={rowIdx} style={{ height: PORT_ROW_H }}>
               {/* 输入端口（左侧） */}
@@ -100,7 +112,7 @@ function NodeCardBase({
                       className={styles.portCircle}
                       style={{
                         left: -5,
-                        background: portColor(inp.type),
+                        background: portColor(effs[rowIdx] ?? inp.type),
                         // 必填入口还没接线：红圈提醒（后端也会报 INPUT_NOT_CONNECTED）
                         ...(inp.required && !wired.has(inp.id)
                           ? { boxShadow: '0 0 0 3px rgba(239,68,68,.35)' }
@@ -129,7 +141,10 @@ function NodeCardBase({
                     <span
                       data-role="port"
                       className={styles.portCircle}
-                      style={{ right: -5, background: portColor(out.type) }}
+                      style={{
+                        right: -5,
+                        background: portColor(effs[def.inputs.length + rowIdx] ?? out.type),
+                      }}
                       onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
                       onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
                     />

@@ -9,12 +9,13 @@
  * * 杂项工具（``uid`` / ``truncate`` / ``normalizeGraph`` …）。
  *
  * 节点类型与**端口类型**都不在前端定义：后端给什么就画什么，认不出的节点类型只给一对触发口
- * 兜底（保存时会被 ``UNKNOWN_NODE_TYPE`` 拦下）、认不出的端口类型一律淡灰。这里只留前端
- * 自己的东西：节点颜色（皮肤）、运行时端口类型表（由 ``installCatalog`` 从目录的 ``port_types``
- * 装进来）与两个**固有例外**（``start`` 的端口随 ``config.trigger`` 变；``constant`` 的常量
- * 就是它的 config 本身）。
+ * 兜底（保存时会被 ``UNKNOWN_NODE_TYPE`` 拦下）、认不出的端口类型一律淡灰。**节点颜色**也
+ * 由后端目录下发（认不出的类型才用兜底色）。这里只留前端自己的东西：运行时端口类型表（由
+ * ``installCatalog`` 从目录的 ``port_types`` 装进来）与两个**固有例外**（``start`` 的端口随
+ * ``config.trigger`` 变；``constant`` 的常量就是它的 config 本身）。
  */
 import {
+  type NodeCategorySpec,
   type NodeFieldSpec,
   type NodePortSpec,
   type NodeTypeSpec,
@@ -29,6 +30,7 @@ import {
 } from '../workflowApi'
 
 export type {
+  NodeCategorySpec,
   NodeFieldSpec,
   NodePortSpec,
   NodeTypeSpec,
@@ -81,69 +83,141 @@ export function isDataPort(type: string): boolean {
   return PORT_TYPES[type]?.data ?? false
 }
 
+/** 两种端口类型能不能互接：**同类互通；泛型端口跟任何数据流端口互接**（不接触发）。
+ * 泛型就一个，直接按类型名 ``generic`` 判断（不加标记字段，与后端
+ * ``port_types.port_types_compatible`` 同一份语义）；另一端是不是数据流端口查
+ * ``data``（trigger 为 false）。认不出的类型按「非数据、非泛型」处理。 */
+export function portCompatible(a: PortType, b: PortType): boolean {
+  if (a === b) return true
+  return (a === 'generic' && isDataPort(b)) || (b === 'generic' && isDataPort(a))
+}
+
+/** 端口生效类型表的 key：``节点:方向:端口``（见 :func:`effectivePortTypes`）。 */
+export function portEffKey(nodeId: string, direction: 'in' | 'out', portId: string): string {
+  return `${nodeId}:${direction}:${portId}`
+}
+
+/**
+ * 每个端口的**生效类型**（泛型端口「接什么显什么」）：
+ *
+ * * 非 generic 端口 = 自身声明的类型；
+ * * generic 端口按优先级取：① 自己接的边（**输入**取连进来那条边的源端口生效类型，
+ *   **输出**取连出去那条边的目标端口生效类型）；② 没接到具体类型时看**透传对**
+ *   （``tie`` 指向同一节点另一侧的端口）—— 输入没接线但输出接了，输入显示输出的类型，
+ *   反之亦然，两端永远一致；③ 都没有就还是 generic。对方是 generic 就顺着继续追
+ *   （同一端口不重复展开，环直接兜底 generic）。
+ *
+ * 由父组件按 ``edges`` 变化用 memo 算一次，连线层直接拿这个 Map 用。**卡片别直接拿它当
+ * prop** —— 它的引用随 ``graph.nodes`` 变（改一下 config 就算），Map 换新引用会让 memo
+ * 化的卡片整片重渲染；卡片侧改传「本节点的签名字符串」（按值比较，见 ``WorkflowEditor``
+ * 的 ``effSigByNode``），只有自己那几个端口的类型真变了才重渲染。
+ */
+export function effectivePortTypes(
+  nodeById: Map<string, WorkflowNode>,
+  edges: WorkflowEdge[],
+): Map<string, string> {
+  const byIn = new Map<string, WorkflowEdge[]>()
+  const byOut = new Map<string, WorkflowEdge[]>()
+  for (const edge of edges) {
+    const inKey = portEffKey(edge.target, 'in', edge.targetPort || DEFAULT_PORT)
+    const outKey = portEffKey(edge.source, 'out', edge.sourcePort || DEFAULT_PORT)
+    const push = (map: Map<string, WorkflowEdge[]>, key: string) => {
+      const list = map.get(key)
+      if (list) list.push(edge)
+      else map.set(key, [edge])
+    }
+    push(byIn, inKey)
+    push(byOut, outKey)
+  }
+
+  const memo = new Map<string, string>()
+  const resolving = new Set<string>()
+
+  const portSpec = (
+    nodeId: string,
+    direction: 'in' | 'out',
+    portId: string,
+  ): PortSpec | null => {
+    const node = nodeById.get(nodeId)
+    if (!node) return null
+    const ports = nodeDef(node.type, node.config)[direction === 'in' ? 'inputs' : 'outputs']
+    return ports.find((p) => p.id === portId) ?? null
+  }
+
+  const resolve = (nodeId: string, direction: 'in' | 'out', portId: string): string => {
+    const key = portEffKey(nodeId, direction, portId)
+    const hit = memo.get(key)
+    if (hit !== undefined) return hit
+    if (resolving.has(key)) return 'generic' // 环：顺着追到原地，兜底不展开
+    resolving.add(key)
+    const spec = portSpec(nodeId, direction, portId)
+    let result = spec?.type ?? 'generic'
+    if (result === 'generic') {
+      // ① 自己接的边：另一端是具体类型就跟着它
+      for (const edge of (direction === 'in' ? byIn.get(key) : byOut.get(key)) ?? []) {
+        const other =
+          direction === 'in'
+            ? resolve(edge.source, 'out', edge.sourcePort || DEFAULT_PORT)
+            : resolve(edge.target, 'in', edge.targetPort || DEFAULT_PORT)
+        if (other !== 'generic') {
+          result = other
+          break
+        }
+      }
+      // ② 没接到具体类型：透传对 —— 看同一节点另一侧的配对端口（tie），输入输出保持一致
+      if (result === 'generic' && spec?.tie) {
+        const other = resolve(nodeId, direction === 'in' ? 'out' : 'in', spec.tie)
+        if (other !== 'generic') result = other
+      }
+    }
+    memo.set(key, result)
+    resolving.delete(key)
+    return result
+  }
+
+  // 所有端口都解析（不只是有边的）：透传对的另一侧没接线也得算出来（输入没接、输出接了时
+  // 输入也要显示输出那边定下的类型）。memo 化，重复 resolve 直接命中。
+  for (const node of nodeById.values()) {
+    const def = nodeDef(node.type, node.config)
+    for (const p of def.inputs) resolve(node.id, 'in', p.id)
+    for (const p of def.outputs) resolve(node.id, 'out', p.id)
+  }
+  return memo
+}
+
 /** 面板图例用的端口类型清单：顺序就是后端 ``PORT_TYPES`` 的顺序。 */
 export function portTypeLegend(): PortTypeSpec[] {
   return Object.values(PORT_TYPES)
 }
 
-//: 节点面板的语义分组（与后端 NodeCategory 对齐）：顺序即显示顺序，标签是中文名
-export const CATEGORY_ORDER = [
-  'trigger',
-  'target',
-  'constant',
-  'action',
-  'control',
-  'data',
-  'end',
-] as const
+//: 面板分组：从后端目录的 ``categories`` 装进来（见 installCatalog）—— 后端从节点注册
+//: 自动收集分类（顺序 = 面板顺序，标签 = 后端 CATEGORY_LABELS 里的中文名），画布不再抄一份
+let CATEGORIES: NodeCategorySpec[] = []
 
-//: 分类显示名；后端给了但这里没有的分类（认不出的）归到最后「其它」组
-export const CATEGORY_LABELS: Record<string, string> = {
-  trigger: '触发',
-  target: '目标',
-  constant: '常量',
-  action: '动作',
-  control: '控制',
-  data: '数据',
-  end: '结束',
+/** 分类显示名：目录下发的 label；查不到（兜底组 / 后端没给）原样显示机器名。 */
+export function categoryLabel(name: string): string {
+  if (name === 'other') return '其它'
+  return CATEGORIES.find((c) => c.name === name)?.label ?? name
 }
 
-/** 按语义分类给面板项分组：返回「分类 -> 该项列表」，顺序按 CATEGORY_ORDER、组内按原序。 */
+/** 按语义分类给面板项分组：返回「分类 -> 该项列表」，顺序照目录下发的 ``categories``、
+ * 组内按原序；目录里没有的分类（后端新加、画布还没拉到）归到最后的「其它」组。 */
 export function groupByCategory(items: NodeTypeSpec[]): Array<[string, NodeTypeSpec[]]> {
   const buckets = new Map<string, NodeTypeSpec[]>()
   for (const item of items) {
-    const key = item.category && CATEGORY_LABELS[item.category] ? item.category : 'other'
+    const key = CATEGORIES.some((c) => c.name === item.category) ? item.category : 'other'
     const list = buckets.get(key) ?? []
     list.push(item)
     buckets.set(key, list)
   }
-  const order = [...CATEGORY_ORDER, ...(buckets.has('other') ? ['other'] : [])]
+  const order = [...CATEGORIES.map((c) => c.name), ...(buckets.has('other') ? ['other'] : [])]
   return order.flatMap((key) => (buckets.has(key) ? [[key, buckets.get(key)!] as [string, NodeTypeSpec[]]] : []))
 }
 
 //: 边没写端口时的口径：按「触发 -> 触发」读（与后端 graph.DEFAULT_EDGE_PORT 一致）
 export const DEFAULT_PORT = 'trigger'
 
-//: 节点配色（皮肤）：后端只给类型名与显示名，颜色由这里定
-const NODE_COLORS: Record<string, string> = {
-  start: '#22c55e',
-  end: '#ef4444',
-  log: '#3b82f6',
-  test: '#8b5cf6',
-  http: '#0ea5e9',
-  constant: '#eab308',
-  target: '#f59e0b',
-  delay: '#14b8a6',
-  json: '#f97316',
-  regex: '#ec4899',
-  now: '#84cc16',
-  condition: '#6366f1',
-  send: '#d946ef',
-  onebot: '#d946ef', // onebot 是 send 的别名（platform 恒 onebot），同色
-  operator: '#f59e0b',
-  cache: '#06b6d4',
-}
-
+//: 认不出的节点类型 / 后端没配色的兜底色
 const DEFAULT_COLOR = '#64748b'
 
 /** start 时间形态换色（面板上「开始」只有一个入口，节点按触发方式区分） */
@@ -172,6 +246,7 @@ const UNKNOWN_PORTS: PortSpec[] = [
 /** 装目录（编辑器加载时调一次），返回已按后端 order 排好的面板项列表。 */
 export function installCatalog(catalog: NodeCatalog): NodeTypeSpec[] {
   CATALOG = Object.fromEntries(catalog.nodes.map((item) => [item.type, item]))
+  CATEGORIES = catalog.categories
   PORT_TYPES = Object.fromEntries(catalog.port_types.map((item) => [item.type, item]))
   DEF_CACHE.clear() // 目录换了：推导结果全部作废
   return [...catalog.nodes].sort((a, b) => a.order - b.order)
@@ -184,8 +259,8 @@ export function installCatalog(catalog: NodeCatalog): NodeTypeSpec[] {
 const DEF_CACHE = new Map<string, NodeTypeDef>()
 
 /**
- * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序全部来自后端目录，前端只补颜色，
- * 并按 config 处理上面说的两个固有例外。
+ * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序 / 颜色全部来自后端目录（认不出的
+ * 类型用兜底色），并按 config 处理上面说的两个固有例外。
  */
 export function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
   // start 是唯一「形状随 config 变」的类型，把它那一项也进 key
@@ -223,7 +298,7 @@ function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTyp
   const base: NodeTypeDef = {
     type: spec.type,
     label: spec.label,
-    color: NODE_COLORS[spec.type] ?? DEFAULT_COLOR,
+    color: spec.color || DEFAULT_COLOR,
     defaults,
     inputs: spec.inputs,
     outputs: spec.outputs,
@@ -253,10 +328,11 @@ function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTyp
 /**
  * 哪些字段**有专门的编辑器**，通用渲染要跳过（不然会出现两个控件）。
  *
- * 目前只有 start 的 ``trigger``：改它得顺手增删 cron，不是单纯改一个值。
+ * 两个：start 的 ``trigger``（改它得顺手增删 cron，不是单纯改一个值）与 ``cron``
+ * （走 :mod:`common/CronPicker` 可视化选择 —— 手填表达式太容易写错）。
  */
 export function hasDedicatedEditor(nodeType: string, fieldName: string): boolean {
-  return nodeType === 'start' && fieldName === 'trigger'
+  return nodeType === 'start' && (fieldName === 'trigger' || fieldName === 'cron')
 }
 
 /** start 的触发方式选项同样来自后端目录；label 用一句人话解释，认不出的值原样显示。 */
@@ -350,16 +426,20 @@ export function edgeCoords(
   }
 }
 
-/** 连线颜色：取起点那个输出端口的类型色（认不出就淡灰）。 */
+/** 连线颜色：取起点那个输出端口的类型色（认不出就淡灰）。泛型端口带上
+ * ``effectivePortTypes`` 算的生效类型表就跟着变（接出去是什么就画什么色），不带则退回
+ * 声明类型（粘贴虚影那一路，半透明预览不需要跟随）。 */
 export function edgeColor(
   edge: WorkflowEdge,
   nodeById: Map<string, WorkflowNode>,
+  effTypes?: Map<string, string>,
 ): string {
   const srcNode = nodeById.get(edge.source)
   if (!srcNode) return 'var(--text-3)'
-  const port = nodeDef(srcNode.type, srcNode.config).outputs.find(
-    (p) => p.id === (edge.sourcePort ?? DEFAULT_PORT),
-  )
+  const outPort = edge.sourcePort ?? DEFAULT_PORT
+  const eff = effTypes?.get(portEffKey(edge.source, 'out', outPort))
+  if (eff) return portColor(eff)
+  const port = nodeDef(srcNode.type, srcNode.config).outputs.find((p) => p.id === outPort)
   return port ? portColor(port.type) : 'var(--text-3)'
 }
 

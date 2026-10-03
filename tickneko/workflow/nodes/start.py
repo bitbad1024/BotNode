@@ -86,6 +86,7 @@ def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
 @register_node(
     "start",
     label="开始",
+    color="#22c55e",
     order=10,
     role="start",
     category="trigger",
@@ -113,7 +114,7 @@ async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
 
     # 消息触发的消息是「外面送进来的」：调用方把它放在 ctx.trigger_data 里，这里原样从
     # message 出口送下去（消息源还没接，缺省就是空串）。target 出口同理：带会话定位
-    # （ChatTarget）下去给 target 节点 / send 节点用；装配层没放（定时触发 / 离线跑）就是
+    # （ChatTarget）下去给 send 节点用（回复触发它的会话）；装配层没放（定时触发 / 离线跑）就是
     # None —— 下游节点自己处理「没有 target」的分支。
     message = ctx.trigger_data.get("message", "")
     target = ctx.trigger_data.get("target")

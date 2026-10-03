@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request, status
 
+from tickneko.bots import BotTokenConflict
+
 from ...common.dependencies import trace_id_of
 from ...common.errors import ApiError, ErrorCode
 from ...common.models import ApiResponse, ErrorResponse
@@ -34,6 +36,15 @@ from .requests import AddBotRequest, SetBotEnabledRequest
 from .responses import BotData, IssuedBotData
 
 router = APIRouter(prefix="/bots", tags=["机器人管理"])
+
+
+def _conflict(exc: BotTokenConflict) -> ApiError:
+    """同一个令牌重复添加统一成 409（与工作流同名冲突同一口径）。"""
+    return ApiError(
+        ErrorCode.HTTP_ERROR,
+        str(exc),
+        status_code=status.HTTP_409_CONFLICT,
+    )
 
 
 async def _nicknames_of(users, owner_ids) -> dict[str, str]:  # type: ignore[no-untyped-def]
@@ -106,6 +117,10 @@ async def list_bots(
     summary="添加机器人",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "没登录"},
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": "同一个令牌 / Bot Token 已经添加过",
+        },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse, "description": "kook 没填 Bot Token"},
     },
 )
@@ -130,6 +145,9 @@ async def add_bot(
             remark=payload.remark,
             token=payload.token or None,
         )
+    except BotTokenConflict as exc:
+        # 同一个令牌再添加一次：409 说清楚（别把裸 IntegrityError 一路滑到 500）
+        raise _conflict(exc) from exc
     except ValueError as exc:
         # Kook 没配加密密钥这类「服务端没就绪」的问题：说清楚，别让 ValueError 一路滑到 500
         raise ApiError(

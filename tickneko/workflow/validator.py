@@ -29,6 +29,7 @@ from .models import (
     WorkflowGraph,
 )
 from .nodes.base import MISSING_DEFAULT, PortSpec
+from .nodes.port_types import port_types_compatible
 from .nodes.registry import get_spec, registered_types
 
 
@@ -477,7 +478,7 @@ def _port_wiring(graph: WorkflowGraph, reachable: set[str]) -> list[ValidationIs
         if (
             source_port is not None
             and target_port is not None
-            and source_port.type != target_port.type
+            and not port_types_compatible(source_port.type, target_port.type)
         ):
             issues.append(
                 ValidationIssue(
@@ -487,7 +488,10 @@ def _port_wiring(graph: WorkflowGraph, reachable: set[str]) -> list[ValidationIs
                         f"{edge.source}.{source_port.id}（{source_port.type}）接不到 "
                         f"{edge.target}.{target_port.id}（{target_port.type}）"
                     ),
-                    suggestion="数据端口（message）接数据端口，触发端口（trigger）接触发端口",
+                    suggestion=(
+                        "数据流端口接数据流端口，触发端口（trigger）接触发端口；"
+                        "泛型端口（generic）能接任意数据流端口、不接触发"
+                    ),
                 )
             )
         key = (edge.target, edge_target_port(edge))

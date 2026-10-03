@@ -17,6 +17,7 @@ from .registry import register_node
     role="end",
     max_outgoing=0,
     label="结束",
+    color="#ef4444",
     order=20,
     category="end",
     inputs=[TRIGGER_PORT],

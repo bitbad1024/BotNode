@@ -153,9 +153,9 @@ async def on_platform_event(event: PlatformEvent) -> None:
                 "chat": event.chat,
                 "chat_id": event.chat_id,
                 "message_id": event.message_id,
-                #: 会话定位（回程地址）：start 的 target 出口原样透给下游 target 节点 /
-                #: send 节点。workflow 只透传这个对象，不 import bridge 类型 —— 它认的是
-                #: 「有 platform 属性的东西」，路由键就够用了。没有会话指向的事件是 None。
+                #: 会话定位（回程地址）：start 的 target 出口原样透给下游 send 节点
+                #: （回复触发它的会话）。workflow 只透传这个对象，不 import bridge 类型 ——
+                #: 它认的是「有 platform 属性的东西」，路由键就够用了。没有会话指向的事件是 None。
                 "target": event.target,
             },
         )
@@ -263,7 +263,6 @@ async def run(
             version,
             workflows,
             scheduler,
-            onebot=_onebot_adapter,
             gateway=_gateway,
             **kw,
         )
@@ -285,11 +284,10 @@ async def run(
                 # 机器人管理服务（跨平台增 / 启停 / 删）：<prefix>/bots/* 那组接口用它
                 bots=bot_manager,
                 # 运行时触发器：拨工作流的运行开关时即时启停（不传是等下次启动才生效）；
-                # 带上 OneBot 适配器：onebot 节点要对归属连接发动作（登记构造的到点闭包也带）
+                # 带上平台总线：登记构造的到点闭包要能发动作
                 workflow_triggers=WorkflowTriggers(
                     workflows,
                     scheduler,
-                    onebot=_onebot_adapter,
                     gateway=_gateway,
                     message_router=_message_router,
                 ),
@@ -308,12 +306,10 @@ async def run(
 
     # 把**开着运行开关**的已发布工作流的触发登记就绪：定时触发登记到调度器、消息触发登记到
     # 消息路由，只登记、不执行图（到点 / 来消息才跑）。发布只挪指针、不执行图；跑不跑看开关，
-    # 运行期拨开关走接口层那个即时启停。带上 OneBot 适配器：onebot 节点要按工作流归属给在线
-    # 连接发动作（登记构造的到点闭包也带）。
+    # 运行期拨开关走接口层那个即时启停。带上平台总线：登记构造的到点闭包要能发动作。
     await load_published_workflows(
         workflows,
         scheduler,
-        onebot=_onebot_adapter,
         gateway=_gateway,
         message_router=_message_router,
     )

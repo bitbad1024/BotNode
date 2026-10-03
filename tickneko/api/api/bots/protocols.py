@@ -74,6 +74,7 @@ class BotsService(Protocol):
         """给 ``owner_id`` 签一个机器人；``token`` 是 Kook 用户自填的 Bot Token（OneBot 传 None 自动生成）。
 
         :raises ValueError: Kook 没给 token / 没配加密密钥等非法输入。
+        :raises BotTokenConflict: 这个令牌 / Bot Token 已经添加过了（路由层翻 409）。
         """
         ...
 

@@ -42,6 +42,7 @@ def validate_log_node(node: WorkflowNode) -> list[ValidationIssue]:
 @register_node(
     "log",
     label="写日志",
+    color="#3b82f6",
     order=40,
     category="data",
     # message 入口是数据端口（required：必须接线或手填）；同名字段是没接线时的字面量兜底

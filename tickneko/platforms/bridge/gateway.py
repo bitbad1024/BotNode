@@ -127,11 +127,11 @@ class Gateway:
         user_id: str = "",
         message_id: str = "",
     ) -> ChatTarget:
-        """从通用会话字段构造某平台的回程地址（画布手动填的 target 节点用它）。
+        """从通用会话字段构造某平台的回程地址（画布上手动构造会话定位的 ``pack`` 节点用它）。
 
         与 :meth:`reply` 同一条「按平台路由」的路：把字段交给 ``platform`` 那个适配器按它
         自己的口径转（OneBot 号转整数、Kook 原样字符串），调用方不碰平台字段。workflow 的
-        target 节点靠它（鸭子形状调 :attr:`~tickneko.workflow.nodes.base.NodeExecutionContext.
+        ``pack`` 节点靠它（鸭子形状调 :attr:`~tickneko.workflow.nodes.base.NodeExecutionContext.
         gateway`，不 import bridge 类型）。
 
         :raises ConnectionError: 没注册这个平台（与 :meth:`send` / :meth:`reply` 同口径）。

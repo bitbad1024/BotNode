@@ -1,4 +1,4 @@
-"""测试 / 调试节点：把入口送来的值回显到日志，再从自己的出口送下去。
+"""调试节点：把入口送来的值**回显**到日志，再从自己的出口送下去。
 
 它两头都有端口，所以常用在中间「看一眼线上到底流过了什么」：上游连到 ``message`` 入口，
 自己的 ``message`` 出口再接给下游。
@@ -17,7 +17,8 @@ from .registry import register_node
 
 @register_node(
     "test",
-    label="测试",
+    label="调试",
+    color="#8b5cf6",
     order=50,
     category="data",
     inputs=[TRIGGER_PORT, PortSpec("message", "message", "回显内容")],

@@ -77,7 +77,6 @@ def make_trigger(
     store: SqlWorkflowStore,
     scheduler: TaskManager,
     *,
-    onebot: Any | None = None,
     gateway: Any | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """构造到点触发回调：重新加载版本图并执行整条流程。
@@ -85,15 +84,12 @@ def make_trigger(
     每次触发都重新加载该版本的图跑一遍。开始节点在这一趟**不再动调度器**（任务在它触发之前
     就已经排好了下一次），所以不会因为重复触发而在调度器里堆积任务。
 
-    ``onebot``（OneBot 服务端，可选）与 ``gateway``（平台总线，可选）在这里就得带上：调度器
-    到点执行的是**这一趟构造的闭包**，错过这儿后面没机会再补（见
-    :func:`register_published_workflow`）。
+    ``gateway``（平台总线，可选）在这里就得带上：调度器到点执行的是**这一趟构造的闭包**，
+    错过这儿后面没机会再补（见 :func:`register_published_workflow`）。
     """
 
     async def trigger() -> None:
-        await run_published_workflow(
-            workflow_id, version, store, scheduler, onebot=onebot, gateway=gateway
-        )
+        await run_published_workflow(workflow_id, version, store, scheduler, gateway=gateway)
 
     return trigger
 
@@ -104,7 +100,6 @@ async def run_published_workflow(
     store: SqlWorkflowStore,
     scheduler: TaskManager,
     *,
-    onebot: Any | None = None,
     gateway: Any | None = None,
     trigger_data: Mapping[str, Any] | None = None,
     user_id: str = "",
@@ -112,9 +107,8 @@ async def run_published_workflow(
     """加载指定版本的图并**执行整条流程**；到点 / 消息回调都走它。
 
     启动载入**不走这里** —— 那一步只登记触发、不执行图，见
-    :func:`register_published_workflow`。``onebot`` 从这里注进节点上下文：``onebot``
-    节点靠它发动作（挑连接的归属 ``ctx.owner_id`` 来自定义表）；``gateway``（平台总线）
-    同样注进 ``ctx.gateway``，``send`` 节点靠它按平台路由发动作。
+    :func:`register_published_workflow`。``gateway``（平台总线）从这里注进 ``ctx.gateway``，
+    ``send`` 节点靠它按平台路由发动作。
 
     ``trigger_data`` / ``user_id`` 是**消息触发**这一趟的入口：``trigger_data`` 进
     ``ctx.trigger_data``（start 的 message 端口从它取 ``message``），``user_id`` 是发消息
@@ -124,7 +118,7 @@ async def run_published_workflow(
     归属先读出来：这一趟的每条日志都挂在**这条流的主人**名下（与 ``ctx.owner_id`` 同一个
     出处），日志页里按人筛得到、也追得到责 —— 记成公共的话，谁的流在跑都看不出来。
     """
-    # 归属（定义表的 owner_id）：onebot 节点按它挑「谁的」连接，日志按它认主人
+    # 归属（定义表的 owner_id）：日志按它认主人（与 ctx.owner_id 同一个出处）
     definition = await store.get(workflow_id)
     owner_id: str = definition.owner_id if definition is not None else ""
     log: BoundLogger = _log().bind(workflow_id=workflow_id, owner_id=owner_id)
@@ -136,7 +130,7 @@ async def run_published_workflow(
 
     graph = record.graph()
     # 到点回调：这个版本下次再到点，还是从这儿跑一遍（与本次同一个入口）
-    trigger = make_trigger(workflow_id, version, store, scheduler, onebot=onebot, gateway=gateway)
+    trigger = make_trigger(workflow_id, version, store, scheduler, gateway=gateway)
     # 执行那一趟（register_triggers 缺省 False）：开始节点不碰调度器，它自己排下一次
     ctx = NodeExecutionContext(
         scheduler=scheduler,
@@ -144,7 +138,6 @@ async def run_published_workflow(
         workflow_id=workflow_id,
         owner_id=owner_id,
         user_id=user_id,
-        onebot=onebot,
         gateway=gateway,
     )
     if trigger_data is not None:
@@ -180,7 +173,6 @@ async def register_published_workflow(
     store: SqlWorkflowStore,
     scheduler: TaskManager,
     *,
-    onebot: Any | None = None,
     gateway: Any | None = None,
     message_router: MessageRouter | None = None,
 ) -> int:
@@ -196,10 +188,9 @@ async def register_published_workflow(
     这是**登记那一趟**（``ctx.register_triggers=True``）：加 / 摘任务只在这儿发生；真正整图
     执行（cron 到点走 :func:`run_published_workflow`）那一趟不碰调度器，它自己会排下一次。
 
-    ``onebot``（OneBot 服务端，可选）要在这里就带上：交给调度器的到点回调是**这一趟构造
-    的**（``make_trigger`` 闭包），到点执行那一趟没机会再补。``gateway``（平台总线，可选）
-    同理：``send`` 节点到点执行那一趟也要能拿得到它。``message_router``（可选）同样要在这里
-    就带上：消息触发的登记 / 摘除也发生在这一趟，错过就没人给它登记了。
+    ``gateway``（平台总线，可选）要在这里就带上：交给调度器的到点回调是**这一趟构造
+    的**（``make_trigger`` 闭包），到点执行那一趟没机会再补。``message_router``（可选）
+    同样要在这里就带上：消息触发的登记 / 摘除也发生在这一趟，错过就没人给它登记了。
 
     与执行那条路一个口径：归属先读出来，日志都挂在流的**主人**名下（``owner_id``），
     节点上下文也带同一份（见 :meth:`NodeExecutionContext.owner_id`）。
@@ -221,12 +212,11 @@ async def register_published_workflow(
     # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
         scheduler=scheduler,
-        run=make_trigger(workflow_id, version, store, scheduler, onebot=onebot, gateway=gateway),
+        run=make_trigger(workflow_id, version, store, scheduler, gateway=gateway),
         workflow_id=workflow_id,
         register_triggers=True,
         multi_instance=definition.multi_instance if definition is not None else False,
         owner_id=owner_id,
-        onebot=onebot,
         gateway=gateway,
     )
     primed = 0
@@ -391,10 +381,9 @@ class WorkflowTriggers:
     传进 ``create_app(workflow_triggers=...)``。没传的场合（直接 ``create_app`` 的测试 / 示例）
     开关照样落库，只是生效点在下次启动载入。
 
-    ``onebot``（OneBot 服务端，可选）装配时给：拨开关即时生效走的是这儿的登记，登记构造的
-    到点闭包要带上它（见 :func:`make_trigger`）。``gateway``（平台总线，可选）同理：
-    ``send`` 节点到点执行那一趟也要能拿得到它。``message_router``（可选）同理：消息触发的
-    登记 / 摘除也走这儿。
+    ``gateway``（平台总线，可选）装配时给：拨开关即时生效走的是这儿的登记，登记构造的
+    到点闭包要带上它（见 :func:`make_trigger`），``send`` 节点到点执行那一趟也要能拿得到它。
+    ``message_router``（可选）同理：消息触发的登记 / 摘除也走这儿。
     """
 
     def __init__(
@@ -402,13 +391,11 @@ class WorkflowTriggers:
         store: SqlWorkflowStore,
         scheduler: TaskManager,
         *,
-        onebot: Any | None = None,
         gateway: Any | None = None,
         message_router: MessageRouter | None = None,
     ) -> None:
         self._store: SqlWorkflowStore = store
         self._scheduler: TaskManager = scheduler
-        self._onebot: Any | None = onebot
         self._gateway: Any | None = gateway
         self._message_router: MessageRouter | None = message_router
 
@@ -419,7 +406,6 @@ class WorkflowTriggers:
             version,
             self._store,
             self._scheduler,
-            onebot=self._onebot,
             gateway=self._gateway,
             message_router=self._message_router,
         )
@@ -439,7 +425,6 @@ async def load_published_workflows(
     store: SqlWorkflowStore,
     scheduler: TaskManager,
     *,
-    onebot: Any | None = None,
     gateway: Any | None = None,
     message_router: MessageRouter | None = None,
     page_size: int = 500,
@@ -460,9 +445,8 @@ async def load_published_workflows(
     跑、可能并发保存暂存区（会改 ``updated_at``、把行挪到另一页），因此对同一 id 只登记一次
     —— 重复登记无害，漏掉才致命。
 
-    ``onebot``（OneBot 服务端，可选）由装配层传进来，跟着登记一起进到点闭包（见
-    :func:`make_trigger`）；没接 OneBot 的场合不传，``onebot`` 节点跑到时当场报错。
-    ``gateway``（平台总线，可选）同理跟着进到点闭包，``send`` 节点靠它发动作。
+    ``gateway``（平台总线，可选）由装配层传进来，跟着登记一起进到点闭包（见
+    :func:`make_trigger`）；``send`` 节点靠它发动作。
 
     日志：开头一条「开始载入」，结尾一条「载入完成」带各档条数（扫过多少、登记了哪些、开关
     关着跳过了多少、登记到几个开始节点）—— **一条都没登记也照记**，好把「载入跑过了，只是
@@ -500,7 +484,6 @@ async def load_published_workflows(
                     definition.published_version,
                     store,
                     scheduler,
-                    onebot=onebot,
                     gateway=gateway,
                     message_router=message_router,
                 )

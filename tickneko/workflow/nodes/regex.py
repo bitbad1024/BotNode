@@ -120,6 +120,7 @@ def validate_regex_node(node: WorkflowNode) -> list[ValidationIssue]:
 @register_node(
     "regex",
     label="正则",
+    color="#ec4899",
     order=90,
     category="data",
     # text / pattern / replace 既是字段名也是数据入口：接线优先，没接线才用手填值

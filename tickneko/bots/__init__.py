@@ -18,12 +18,21 @@ from __future__ import annotations
 
 from .crypto import decrypt_token, derive_key, encrypt_token
 from .models import BotCredential, BotPlatform
-from .store import BotCredentialTable, IssuedBotCredential, SqlBotStore, hash_token
+from .store import (
+    BotCredentialTable,
+    BotError,
+    BotTokenConflict,
+    IssuedBotCredential,
+    SqlBotStore,
+    hash_token,
+)
 
 __all__ = [
     "BotCredential",
     "BotPlatform",
     "BotCredentialTable",
+    "BotError",
+    "BotTokenConflict",
     "IssuedBotCredential",
     "SqlBotStore",
     "hash_token",

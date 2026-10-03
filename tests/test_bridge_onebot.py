@@ -302,7 +302,7 @@ def test_make_target_builds_platform_target() -> None:
 
 
 async def test_send_without_online_connection_raises() -> None:
-    """环境问题当场抛：归属下没有在线连接（口径同 onebot 节点）。"""
+    """环境问题当场抛：归属下没有在线连接。"""
     async with served_adapter() as (gateway, _adapter, _inbox):
         with pytest.raises(ConnectionError, match="没有归属"):
             await gateway.send("onebot", "u-nobody", "send_private_msg", user_id=1, message="hi")

@@ -1,11 +1,8 @@
 /**
  * 节点面板（悬浮在画布左侧）：点一下直接添加，按住拖进画布则在松手处落子。
- *
- * 面板项与底部端口类型图例**全部来自后端目录**（见 :func:`catalog.installCatalog`）——
- * 顺序、中文名、语义分类、端口配色都在里面，前端只补节点颜色并按分类分组。
  */
 import {
-  CATEGORY_LABELS,
+  categoryLabel,
   groupByCategory,
   nodeDef,
   portTypeLegend,
@@ -28,7 +25,7 @@ export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
       <div className={styles.paletteTitle}>节点</div>
       {groups.map(([category, specs]) => (
         <div key={category} className={styles.paletteGroup}>
-          <div className={styles.paletteGroupTitle}>{CATEGORY_LABELS[category] ?? category}</div>
+          <div className={styles.paletteGroupTitle}>{categoryLabel(category)}</div>
           {specs.map((spec) => {
             const def = nodeDef(spec.type)
             return (
@@ -39,7 +36,10 @@ export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
                 onClick={(e) => onItemClick(e, spec.type)}
               >
                 <span className={styles.paletteDot} style={{ background: def.color }} />
-                {def.label}
+                {/* 装不下时省略（见 .paletteText），悬停看完整名字 */}
+                <span className={styles.paletteText} title={def.label}>
+                  {def.label}
+                </span>
               </button>
             )
           })}

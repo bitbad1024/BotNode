@@ -96,12 +96,13 @@
   height: 99999px;
 }
 
-/* 节点面板——悬浮左侧 */
+/* 节点面板——悬浮左侧。宽度**与画布节点卡同宽**（168）：面板项要装得下
+   「会话封装·OneBot」这类带平台的长名（13px 下约 101px），窄了会溢出按钮。 */
 .palette {
   position: absolute;
   top: 12px;
   left: 12px;
-  width: 150px;
+  width: 168px;
   max-height: calc(100% - 24px);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
@@ -156,6 +157,13 @@
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+/* 面板项文字：默认完整显示；真装不下（更长的名字）就省略，悬停看全名（见 title 属性） */
+.paletteText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 端口图例 */
@@ -272,7 +280,12 @@
   flex-shrink: 0;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 16%, transparent);
 }
+/* 卡片标题：完整显示；万一名字更长（将来的类型）就省略，悬停看全名（见 title 属性） */
 .nodeLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;

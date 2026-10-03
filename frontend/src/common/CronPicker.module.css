@@ -1,0 +1,136 @@
+/* cron 可视化选择器：模式下拉 + 随模式变化的参数（步长 / 时分 / 周几 / 几号）+ 结果预览。
+   窄面板（画布右侧配置栏）里也要放得下，所以一律小字号、能换行。 */
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+/* 一行参数：标签 + 控件，放不下自动换行 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.rowLabel {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* 下拉：与其它公共控件同一副皮（见 Pagination.module.css 的 .select） */
+.select {
+  padding: 5px 26px 5px 9px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background-color: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 52%,
+    calc(100% - 10px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.select:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 手输（自定义模式）：与下拉同高同圆角 */
+.input {
+  width: 100%;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 多选小按钮：周几 7 个一行放得下，几号 31 个自动折行 */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.chip {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.chip:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+.chipActive,
+.chipActive:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 预览：一句人话 + 生成的表达式（等宽，方便跟后端口径对） */
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.desc {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.expr {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}

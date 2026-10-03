@@ -7,7 +7,7 @@
       start.py           内置节点：start（图起点；trigger=time 时按 cron 登记调度器）
       end.py             内置节点：end（图终点）
       log.py             内置节点：log（按级别写业务日志）
-      test.py            内置节点：test（回显，画布联调用）
+      test.py            内置节点：test（调试：回显入口的值到日志，画布联调用）
       constant.py        内置节点：constant（一个节点一个常量值，从 value 端口送下去）
       http.py            内置节点：http（发一次 HTTP 请求，需要可选依赖 httpx）
       delay.py           内置节点：delay（异步等待：触发进 / 触发出，秒数可接线覆盖手填）
@@ -16,9 +16,9 @@
       now.py             内置节点：now（当前时间：strftime 格式文本 + Unix 时间戳）
       condition.py       内置节点：condition（条件分支：true / false 双出口，引擎按选中出口剪枝）
       send.py            内置节点：send（把 message 发到 target 指向的会话：去向走 target 值端口 + 内容端口，走 ctx.gateway.reply；没有 target 就不发，回执不成功不打断流程）
-      onebot.py          内置节点：onebot（send 的别名：同款输入 target+message，回执转老端口名 onebot_retcode / onebot_data）
       operator.py        内置节点：operator（算术：+ - * / %，结果文本化；算不出来送空串）
       cache.py           内置节点：cache（变量存取：get / set；作用域账号 / 图，前缀区分）
+      placeholder.py     内置节点：placeholder（占位：只透传不做事，参与画布理线）
 
 **数据沿连线走**：上游的输出端口 -> 下游的输入端口，值由执行引擎按边投递，没有全局变量。
 
@@ -55,6 +55,7 @@
 from __future__ import annotations
 
 from .base import (
+    CATEGORY_LABELS,
     MISSING_DEFAULT,
     NO_USER_ID,
     TRIGGER_PORT,
@@ -80,11 +81,12 @@ from .http import HTTP_METHODS, exec_http
 from .json import exec_json
 from .log import LOG_LEVELS, exec_log
 from .now import exec_now
-from .onebot import exec_onebot
 from .operator import exec_operator
+from .pack import exec_pack_kook, exec_pack_onebot
+from .placeholder import exec_placeholder
 from .regex import exec_regex
 from .send import exec_send
-from .target import exec_target
+from .unpack import exec_unpack_kook, exec_unpack_onebot
 from .registry import (
     declare_node_type,
     get_executor,
@@ -111,6 +113,7 @@ __all__ = [
     "NodeSpec",
     "NodeRole",
     "NodeCategory",
+    "CATEGORY_LABELS",
     "NodeConfigValidator",
     "ConfigField",
     "PortSpec",
@@ -146,9 +149,12 @@ __all__ = [
     "exec_regex",
     "exec_now",
     "exec_condition",
-    "exec_onebot",
     "exec_send",
-    "exec_target",
+    "exec_unpack_onebot",
+    "exec_unpack_kook",
+    "exec_pack_onebot",
+    "exec_pack_kook",
+    "exec_placeholder",
     "exec_operator",
     "exec_cache",
 ]
