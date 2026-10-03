@@ -97,6 +97,33 @@ NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]
 #: set（数据流）传**集合**容器（Python ``set``，元素不重复，去重逻辑由产出节点负责）
 PortType = Literal["trigger", "message", "target", "list", "dict", "set"]
 
+
+@dataclass(frozen=True)
+class PortTypeDef:
+    """一种端口类型的展示信息：画布图例 / 端口配色 / 「是否数据端口」全从它来。
+
+    目录接口 ``port_types`` 把它下发给前端 —— 加端口类型只改下面的 :data:`PORT_TYPES`，
+    画布不用动。``data=True`` 表示沿边送值（message / target / list / dict / set），
+    ``data=False`` 只表达先后（trigger）。
+    """
+
+    type: str
+    label: str
+    color: str
+    data: bool = True
+
+
+#: 端口类型定义表（顺序即目录接口里 ``port_types`` 的顺序）。
+#: 画布配色 / 图例 / 数据流语义都跟着它走，别在前端再抄一份。
+PORT_TYPES: dict[str, PortTypeDef] = {
+    "trigger": PortTypeDef("trigger", "触发（控制流）", "#22c55e", data=False),
+    "message": PortTypeDef("message", "消息（数据流）", "#3b82f6"),
+    "target": PortTypeDef("target", "会话定位（target）", "#f59e0b"),
+    "list": PortTypeDef("list", "列表（数据流）", "#a855f7"),
+    "dict": PortTypeDef("dict", "字典（数据流）", "#06b6d4"),
+    "set": PortTypeDef("set", "集合（数据流）", "#ec4899"),
+}
+
 #: 「字段没有声明默认值」的哨兵（None 也是合法默认值，不能拿 None 当缺省标记）
 MISSING_DEFAULT: Any = object()
 

@@ -8,15 +8,19 @@
  *   ——卡片尺寸与连线端点，渲染与命中判定共用同一套口径；
  * * 杂项工具（``uid`` / ``truncate`` / ``normalizeGraph`` …）。
  *
- * 节点类型**不在前端定义**：后端给什么就画什么，认不出的类型只给一对触发口兜底（保存时会被
- * ``UNKNOWN_NODE_TYPE`` 拦下）。这里只留两样前端自己的东西：颜色（皮肤）与两个**固有例外**
- * （``start`` 的端口随 ``config.trigger`` 变；``constant`` 的常量就是它的 config 本身）。
+ * 节点类型与**端口类型**都不在前端定义：后端给什么就画什么，认不出的节点类型只给一对触发口
+ * 兜底（保存时会被 ``UNKNOWN_NODE_TYPE`` 拦下）、认不出的端口类型一律淡灰。这里只留前端
+ * 自己的东西：节点颜色（皮肤）、运行时端口类型表（由 ``installCatalog`` 从目录的 ``port_types``
+ * 装进来）与两个**固有例外**（``start`` 的端口随 ``config.trigger`` 变；``constant`` 的常量
+ * 就是它的 config 本身）。
  */
 import {
   type NodeFieldSpec,
   type NodePortSpec,
   type NodeTypeSpec,
+  type NodeCatalog,
   type PortType,
+  type PortTypeSpec,
   type ValidationIssue,
   type ValidationReport,
   type WorkflowEdge,
@@ -28,7 +32,9 @@ export type {
   NodeFieldSpec,
   NodePortSpec,
   NodeTypeSpec,
+  NodeCatalog,
   PortType,
+  PortTypeSpec,
   ValidationIssue,
   ValidationReport,
 }
@@ -58,13 +64,26 @@ export interface NodeTypeDef {
   fields: NodeFieldSpec[]
 }
 
-export const PORT_COLORS: Record<PortType, string> = {
-  trigger: '#22c55e',
-  message: '#3b82f6',
-  target: '#f59e0b',
-  list: '#a855f7',
-  dict: '#06b6d4',
-  set: '#ec4899',
+//: 端口类型表：从后端目录的 ``port_types`` 装进来（见 installCatalog）。
+//: 加端口类型只改后端 —— 配色 / 图例 / 数据流语义都跟着它走，前端不再抄一份。
+let PORT_TYPES: Record<string, PortTypeSpec> = {}
+
+//: 认不出的端口类型的兜底色（目录没装 / 后端新加的类型画布还没拉到）
+const PORT_FALLBACK_COLOR = '#94a3b8'
+
+/** 端口类型配色：认不出（目录没装 / 后端新加）一律淡灰。 */
+export function portColor(type: string): string {
+  return PORT_TYPES[type]?.color ?? PORT_FALLBACK_COLOR
+}
+
+/** 是不是数据端口（沿边送值）：由后端 ``port_types`` 的 ``data`` 字段决定，trigger 为 false。 */
+export function isDataPort(type: string): boolean {
+  return PORT_TYPES[type]?.data ?? false
+}
+
+/** 面板图例用的端口类型清单：顺序就是后端 ``PORT_TYPES`` 的顺序。 */
+export function portTypeLegend(): PortTypeSpec[] {
+  return Object.values(PORT_TYPES)
 }
 
 //: 节点面板的语义分组（与后端 NodeCategory 对齐）：顺序即显示顺序，标签是中文名
@@ -151,10 +170,11 @@ const UNKNOWN_PORTS: PortSpec[] = [
 ]
 
 /** 装目录（编辑器加载时调一次），返回已按后端 order 排好的面板项列表。 */
-export function installCatalog(nodes: NodeTypeSpec[]): NodeTypeSpec[] {
-  CATALOG = Object.fromEntries(nodes.map((item) => [item.type, item]))
+export function installCatalog(catalog: NodeCatalog): NodeTypeSpec[] {
+  CATALOG = Object.fromEntries(catalog.nodes.map((item) => [item.type, item]))
+  PORT_TYPES = Object.fromEntries(catalog.port_types.map((item) => [item.type, item]))
   DEF_CACHE.clear() // 目录换了：推导结果全部作废
-  return [...nodes].sort((a, b) => a.order - b.order)
+  return [...catalog.nodes].sort((a, b) => a.order - b.order)
 }
 
 /**
@@ -340,7 +360,7 @@ export function edgeColor(
   const port = nodeDef(srcNode.type, srcNode.config).outputs.find(
     (p) => p.id === (edge.sourcePort ?? DEFAULT_PORT),
   )
-  return port ? PORT_COLORS[port.type] : 'var(--text-3)'
+  return port ? portColor(port.type) : 'var(--text-3)'
 }
 
 // --------------------------------------------------------------------------- 工具

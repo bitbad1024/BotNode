@@ -7,9 +7,10 @@
  */
 import { IconTrash } from '../../../common/icons'
 import {
-  PORT_COLORS,
   TRIGGER_LABELS,
   hasDedicatedEditor,
+  isDataPort,
+  portColor,
   triggerOptionsOf,
   type NodeTypeDef,
   type ValidationReport,
@@ -64,10 +65,10 @@ export function Inspector({
                     <span
                       className={styles.portInfoItem}
                       key={p.id}
-                      style={{ color: PORT_COLORS[p.type] }}
+                      style={{ color: portColor(p.type) }}
                     >
                       ● {p.label}（{p.type}）
-                      {p.type === 'message' ? (connected ? ' · 已接线' : ' · 未接线') : ''}
+                      {isDataPort(p.type) ? (connected ? ' · 已接线' : ' · 未接线') : ''}
                       {p.required && !connected ? ' · 必填！' : ''}
                     </span>
                   )
@@ -78,7 +79,7 @@ export function Inspector({
               <div className={styles.portInfoSection}>
                 <span className={styles.portInfoLabel}>输出</span>
                 {def.outputs.map((p) => (
-                  <span className={styles.portInfoItem} key={p.id} style={{ color: PORT_COLORS[p.type] }}>
+                  <span className={styles.portInfoItem} key={p.id} style={{ color: portColor(p.type) }}>
                     ● {p.label}（{p.type}）
                   </span>
                 ))}

@@ -8,6 +8,7 @@ from pydantic import Field
 from ...common.models import _Frozen
 from tickneko.workflow import (
     MISSING_DEFAULT,
+    PORT_TYPES,
     ConfigField,
     NodeSpec,
     PortSpec,
@@ -136,17 +137,41 @@ class NodeTypeData(_Frozen):
         )
 
 
+class NodePortTypeData(_Frozen):
+    """一种端口类型的展示信息：画布的端口配色 / 面板图例 / 数据流语义都从它来。
+
+    ``data=true`` 表示沿边送值（message / target / list / dict / set）；``false`` 只表达
+    先后（trigger）。前端**不再自己抄一份端口类型表** —— 加类型只改后端
+    :data:`tickneko.workflow.PORT_TYPES`，画布自动跟着变。
+    """
+
+    type: str
+    label: str
+    color: str
+    data: bool
+
+
 class NodeCatalogData(_Frozen):
     """节点目录：**后端注册了什么，画布就显示什么**（面板顺序按 ``order``）。"""
 
     nodes: list[NodeTypeData] = Field(default_factory=list)
+    port_types: list[NodePortTypeData] = Field(default_factory=list)
 
     @classmethod
     def from_registry(cls) -> NodeCatalogData:
         specs = [get_spec(node_type) for node_type in registered_types()]
         nodes = [NodeTypeData.from_spec(spec) for spec in specs if spec is not None]
         nodes.sort(key=lambda item: (item.order, item.type))
-        return cls(nodes=nodes)
+        port_types = [
+            NodePortTypeData(
+                type=item.type,
+                label=item.label,
+                color=item.color,
+                data=item.data,
+            )
+            for item in PORT_TYPES.values()
+        ]
+        return cls(nodes=nodes, port_types=port_types)
 
 
 class WorkflowData(_Frozen):

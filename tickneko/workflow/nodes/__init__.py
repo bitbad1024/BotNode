@@ -56,6 +56,7 @@ from __future__ import annotations
 from .base import (
     MISSING_DEFAULT,
     NO_USER_ID,
+    PORT_TYPES,
     TRIGGER_PORT,
     ConfigField,
     NodeCategory,
@@ -68,6 +69,7 @@ from .base import (
     NodeSpec,
     PortSpec,
     PortType,
+    PortTypeDef,
     input_value,
 )
 from .cache import exec_cache
@@ -114,6 +116,8 @@ __all__ = [
     "ConfigField",
     "PortSpec",
     "PortType",
+    "PortTypeDef",
+    "PORT_TYPES",
     "TRIGGER_PORT",
     "MISSING_DEFAULT",
     "NO_USER_ID",

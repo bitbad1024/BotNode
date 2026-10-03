@@ -3217,6 +3217,22 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     nodes = {item["type"]: item for item in payload["nodes"]}
     assert set(nodes) == set(registered_types())  # 注册了什么就有什么
 
+    # 端口类型也随目录下发：画布的端口配色 / 图例 / 数据流语义都从这儿来，前端不再抄一份
+    port_types = {item["type"]: item for item in payload["port_types"]}
+    assert [item["type"] for item in payload["port_types"]] == [
+        "trigger",
+        "message",
+        "target",
+        "list",
+        "dict",
+        "set",
+    ]
+    assert port_types["trigger"]["data"] is False  # 控制流：只表达先后
+    assert port_types["trigger"]["label"] == "触发（控制流）"
+    for port_type in ("message", "target", "list", "dict", "set"):
+        assert port_types[port_type]["data"] is True  # 数据流：沿边送值
+        assert port_types[port_type]["color"]  # 每种类型都带配色
+
     http = nodes["http"]
     assert http["label"] == "HTTP"
     assert http["role"] == "normal"
