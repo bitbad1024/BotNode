@@ -2,6 +2,7 @@
 
     nodes/
       base.py            契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / 运行时上下文
+      port_types.py      端口类型定义表（唯一常改的地方：画布配色 / 图例 / 数据流语义都从它来）
       registry.py        注册表：register_node / declare_node_type / get_spec / load_node_modules
       start.py           内置节点：start（图起点；trigger=time 时按 cron 登记调度器）
       end.py             内置节点：end（图终点）
@@ -67,10 +68,10 @@ from .base import (
     NodeRole,
     NodeSpec,
     PortSpec,
-    PortType,
     input_value,
 )
 from .cache import exec_cache
+from .port_types import PORT_TYPES, PortType, PortTypeDef
 from .condition import exec_condition
 from .constant import exec_constant
 from .delay import exec_delay
@@ -114,6 +115,8 @@ __all__ = [
     "ConfigField",
     "PortSpec",
     "PortType",
+    "PortTypeDef",
+    "PORT_TYPES",
     "TRIGGER_PORT",
     "MISSING_DEFAULT",
     "NO_USER_ID",

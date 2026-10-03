@@ -51,7 +51,6 @@ import { Palette } from './editor/Palette'
 import { Toolbar } from './editor/Toolbar'
 import {
   NODE_W,
-  PORT_COLORS,
   edgeCurve,
   emptyGraph,
   installCatalog,
@@ -61,6 +60,7 @@ import {
   nodeHeight,
   normalizeGraph,
   portAbsPos,
+  portColor,
   uid,
   wiredPortsByNode,
   type Point,
@@ -243,7 +243,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     setCatalogFailed(false)
     try {
       const { data } = await fetchNodeCatalog()
-      setPalette(installCatalog(data.nodes))
+      setPalette(installCatalog(data))
     } catch {
       setCatalogFailed(true)
     }
@@ -875,7 +875,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (!start) return null
     return {
       path: edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y),
-      color: PORT_COLORS[conn.portType],
+      color: portColor(conn.portType),
     }
   }, [connectCursor, nodeById, positions])
 

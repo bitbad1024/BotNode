@@ -1,10 +1,16 @@
 /**
  * 节点面板（悬浮在画布左侧）：点一下直接添加，按住拖进画布则在松手处落子。
  *
- * 面板项**全部来自后端目录**（顺序、中文名与语义分类都在里面，见 :func:`catalog.installCatalog`），
- * 前端只补颜色并按分类分组；底部是端口类型的图例。
+ * 面板项与底部端口类型图例**全部来自后端目录**（见 :func:`catalog.installCatalog`）——
+ * 顺序、中文名、语义分类、端口配色都在里面，前端只补节点颜色并按分类分组。
  */
-import { PORT_COLORS, CATEGORY_LABELS, groupByCategory, nodeDef, type NodeTypeSpec } from './catalog'
+import {
+  CATEGORY_LABELS,
+  groupByCategory,
+  nodeDef,
+  portTypeLegend,
+  type NodeTypeSpec,
+} from './catalog'
 import styles from '../WorkflowEditor.module.css'
 
 export interface PaletteProps {
@@ -41,18 +47,12 @@ export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
       ))}
       <div className={styles.legend}>
         <div className={styles.legendTitle}>端口类型</div>
-        <div className={styles.legendRow}>
-          <span className={styles.legendDot} style={{ background: PORT_COLORS.trigger }} />
-          触发（控制流）
-        </div>
-        <div className={styles.legendRow}>
-          <span className={styles.legendDot} style={{ background: PORT_COLORS.message }} />
-          消息（数据流）
-        </div>
-        <div className={styles.legendRow}>
-          <span className={styles.legendDot} style={{ background: PORT_COLORS.target }} />
-          会话定位（target）
-        </div>
+        {portTypeLegend().map((portType) => (
+          <div className={styles.legendRow} key={portType.type}>
+            <span className={styles.legendDot} style={{ background: portType.color }} />
+            {portType.label}
+          </div>
+        ))}
       </div>
     </aside>
   )

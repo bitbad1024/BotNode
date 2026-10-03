@@ -70,7 +70,8 @@ store ──────────────► models
 
 > **数据沿连线走，没有全局变量**：节点从自己的**输入端口**拿到上游送来的值（引擎按边投递，
 > 键 = 目标端口名），把产出放在**输出端口**上（执行函数返回值的键 = 端口 id）。
-> `message` 类型端口送值、`trigger` 类型端口只表达先后；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
+> `trigger` 类型端口只表达先后；其余类型（`message` / `target` / `list` / `dict` / `set`，
+> 见 `nodes/port_types.py` 的 `PORT_TYPES`）都送值；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
 >
 > 边没写端口时按 `trigger` 读（`graph.DEFAULT_EDGE_PORT`）：这类边只表达顺序、不送值。
 
@@ -283,6 +284,8 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
   键名 —— 改端口等于改「这张图还能不能跑」（以前端口只是画布上的装饰）；
 - 输出端口用**带节点前缀**的名字（`http_status` / `http_body`、`dingtalk_sent`），别用 `result`、
   `data` 这种通用词：端口虽然是每个节点自己一份（不会互相覆盖），但下游连线时要一眼看出线上是什么；
+- 端口**类型**按内容选（`PORT_TYPES` 里那几种：`message` / `target` / `list` / `dict` / `set` 送值、
+  `trigger` 只表达先后），画布的端口配色、面板图例都跟着它走；
 - 数据入口用**普通名词**（`url` / `body` / `message`），并给同名字段留个手填兜底：画布会把
   「已接线 / 未接线」标出来，校验器只在「既没接线也没填」时才报 `INPUT_NOT_CONNECTED`；
 - **一个数据入口只允许一条入边**（`DUPLICATE_INPUT_EDGE`）：要合并多个上游，就先各自接到一个
@@ -359,11 +362,14 @@ async def exec_dingtalk(node, ctx): ...
 **⑤ 孤儿节点**：从 start 不可达的节点**一律放行**——类型未注册、config 缺失、自带环都不报错，
 保存可以、运行不跑。所以字段规则只对主流程（start 可达）上的节点生效。
 
-**⑥ 画布不自己定义节点**：编辑器启动时拉一次节点目录
+**⑥ 画布不自己定义节点 / 端口类型**：编辑器启动时拉一次节点目录
 （`GET <prefix>/workflows/node-types`，见 `api/workflow/router.py`），**面板项 / 中文名 /
-端口 / 配置表单全按注册表渲染** —— 加一个节点类型只改后端这一个文件，画布与接口都不用动。
+端口 / 配置表单全按注册表渲染**，**端口类型（有哪些、什么色、是不是数据流）也随目录的
+``port_types`` 下发**（见 `nodes/port_types.py` 的 `PORT_TYPES`）—— 加一个节点类型 / 端口类型
+只改后端，画布与接口都不用动。
 
-前端只留一样东西：**颜色**（皮肤，后端不管；认不出的类型用灰的）。
+前端只留一样东西：**节点颜色**（皮肤，后端不管；认不出的类型用灰的；端口类型配色
+认不出也一律淡灰）。
 
 还有一处**固有例外**（形状本来就随 config 变，不是「前端另有定义」）：`start` 的端口与卡片上
 的字段条随 `config.trigger` 变（时间触发的图里不显示 `message` 出口）。
@@ -412,7 +418,7 @@ async def test_my_node_outputs(...) -> None:
 ### 5.9 上线前自查
 
 - [ ] 类型在模块里注册上了（`get_spec("类型") is not None`；有执行函数再查 `get_executor`）
-- [ ] 端口声明齐了：数据入口 / 出口都是 `"message"` 类型，控制流用 `TRIGGER_PORT`；必填入口标 `required=True`
+- [ ] 端口声明齐了：控制流用 `TRIGGER_PORT`；数据入口 / 出口按内容选类型（`message` / `target` / `list` / `dict` / `set`，见 `PORT_TYPES`）；必填入口标 `required=True`
 - [ ] 返回值键 = 输出端口 id；取入口值用 `input_value`（别直接读 `ctx.inputs`，那会绕过「没接线用手填」的兜底）
 - [ ] config 字段规则在注册处声明齐了：必填的 `required=True`，有缺省的给 `default`
 - [ ] 类型专属校验（可选）：注册时挂 `validator`，配置写错在保存时就报

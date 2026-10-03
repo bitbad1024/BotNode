@@ -7,8 +7,20 @@ import { http } from '../../lib/http'
  * ``GET /workflows/node-types``（见下面的 fetchNodeCatalog）—— 加一个节点类型只改后端。
  * 所以 ``type`` 就是普通字符串：认不出的类型（旧图 / 扩展没装）画成灰色未知节点，
  * 保存时会被后端校验的 ``UNKNOWN_NODE_TYPE`` 挡下。
+ *
+ * 端口类型同理（``PortType`` 就是字符串）：有哪几种、每种什么色 / 是不是数据流，全由后端
+ * 目录的 ``port_types`` 下发（见下面的 PortTypeSpec / NodeCatalog），前端不再抄一份表。
  */
-export type PortType = 'trigger' | 'message' | 'target'
+export type PortType = string
+
+/** 一种端口类型的展示信息（目录接口 ``port_types`` 逐条下发）：
+ * ``data=true`` 沿边送值，``false`` 只表达先后（trigger）。 */
+export interface PortTypeSpec {
+  type: string
+  label: string
+  color: string
+  data: boolean
+}
 
 export interface WorkflowNode {
   id: string
@@ -91,6 +103,8 @@ export interface NodeTypeSpec {
 
 export interface NodeCatalog {
   nodes: NodeTypeSpec[]
+  /** 端口类型清单：端口配色 / 面板图例 / 数据流语义全从这儿来 */
+  port_types: PortTypeSpec[]
 }
 
 // --------------------------------------------------------------------------- 校验

@@ -12,9 +12,9 @@
 import { memo } from 'react'
 import {
   NODE_W,
-  PORT_COLORS,
   PORT_ROW_H,
   nodeDef,
+  portColor,
   truncate,
   type PortType,
   type ValidationIssue,
@@ -100,7 +100,7 @@ function NodeCardBase({
                       className={styles.portCircle}
                       style={{
                         left: -5,
-                        background: PORT_COLORS[inp.type],
+                        background: portColor(inp.type),
                         // 必填入口还没接线：红圈提醒（后端也会报 INPUT_NOT_CONNECTED）
                         ...(inp.required && !wired.has(inp.id)
                           ? { boxShadow: '0 0 0 3px rgba(239,68,68,.35)' }
@@ -129,7 +129,7 @@ function NodeCardBase({
                     <span
                       data-role="port"
                       className={styles.portCircle}
-                      style={{ right: -5, background: PORT_COLORS[out.type] }}
+                      style={{ right: -5, background: portColor(out.type) }}
                       onMouseDown={(e) => onPortMouseDown(e, node.id, out.id, out.type, 'out')}
                       onMouseUp={(e) => onPortMouseUp(e, node.id, out.id, out.type, 'out')}
                     />

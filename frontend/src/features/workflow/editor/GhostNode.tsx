@@ -4,7 +4,7 @@
  * 两处用它：Ctrl+V 的粘贴虚影（落子前先预览）与从节点库往画布拖的新节点虚影。
  * 只画样子（头部 + 端口），不接线也不响应事件 —— 落子由画布的左键负责。
  */
-import { NODE_W, PORT_COLORS, PORT_ROW_H, nodeDef, nodeHeight } from './catalog'
+import { NODE_W, PORT_ROW_H, nodeDef, nodeHeight, portColor } from './catalog'
 import styles from '../WorkflowEditor.module.css'
 
 export interface GhostNodeProps {
@@ -46,7 +46,7 @@ export function GhostNode({ type, config, left, top }: GhostNodeProps) {
                   <>
                     <span
                       className={styles.portCircle}
-                      style={{ left: -5, background: PORT_COLORS[inp.type] }}
+                      style={{ left: -5, background: portColor(inp.type) }}
                     />
                     <span className={styles.portLabel}>{inp.label}</span>
                   </>
@@ -58,7 +58,7 @@ export function GhostNode({ type, config, left, top }: GhostNodeProps) {
                     <span className={styles.portLabel}>{out.label}</span>
                     <span
                       className={styles.portCircle}
-                      style={{ right: -5, background: PORT_COLORS[out.type] }}
+                      style={{ right: -5, background: portColor(out.type) }}
                     />
                   </>
                 )}
