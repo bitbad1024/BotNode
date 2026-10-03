@@ -71,7 +71,7 @@ store ──────────────► models
 > **数据沿连线走，没有全局变量**：节点从自己的**输入端口**拿到上游送来的值（引擎按边投递，
 > 键 = 目标端口名），把产出放在**输出端口**上（执行函数返回值的键 = 端口 id）。
 > `trigger` 类型端口只表达先后；其余类型（`message` / `target` / `list` / `dict` / `set`，
-> 见 `nodes/base.py` 的 `PORT_TYPES`）都送值；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
+> 见 `nodes/port_types.py` 的 `PORT_TYPES`）都送值；边两端端口类型必须相同（见第 5.2 / 5.6 节）。
 >
 > 边没写端口时按 `trigger` 读（`graph.DEFAULT_EDGE_PORT`）：这类边只表达顺序、不送值。
 
@@ -365,7 +365,7 @@ async def exec_dingtalk(node, ctx): ...
 **⑥ 画布不自己定义节点 / 端口类型**：编辑器启动时拉一次节点目录
 （`GET <prefix>/workflows/node-types`，见 `api/workflow/router.py`），**面板项 / 中文名 /
 端口 / 配置表单全按注册表渲染**，**端口类型（有哪些、什么色、是不是数据流）也随目录的
-``port_types`` 下发**（见 `nodes/base.py` 的 `PORT_TYPES`）—— 加一个节点类型 / 端口类型
+``port_types`` 下发**（见 `nodes/port_types.py` 的 `PORT_TYPES`）—— 加一个节点类型 / 端口类型
 只改后端，画布与接口都不用动。
 
 前端只留一样东西：**节点颜色**（皮肤，后端不管；认不出的类型用灰的；端口类型配色
