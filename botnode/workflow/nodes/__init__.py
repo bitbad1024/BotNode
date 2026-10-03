@@ -73,6 +73,7 @@ from .base import (
 from .cache import exec_cache
 from .condition import exec_condition
 from .constant import exec_constant
+from .consume import exec_consume
 from .delay import exec_delay
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http
@@ -145,6 +146,7 @@ __all__ = [
     "exec_condition",
     "exec_onebot",
     "exec_send",
+    "exec_consume",
     "exec_target",
     "exec_operator",
     "exec_cache",
