@@ -111,6 +111,6 @@ CI 绿了再请人看。review 里被要求改的话，直接在原分支追加�
 
 ## 8. 许可
 
-本项目以 [MIT 许可证](../LICENSE) 发布。**你提交的代码默认按同一许可证授权**（inbound = outbound），不需要签 CLA；请确保你有权提交这部分代码（别把来路不明的代码贴进来）。
+本项目以 [Apache License 2.0](../LICENSE) 发布。**你提交的代码默认按同一许可证授权**（inbound = outbound），不需要签 CLA；请确保你有权提交这部分代码（别把来路不明的代码贴进来）。Apache-2.0 是宽松许可：别人可以商用、也能闭源分发，但分发时必须带上 [`LICENSE`](../LICENSE) 与 [`NOTICE`](../NOTICE)（保留版权与署名），且不得用 TickNeko 的名字为派生作品背书。
 
 第三方依赖的许可清单见 [`THIRD_PARTY_NOTICES`](../docs/THIRD_PARTY_NOTICES)。

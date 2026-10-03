@@ -1,7 +1,7 @@
 # TickNeko
 
 [![CI](https://github.com/haloneko/TickNeko/actions/workflows/ci.yml/badge.svg)](https://github.com/haloneko/TickNeko/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-brightgreen.svg)
 
@@ -131,7 +131,10 @@ cd frontend && npm install && npm run build
 - [.github/CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md)：社区行为准则
 - [.github/SECURITY.md](.github/SECURITY.md)：漏洞报告渠道与部署注意事项
 - [docs/THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES)：第三方组件与许可
+- [`NOTICE`](NOTICE)：本项目的署名声明（分发派生作品时要一起带上）
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 TickNeko 贡献者
+[Apache License 2.0](LICENSE) © 2026 TickNeko
+
+商用、闭源、改了自己发都行。条件只有两条 —— 分发时带上 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)（保留版权与署名），以及第 6 条：不得用 TickNeko 的名字或商标给派生作品背书。
