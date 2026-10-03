@@ -208,7 +208,7 @@ def input_value(
 
 
 class NodeExecutionContext:
-    """节点运行时上下文：本节点的入口值 + 日志 + 调度器 + 可用的服务（OneBot / 缓存）。
+    """节点运行时上下文：本节点的入口值 + 日志 + 调度器 + 可用的服务（平台总线 / 缓存）。
 
     ``inputs`` 是**属性**不是入参：引擎每跑一个节点前，按指向它的边把上游产出投递进来
     （键 = 目标端口名）。要预置入口值（测试 / 手动跑）直接写 ``ctx.inputs["x"] = ...``。
@@ -228,18 +228,15 @@ class NodeExecutionContext:
     :param multi_instance: 这条工作流的**实例策略**（工作流设置里的「单实例 / 多实例」，来自
         定义表，与图无关）：``False``（缺省，单实例）上一次还没跑完就跳过本次；``True``（多实例）
         到点就开新实例、允许叠加。只有登记那一趟用得上（交给调度器的 ``add``）；
-    :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：``onebot`` 节点按它挑
-        「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间）；离线跑是空串；
+    :param owner_id: 这条工作流**属于谁**（定义表的 ``owner_id``）：历史 onebot 节点按它挑
+        「谁的」连接（连接在握手时由令牌定下归属，两边是同一套 id 空间），日志按它认主人；离线跑是空串；
     :param user_id: 这一趟**面向哪个用户**（消息触发时就是发消息那个人）：用来把「同一个
         工作流在不同人身上的那一份」区分开（按人记状态、按人回复、按人打日志）。它与
         ``owner_id`` 是两回事——``owner_id`` 是**工作流的主人**（账号），``user_id`` 是
         **被服务的对象**；定时触发没有「这个人」，是 :data:`NO_USER_ID`（空串）；
-    :param onebot: OneBot 服务端（鸭子形状：``connections`` 属性，元素有 ``id`` /
-        ``connected_at`` / ``call()`` —— 即 ``tickneko.platforms.onebot.server.OneBotServer``）。
-        装配层注入，没接 OneBot 时是 ``None``；``onebot`` 节点靠它发动作。
     :param gateway: 平台总线（鸭子形状：``async send(platform, owner_id, action, **params)``
         —— 即 ``tickneko.platforms.bridge.gateway.Gateway``）。装配层注入，没接时是 ``None``；
-        ``send`` 节点靠它按平台路由发动作（``onebot`` 节点泛化后的路）。
+        ``send`` 节点靠它按平台路由发动作。
     :param cache: 缓存门面（鸭子形状：``async get(key) -> str | None`` /
         ``async set(key, value, ttl=None)`` —— 即 ``tickneko.core.cache.Cache``）。
         **缺省就是进程级那一个**（``tickneko.core.cache.cache``，主程序启动时已 ``start()``），
@@ -257,7 +254,6 @@ class NodeExecutionContext:
         multi_instance: bool = False,
         owner_id: str = "",
         user_id: str = NO_USER_ID,
-        onebot: Any | None = None,
         gateway: Any | None = None,
         cache: Any | None = None,
     ) -> None:
@@ -265,7 +261,7 @@ class NodeExecutionContext:
         self.trigger_data: dict[str, Any] = {}  # 消息触发的入口数据（start 的 message 端口）
         self.log: list[str] = []  # 节点产出的文字日志（供测试 / 前端回显）
         self.workflow_id: str = workflow_id
-        #: 这条工作流属于谁（OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
+        #: 这条工作流属于谁（历史 OneBot 节点按它对连接的「谁的」）；离线跑 / 没归属时是空串
         self.owner_id: str = owner_id
         #: 这一趟面向哪个用户（消息触发时是发消息的人）；定时触发 / 离线跑是 NO_USER_ID
         self.user_id: str = user_id
@@ -273,8 +269,6 @@ class NodeExecutionContext:
         self.register_triggers: bool = register_triggers
         #: 实例策略：多实例时到点就开新实例（见类文档）
         self.multi_instance: bool = multi_instance
-        #: OneBot 服务端（鸭子形状见类文档）；装配层没注入时是 ``None``
-        self.onebot: Any | None = onebot
         #: 平台总线（鸭子形状见类文档）；装配层没注入时是 ``None``，``send`` 节点靠它发动作
         self.gateway: Any | None = gateway
         #: 缓存门面（鸭子形状见类文档）；缺省落进程级单例（正式跑由主程序启动，见 bootstrap）

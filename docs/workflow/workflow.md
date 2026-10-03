@@ -266,7 +266,6 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `target` 节点手动构造会话定位时带它（`gateway.make_target(platform, owner_id=...)`，握手时令牌定下，同一套 id 空间）；离线跑是空串 |
 | `ctx.user_id` | `str`：这一趟**面向哪个用户**（消息触发时是发消息那个人） | 把「同一个工作流在不同人身上的那一份」区分开（按人记状态 / 按人回复 / 按人打日志）。**和 `owner_id` 是两回事**：`owner_id` 是工作流的主人（账号），`user_id` 是被服务的对象。缺省空串（`NO_USER_ID`）—— 定时触发没有「这个人」；消息触发由消息路由（`dispatch`）带进来 |
-| `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | P2 的兼容面，接口层 `OneBotLike` 与旧代码还用；`send` 节点已改走 `ctx.gateway`，不读它了。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `tickneko.onebot.server.OneBotServer` |
 | `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` 节点靠它构造会话定位（`make_target`），`send` 节点靠它发消息（`reply(target, message)`）。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `tickneko.bridge.gateway.Gateway` |
 | `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `tickneko.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`tickneko.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
 
@@ -437,7 +436,7 @@ async def test_my_node_outputs(...) -> None:
 | 新的执行语义（并发 / 重试） | `executor.py`（串行 + 分支剪枝已就位；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
 | 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流） |
-| 给 `ctx` 注入新能力（如平台总线 / OneBot 服务端） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` 模块文档） |
+| 给 `ctx` 注入新能力（如平台总线） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` 模块文档） |
 | 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `tickneko.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
 
 ---

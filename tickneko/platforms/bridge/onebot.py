@@ -6,8 +6,8 @@
 :class:`~tickneko.platforms.bridge.models.PlatformEvent`，心跳不用滤，服务端 ``_emit`` 调
 handler 前已滤）、**能力转述**（``clients()`` / ``send()``）、**兼容面**（roster / kick /
 revoke_by_id / set_token_enabled / tokens / connections 原样透传，接口层 ``OneBotLike``
-与工作流 ``ctx.onebot`` 的鸭子形状由本适配器结构化满足，装配时注到原注入点即可，
-下游零改动）。详见 ``docs/bridge/bridge.md``。
+协议由本适配器结构化满足，装配时注到原注入点即可，下游零改动）。详见
+``docs/bridge/bridge.md``。
 """
 from __future__ import annotations
 
@@ -235,8 +235,8 @@ class OneBotAdapter:
     async def send(self, owner_id: str, action: str, /, **params: object) -> ActionResult:
         """给 ``owner_id`` 的在线连接发一个动作并等回执。
 
-        挑连接的规则与 onebot 节点同一套：归属匹配 + 取最近连上的那条。参数原样转述
-        （群号 / 用户号转整数是**调用方**的事，onebot 节点已经在做）。
+        挑连接的规则：归属匹配 + 取最近连上的那条。参数原样转述（群号 / 用户号转整数
+        是**调用方**的事）。
 
         :raises ConnectionError: 这个归属下没有在线连接（环境问题当场抛）。
         """
@@ -318,7 +318,7 @@ class OneBotAdapter:
         )
 
     # ------------------------------------------------------------------ 兼容面（透传）
-    # 接口层 OneBotLike 协议 + 工作流 ctx.onebot 鸭子形状，P2 验收线：下游零改动。
+    # 接口层 OneBotLike 协议，P2 验收线：下游零改动。
     @property
     def tokens(self) -> TokenRegistry | None:
         """令牌注册表（没配就是 ``None`` = 不校验）。"""
@@ -326,7 +326,7 @@ class OneBotAdapter:
 
     @property
     def connections(self) -> tuple[OneBotConnection, ...]:
-        """当前连着的客户端（快照）；工作流 ``ctx.onebot`` 靠它挑连接。"""
+        """当前连着的客户端（快照）；供观测 / 测试用。"""
         return self._server.connections
 
     def roster(self, *, id: str | None = None) -> tuple[ClientEntry, ...]:
