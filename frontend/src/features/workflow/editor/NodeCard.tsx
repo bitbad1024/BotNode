@@ -86,7 +86,10 @@ function NodeCardBase({
       {/* 头部：色条 + 标签 */}
       <div className={styles.nodeHeader}>
         <span className={styles.nodeColorBar} style={{ background: def.color }} />
-        <span className={styles.nodeLabel}>{def.label}</span>
+        {/* 标题：装不下时省略（见 .nodeLabel），悬停看完整名字 */}
+        <span className={styles.nodeLabel} title={def.label}>
+          {def.label}
+        </span>
       </div>
 
       {/* 端口区 */}

@@ -36,7 +36,10 @@ export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
                 onClick={(e) => onItemClick(e, spec.type)}
               >
                 <span className={styles.paletteDot} style={{ background: def.color }} />
-                {def.label}
+                {/* 装不下时省略（见 .paletteText），悬停看完整名字 */}
+                <span className={styles.paletteText} title={def.label}>
+                  {def.label}
+                </span>
               </button>
             )
           })}
