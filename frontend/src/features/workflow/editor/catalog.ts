@@ -15,6 +15,7 @@
  * ``config.trigger`` 变；``constant`` 的常量就是它的 config 本身）。
  */
 import {
+  type NodeCategorySpec,
   type NodeFieldSpec,
   type NodePortSpec,
   type NodeTypeSpec,
@@ -29,6 +30,7 @@ import {
 } from '../workflowApi'
 
 export type {
+  NodeCategorySpec,
   NodeFieldSpec,
   NodePortSpec,
   NodeTypeSpec,
@@ -86,38 +88,27 @@ export function portTypeLegend(): PortTypeSpec[] {
   return Object.values(PORT_TYPES)
 }
 
-//: 节点面板的语义分组（与后端 NodeCategory 对齐）：顺序即显示顺序，标签是中文名
-export const CATEGORY_ORDER = [
-  'trigger',
-  'target',
-  'constant',
-  'action',
-  'control',
-  'data',
-  'end',
-] as const
+//: 面板分组：从后端目录的 ``categories`` 装进来（见 installCatalog）—— 后端从节点注册
+//: 自动收集分类（顺序 = 面板顺序，标签 = 后端 CATEGORY_LABELS 里的中文名），画布不再抄一份
+let CATEGORIES: NodeCategorySpec[] = []
 
-//: 分类显示名；后端给了但这里没有的分类（认不出的）归到最后「其它」组
-export const CATEGORY_LABELS: Record<string, string> = {
-  trigger: '触发',
-  target: '目标',
-  constant: '常量',
-  action: '动作',
-  control: '控制',
-  data: '数据',
-  end: '结束',
+/** 分类显示名：目录下发的 label；查不到（兜底组 / 后端没给）原样显示机器名。 */
+export function categoryLabel(name: string): string {
+  if (name === 'other') return '其它'
+  return CATEGORIES.find((c) => c.name === name)?.label ?? name
 }
 
-/** 按语义分类给面板项分组：返回「分类 -> 该项列表」，顺序按 CATEGORY_ORDER、组内按原序。 */
+/** 按语义分类给面板项分组：返回「分类 -> 该项列表」，顺序照目录下发的 ``categories``、
+ * 组内按原序；目录里没有的分类（后端新加、画布还没拉到）归到最后的「其它」组。 */
 export function groupByCategory(items: NodeTypeSpec[]): Array<[string, NodeTypeSpec[]]> {
   const buckets = new Map<string, NodeTypeSpec[]>()
   for (const item of items) {
-    const key = item.category && CATEGORY_LABELS[item.category] ? item.category : 'other'
+    const key = CATEGORIES.some((c) => c.name === item.category) ? item.category : 'other'
     const list = buckets.get(key) ?? []
     list.push(item)
     buckets.set(key, list)
   }
-  const order = [...CATEGORY_ORDER, ...(buckets.has('other') ? ['other'] : [])]
+  const order = [...CATEGORIES.map((c) => c.name), ...(buckets.has('other') ? ['other'] : [])]
   return order.flatMap((key) => (buckets.has(key) ? [[key, buckets.get(key)!] as [string, NodeTypeSpec[]]] : []))
 }
 
@@ -153,6 +144,7 @@ const UNKNOWN_PORTS: PortSpec[] = [
 /** 装目录（编辑器加载时调一次），返回已按后端 order 排好的面板项列表。 */
 export function installCatalog(catalog: NodeCatalog): NodeTypeSpec[] {
   CATALOG = Object.fromEntries(catalog.nodes.map((item) => [item.type, item]))
+  CATEGORIES = catalog.categories
   PORT_TYPES = Object.fromEntries(catalog.port_types.map((item) => [item.type, item]))
   DEF_CACHE.clear() // 目录换了：推导结果全部作废
   return [...catalog.nodes].sort((a, b) => a.order - b.order)

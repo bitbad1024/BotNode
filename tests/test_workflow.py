@@ -3305,7 +3305,9 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert end["max_outgoing"] == 0 and end["outputs"] == []
     orders = [item["order"] for item in payload["nodes"]]
     assert orders == sorted(orders)  # 面板顺序：接口给的就已经排好
-    # 语义分类：画布面板按它分组（触发 / 目标 / 常量 / 动作 / 控制 / 数据 / onebot / kook / 结束）
+    # 语义分类：画布面板按它分组 —— 目录的 categories 从节点注册**自动收集**：
+    # 集合 = 所有节点的分类，顺序 = 面板顺序（按 order 排序后首次出现的顺序去重），
+    # 显示名来自后端 CATEGORY_LABELS（查不到用机器名兜底）。面板不再维护白名单。
     assert nodes["start"]["category"] == "trigger"
     assert nodes["end"]["category"] == "end"
     assert nodes["constant"]["category"] == "constant"
@@ -3317,9 +3319,10 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert nodes["unpack-kook"]["category"] == "kook"
     assert nodes["pack-onebot"]["category"] == "onebot"
     assert nodes["pack-kook"]["category"] == "kook"
-    assert {item["category"] for item in payload["nodes"]} <= {
-        "trigger", "target", "constant", "action", "control", "data", "onebot", "kook", "end",
-    }
+    # 自动收集口径：categories 与「节点分类按面板顺序去重」完全一致，且都有显示名
+    expected = list(dict.fromkeys(item["category"] for item in payload["nodes"]))
+    assert [c["name"] for c in payload["categories"]] == expected
+    assert all(c["label"] for c in payload["categories"])
 
 
 async def test_api_trace_id_is_filled_in_every_workflow_response() -> None:

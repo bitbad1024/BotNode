@@ -7,6 +7,7 @@ from pydantic import Field
 
 from ...common.models import _Frozen
 from tickneko.workflow import (
+    CATEGORY_LABELS,
     MISSING_DEFAULT,
     PORT_TYPES,
     ConfigField,
@@ -154,10 +155,22 @@ class NodePortTypeData(_Frozen):
     data: bool
 
 
+class NodeCategoryData(_Frozen):
+    """一种语义分类：画布面板的分组。**从节点注册自动收集**（见 ``from_registry``）：
+
+    * ``name`` 是节点标的分类机器名；* ``label`` 是显示名（查 ``CATEGORY_LABELS``，查不到用原名）。
+    * 顺序 = 面板顺序（按节点 ``order`` 排序后去重）—— 面板按它逐组展开。
+    """
+
+    name: str
+    label: str
+
+
 class NodeCatalogData(_Frozen):
     """节点目录：**后端注册了什么，画布就显示什么**（面板顺序按 ``order``）。"""
 
     nodes: list[NodeTypeData] = Field(default_factory=list)
+    categories: list[NodeCategoryData] = Field(default_factory=list)
     port_types: list[NodePortTypeData] = Field(default_factory=list)
 
     @classmethod
@@ -165,6 +178,19 @@ class NodeCatalogData(_Frozen):
         specs = [get_spec(node_type) for node_type in registered_types()]
         nodes = [NodeTypeData.from_spec(spec) for spec in specs if spec is not None]
         nodes.sort(key=lambda item: (item.order, item.type))
+        # 分类自动收集：从排好序的节点里按出现顺序去重，画布面板的分组 = 这份清单
+        categories: list[NodeCategoryData] = []
+        seen: set[str] = set()
+        for item in nodes:
+            if item.category in seen:
+                continue
+            seen.add(item.category)
+            categories.append(
+                NodeCategoryData(
+                    name=item.category,
+                    label=CATEGORY_LABELS.get(item.category, item.category),
+                )
+            )
         port_types = [
             NodePortTypeData(
                 type=item.type,
@@ -174,7 +200,7 @@ class NodeCatalogData(_Frozen):
             )
             for item in PORT_TYPES.values()
         ]
-        return cls(nodes=nodes, port_types=port_types)
+        return cls(nodes=nodes, categories=categories, port_types=port_types)
 
 
 class WorkflowData(_Frozen):

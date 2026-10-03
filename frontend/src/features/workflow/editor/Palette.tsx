@@ -2,7 +2,7 @@
  * 节点面板（悬浮在画布左侧）：点一下直接添加，按住拖进画布则在松手处落子。
  */
 import {
-  CATEGORY_LABELS,
+  categoryLabel,
   groupByCategory,
   nodeDef,
   portTypeLegend,
@@ -25,7 +25,7 @@ export function Palette({ items, onItemMouseDown, onItemClick }: PaletteProps) {
       <div className={styles.paletteTitle}>节点</div>
       {groups.map(([category, specs]) => (
         <div key={category} className={styles.paletteGroup}>
-          <div className={styles.paletteGroupTitle}>{CATEGORY_LABELS[category] ?? category}</div>
+          <div className={styles.paletteGroupTitle}>{categoryLabel(category)}</div>
           {specs.map((spec) => {
             const def = nodeDef(spec.type)
             return (

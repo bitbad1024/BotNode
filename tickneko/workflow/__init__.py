@@ -59,6 +59,7 @@ from .validator import (
 )
 from .executor import NodeExecutionError, SimpleWorkflowRunner
 from .nodes import (
+    CATEGORY_LABELS,
     MISSING_DEFAULT,
     NO_USER_ID,
     PORT_TYPES,
@@ -111,6 +112,7 @@ __all__ = [
     "NodeSpec",
     "NodeRole",
     "NodeConfigValidator",
+    "CATEGORY_LABELS",
     "ConfigField",
     "PortSpec",
     "PortType",

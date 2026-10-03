@@ -54,6 +54,7 @@
 from __future__ import annotations
 
 from .base import (
+    CATEGORY_LABELS,
     MISSING_DEFAULT,
     NO_USER_ID,
     TRIGGER_PORT,
@@ -111,6 +112,7 @@ __all__ = [
     "NodeSpec",
     "NodeRole",
     "NodeCategory",
+    "CATEGORY_LABELS",
     "NodeConfigValidator",
     "ConfigField",
     "PortSpec",

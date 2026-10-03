@@ -76,19 +76,24 @@ class EnvironmentFailure(ConnectionError):
 NodeRole = Literal["start", "end", "normal"]
 
 
-#: 节点的语义分类：画布面板按它分组（前端目录只按 ``order`` 排）。各节点标类，
-#: 新增类型不在这里白名单化 —— 前端认不出时照原样显示，不影响图能存能跑。
-NodeCategory = Literal[
-    "trigger",   # 触发：流程入口（start）
-    "target",    # 目标：产出「发到哪」的会话定位值
-    "constant",  # 常量：产出固定值
-    "action",    # 动作：对外副作用（发消息 / 发请求 / 写日志）
-    "control",   # 控制：分支 / 等待
-    "data",      # 数据：加工 / 提取 / 运算 / 存取
-    "onebot",    # OneBot 平台：平台专属节点（会话解包 / 封装）
-    "kook",      # Kook 平台：平台专属节点（会话解包 / 封装）
-    "end",       # 结束：流程终点
-]
+#: 节点的语义分类：画布面板按它分组。**分类集合不在这里维护** —— 目录接口从节点注册里
+#: 自动收集（见 ``NodeCatalogData.from_registry``）：哪个节点标了什么类，分类清单就是什么，
+#: 加平台 / 加扩展分类只改「标分类的那个节点」，不用再动白名单或面板分组。
+NodeCategory = str
+
+#: 分类的显示名映射（机器名 -> 中文名）。这是**唯一**要维护的地方：目录接口把它随
+#: ``categories`` 下发，画布面板按下发结果分组 —— 查不到名字的分类原样显示机器名。
+CATEGORY_LABELS: dict[str, str] = {
+    "trigger": "触发",
+    "target": "目标",
+    "constant": "常量",
+    "action": "动作",
+    "control": "控制",
+    "data": "数据",
+    "onebot": "OneBot 平台",
+    "kook": "Kook 平台",
+    "end": "结束",
+}
 
 #: 节点配置校验器：收节点，返回校验问题列表（空列表 = 通过）
 NodeConfigValidator = Callable[[WorkflowNode], list[ValidationIssue]]

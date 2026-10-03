@@ -102,8 +102,17 @@ export interface NodeTypeSpec {
   fields: NodeFieldSpec[]
 }
 
+/** 一种语义分类（目录接口 ``categories`` 逐条下发）：画布面板按它分组。
+ * ``name`` 是节点标的机器分类名；``label`` 是后端 ``CATEGORY_LABELS`` 里的显示名。 */
+export interface NodeCategorySpec {
+  name: string
+  label: string
+}
+
 export interface NodeCatalog {
   nodes: NodeTypeSpec[]
+  /** 语义分类清单：画布面板的分组（顺序即显示顺序）全从这儿来 */
+  categories: NodeCategorySpec[]
   /** 端口类型清单：端口配色 / 面板图例 / 数据流语义全从这儿来 */
   port_types: PortTypeSpec[]
 }
