@@ -139,7 +139,6 @@ const NODE_COLORS: Record<string, string> = {
   now: '#84cc16',
   condition: '#6366f1',
   send: '#d946ef',
-  onebot: '#d946ef', // onebot 是 send 的别名（platform 恒 onebot），同色
   operator: '#f59e0b',
   cache: '#06b6d4',
 }

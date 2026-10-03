@@ -16,7 +16,6 @@
       now.py             内置节点：now（当前时间：strftime 格式文本 + Unix 时间戳）
       condition.py       内置节点：condition（条件分支：true / false 双出口，引擎按选中出口剪枝）
       send.py            内置节点：send（把 message 发到 target 指向的会话：去向走 target 值端口 + 内容端口，走 ctx.gateway.reply；没有 target 就不发，回执不成功不打断流程）
-      onebot.py          内置节点：onebot（send 的别名：同款输入 target+message，回执转老端口名 onebot_retcode / onebot_data）
       operator.py        内置节点：operator（算术：+ - * / %，结果文本化；算不出来送空串）
       cache.py           内置节点：cache（变量存取：get / set；作用域账号 / 图，前缀区分）
 
@@ -80,7 +79,6 @@ from .http import HTTP_METHODS, exec_http
 from .json import exec_json
 from .log import LOG_LEVELS, exec_log
 from .now import exec_now
-from .onebot import exec_onebot
 from .operator import exec_operator
 from .regex import exec_regex
 from .send import exec_send
@@ -146,7 +144,6 @@ __all__ = [
     "exec_regex",
     "exec_now",
     "exec_condition",
-    "exec_onebot",
     "exec_send",
     "exec_target",
     "exec_operator",

@@ -33,7 +33,6 @@ tickneko/workflow/
 │   ├── now.py           内置：now（当前时间：格式化文本 + Unix 时间戳）
 │   ├── condition.py     内置：condition（条件分支：true / false 双出口；引擎按选中出口剪枝）
 │   ├── send.py          内置：send（把 message 发到 target 指向的会话：去向走 target 值端口 + 内容端口，走 ctx.gateway.reply；没有 target 就不发，回执不成功 = 业务失败）
-│   ├── onebot.py        内置：onebot（send 的别名：同款输入 target+message，回执转老端口名 onebot_retcode / onebot_data）
 │   ├── operator.py      内置：operator（算术：+ - * / %；结果文本化，算不出来 = 业务失败）
 │   └── cache.py         内置：cache（变量存取：get / set；读不到回默认值；作用域账号 / 图，键前缀区分）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
@@ -161,7 +160,6 @@ workflow_versions             每次保存一张不可变图快照
 | `now.py` | **当前时间**：产出「现在」（服务器本地时区）——格式化文本 + Unix 时间戳（整数秒）；没有失败分支 | `trigger` / `format` → `trigger` / `now_text` / `now_ts` | `format`（strftime 指令，缺省 `%Y-%m-%d %H:%M:%S`，可接线覆盖） |
 | `condition.py` | **条件**：比一次 `left operator right`，二选一走 `true` / `false` 出口；**分流节点**（注册 `branching=True`）——引擎只让**选中出口**的控制流边活着，没走的分支整段跳过（级联到它的下游，`ctx.log` 留 `[skip]` 痕迹），与另一条分支汇合处（还有活 `trigger` 入边）照常执行；比较符非法 / 左值空 / 要数字却转不了 → 只记 warning 走 `false`，不打断流程 | `trigger` / `left` / `right` → `true` / `false` | `left`（**入口**必填：接线或手填）、`operator`（缺省 `==`，枚举由自注册校验器把）、`right`（手填兜底，也能接线） |
 | `send.py` | **发送**：把 `message` 发到 `target` 指向的会话（target 化：去向从图上 target 值端口拿，内容从 message 端口拿）；走 `ctx.gateway.reply(target, message)`，平台差异（OneBot 整数号 / Kook 字符串号）由适配器翻译；**`target` 是数据边、不驱动执行**（触发走 `trigger` 边），**没有 target 就不发**（`send_ok=False` 照常送下游），回执（`send_ok` / `send_data`）成功时送下游，**失败回执 = 业务失败**：抛 `NodeFailure`，停止向下传播；没接总线（环境问题）→ 当场抛 | `trigger` / `target` / `message` → `trigger` / `send_ok` / `send_data` | `message`（**入口**必填：接线或手填；`target` 只能接线，从 `start.target` 或 `target` 节点来） |
-| `onebot.py` | **OneBot（send 的别名）**：target 化改造后**与 send 同款输入**（`target` 会话定位 + `message` 内容），执行同样走 `ctx.gateway.reply(target, message)`，平台差异由适配器翻译；唯一差别是回执转**老端口名**（`onebot_retcode` / `onebot_data`，retcode 从平台回执的 `raw` 下探）；**没有 target 就不发**（`onebot_retcode` 记 1、`onebot_data` 空串送下游）；**回执不成功 = 业务失败**：抛 `NodeFailure`，停止向下传播（与 send 同口径）。**breaking**：旧 `onebot` 图（`action` / `group_id` 配置）需迁移到 `send` + `target` 节点 | `trigger` / `target` / `message` → `trigger` / `onebot_retcode` / `onebot_data` | `message`（**入口**必填：接线或手填；`target` 只能接线，从 `start.target` 或 `target` 节点来） |
 | `operator.py` | **运算**：对两个操作数做一次算术（`+` / `-` / `*` / `/` / `%`）；`/` 是真除法、`%` 按 Python 语义，结果文本化（整数值不带小数点）；算不出来（空值 / 非数字 / 除数为 0 / 运算符不合法）= **业务失败**：抛 `NodeFailure`，停止向下传播 | `trigger` / `left` / `right` → `trigger` / `operator_result` | `left` / `right`（**入口**必填：接线或手填）、`operator`（缺省 `+`，枚举由自注册校验器把） |
 | `cache.py` | **缓存**：把一个变量存进缓存 / 取回来 —— **跨执行（跨工作流）传递状态**的通道；`get` 没取到不算事故（回 `default` 默认值，没填就是空串），`set` 空值 = 清成空串；`key` 入口没接线也没填 / 账号作用域却没有归属 → 当场抛；缓存键按作用域拼前缀（`workflow:graph:{图 id}:{键}` / `workflow:acct:{账号 id}:{键}`） | `trigger` / `key` / `value` / `default` → `trigger` / `cache_value` | `action`（缺省 `get`）、`scope`（缺省 `workflow`；枚举都由自注册校验器把）、`key`（**入口**必填：接线或手填）、`value`（手填兜底，也能接线）、`default`（`get` 读不到时的默认值，手填兜底 / 也能接线） |
 
@@ -268,8 +266,8 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `target` 节点手动构造会话定位时带它（`gateway.make_target(platform, owner_id=...)`，握手时令牌定下，同一套 id 空间）；离线跑是空串 |
 | `ctx.user_id` | `str`：这一趟**面向哪个用户**（消息触发时是发消息那个人） | 把「同一个工作流在不同人身上的那一份」区分开（按人记状态 / 按人回复 / 按人打日志）。**和 `owner_id` 是两回事**：`owner_id` 是工作流的主人（账号），`user_id` 是被服务的对象。缺省空串（`NO_USER_ID`）—— 定时触发没有「这个人」；消息触发由消息路由（`dispatch`）带进来 |
-| `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | P2 的兼容面，接口层 `OneBotLike` 与旧代码还用；`send` / `onebot` 节点已改走 `ctx.gateway`，不读它了。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `tickneko.onebot.server.OneBotServer` |
-| `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` 节点靠它构造会话定位（`make_target`），`send` / `onebot` 节点靠它发消息（`reply(target, message)`）。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `tickneko.bridge.gateway.Gateway` |
+| `ctx.onebot` | OneBot 服务端（装配层注入；没接 OneBot 时是 `None`） | P2 的兼容面，接口层 `OneBotLike` 与旧代码还用；`send` 节点已改走 `ctx.gateway`，不读它了。鸭子形状：`connections` 属性，元素有 `id` / `connected_at` / `call()` —— 即 `tickneko.onebot.server.OneBotServer` |
+| `ctx.gateway` | 平台总线（装配层注入；没接时是 `None`） | `target` 节点靠它构造会话定位（`make_target`），`send` 节点靠它发消息（`reply(target, message)`）。鸭子形状：`async make_target(platform, **fields) -> ChatTarget`、`async reply(target, content) -> ActionResult`、`async send(platform, owner_id, action, **params) -> ActionResult` —— 即 `tickneko.bridge.gateway.Gateway` |
 | `ctx.cache` | 缓存门面（鸭子形状：`async get(key)` / `async set(key, value, ttl=None)` —— 即 `tickneko.core.cache.Cache`） | `cache` 节点靠它存取变量。**缺省落进程级单例**（`tickneko.core.cache.cache`，主程序启动时已 `start()`）；测试 / 特殊场合可注入自己的门面 |
 
 `input_value(node, ctx, name, default="")`：取某个数据入口的值 —— **线上的值优先，没接线才用
@@ -295,7 +293,7 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 
 | 情况 | 怎么办 | 例子 |
 |---|---|---|
-| **业务失败**（这一趟没做成：算不出来、取不到、对方回了错） | 抛 `NodeFailure`：**停止向下传播** —— 本节点不产出值、出边全部置死，下游整段跳过（`ctx.log` 留 `[failed]` / `[skip]`），**别的分支与流程其余部分照常跑**，不留堆栈 | `operator` 算不出来；`json` / `regex` 取不到、抽不到；`http` 的 4xx / 5xx；`send` / `onebot` 的失败回执 |
+| **业务失败**（这一趟没做成：算不出来、取不到、对方回了错） | 抛 `NodeFailure`：**停止向下传播** —— 本节点不产出值、出边全部置死，下游整段跳过（`ctx.log` 留 `[failed]` / `[skip]`），**别的分支与流程其余部分照常跑**，不留堆栈 | `operator` 算不出来；`json` / `regex` 取不到、抽不到；`http` 的 4xx / 5xx；`send` 的失败回执 |
 | **可预期的环境问题**（连不上、超时、对端拒绝、DNS 失败） | 抛 `EnvironmentFailure`（`ConnectionError` 子类）：整条流程照样中断，但日志**只记一行**（哪个节点 + 什么原因），**不铺底层堆栈** —— httpx / httpcore 那几十行帧没有信息增量 | `http` 节点连不上 / 超时 |
 | **其它环境问题**（配置写错、依赖没装、没接线、没接总线） | 直接 `raise`（普通异常）：整条流程失败并留下堆栈，别伪装成「成功但没内容」 | `http` 的 `url` 入口没接线也没填；`send` 没接总线 / 没这个平台 / 归属下没在线连接；`cache` 的 `key` 入口没接线也没填、账号作用域却没有归属 |
 
@@ -439,7 +437,7 @@ async def test_my_node_outputs(...) -> None:
 | 新的执行语义（并发 / 重试） | `executor.py`（串行 + 分支剪枝已就位；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
 | 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流） |
-| 给 `ctx` 注入新能力（如平台总线 / OneBot 服务端） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` / `onebot.py` 模块文档） |
+| 给 `ctx` 注入新能力（如平台总线 / OneBot 服务端） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` 模块文档） |
 | 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `tickneko.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
 
 ---
