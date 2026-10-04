@@ -75,6 +75,7 @@ from .cache import exec_cache
 from .port_types import PORT_TYPES, PortType, PortTypeDef
 from .condition import exec_condition
 from .constant import exec_constant
+from .consume import exec_consume
 from .delay import exec_delay
 from .end import exec_end
 from .http import HTTP_METHODS, exec_http
@@ -150,6 +151,7 @@ __all__ = [
     "exec_now",
     "exec_condition",
     "exec_send",
+    "exec_consume",
     "exec_unpack_onebot",
     "exec_unpack_kook",
     "exec_pack_onebot",
